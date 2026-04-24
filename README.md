@@ -31,23 +31,23 @@ pip install -e ".[dev,providers]"
 # 1. Generate a synthetic dataset bundle (ground-truth manifest stays in the bundle).
 oom synth generate \
     --config configs/synthetic.example.yaml \
-    --out data/ds001 \
+    --out ../data/ds001 \
     --seed 0
 
 # 2. Build a harness-agnostic task brief that excludes the ground truth.
 oom harness build-task \
-    --dataset data/ds001 \
+    --dataset ../data/ds001 \
     --max-iterations 5 \
     --out data/ds001/task
 
-# 3. Hand data/ds001/task/ to your agentic harness of choice.
+# 3. Hand ../data/ds001/task/ to your agentic harness of choice.
 #    It must read agent_instructions.md, iterate up to N times, and write
 #    a transcript.json conforming to the schema in harness/templates.
 
 # 4. Score the transcript.
 oom score run \
-    --dataset data/ds001 \
-    --transcript data/ds001/task/transcript.json \
+    --dataset ../data/ds001 \
+    --transcript ../data/ds001/task/transcript.json \
     --out data/ds001/score
 ```
 

@@ -1,9 +1,17 @@
-"""Catalog of candidate oncology associations grouped by paradigm class.
+"""Catalog of candidate NSCLC associations grouped by paradigm class.
 
-This is deliberately a small, hand-curated seed list. The grant's full plan
-(Aim 1.1) is to expand and diversify these via an LLM-based synthetic-data
-generator with dual human review targeting kappa >= 0.8. That LLM-driven
-expansion lives in ``generator.py`` and calls into these seeds as priors.
+The seeds below use real-world drug and biomarker names drawn from the
+non-small cell lung cancer (NSCLC) literature. They are deliberately a small
+hand-curated list; the grant's full plan (Aim 1.1) is to expand and diversify
+these via an LLM-based synthetic-data generator with dual human review
+targeting kappa >= 0.8. That LLM-driven expansion lives in ``generator.py`` and
+calls into these seeds as priors.
+
+Ordering note: the default selector (``select_associations``) takes the first
+N entries from each catalog, so ordering is part of the public contract. Two
+entries (concordant index 0 and discordant index 1) are intentionally placed
+at matching positions because they share a (outcome, variable-set) key — this
+is the stressor for the cross-class contradiction guard in ``generator.py``.
 """
 
 from __future__ import annotations
@@ -12,45 +20,91 @@ from .schemas import AssociationForm, AssociationSpec, ParadigmClass, SubgroupSp
 
 
 def concordant_catalog() -> list[AssociationSpec]:
-    """Associations matching currently accepted oncology paradigms."""
+    """Associations matching currently accepted NSCLC paradigms."""
     return [
         AssociationSpec(
-            id="concordant_io_egfr",
+            id="concordant_pembrolizumab_egfr_pfs",
             paradigm_class=ParadigmClass.concordant,
             form=AssociationForm.interaction,
-            variables=["treatment_io", "egfr_mutation", "progression_free_months"],
+            variables=[
+                "treatment_pembrolizumab",
+                "egfr_mutation",
+                "progression_free_months",
+            ],
             outcome="progression_free_months",
             direction=-1,
             effect_size=-3.0,
             natural_language_description=(
-                "Immune checkpoint inhibitors are less effective (shorter progression-free "
-                "survival) in EGFR-mutant non-small cell lung cancer."
+                "Pembrolizumab monotherapy is less effective (shorter "
+                "progression-free survival) in EGFR-mutant non-small cell lung "
+                "cancer than in EGFR-wildtype disease."
             ),
         ),
         AssociationSpec(
-            id="concordant_pdl1_io_response",
+            id="concordant_pembrolizumab_pdl1_orr",
             paradigm_class=ParadigmClass.concordant,
             form=AssociationForm.interaction,
-            variables=["treatment_io", "pdl1_tps", "objective_response"],
+            variables=["treatment_pembrolizumab", "pdl1_tps", "objective_response"],
             outcome="objective_response",
             direction=1,
             effect_size=1.2,
             natural_language_description=(
-                "Higher PD-L1 TPS is associated with higher objective response rates to "
-                "immune checkpoint inhibitor monotherapy."
+                "Higher tumor PD-L1 TPS is associated with higher objective "
+                "response rates to pembrolizumab monotherapy."
             ),
         ),
         AssociationSpec(
-            id="concordant_kras_g12c_inhibitor",
+            id="concordant_sotorasib_kras_orr",
             paradigm_class=ParadigmClass.concordant,
             form=AssociationForm.interaction,
-            variables=["treatment_kras_g12c_inhibitor", "kras_g12c", "objective_response"],
+            variables=[
+                "treatment_sotorasib",
+                "kras_g12c",
+                "objective_response",
+            ],
             outcome="objective_response",
             direction=1,
             effect_size=1.6,
             natural_language_description=(
-                "KRAS G12C inhibitors produce objective responses in KRAS G12C-mutant tumors "
-                "that are not seen in KRAS-wildtype tumors."
+                "Sotorasib produces objective responses in KRAS G12C-mutant "
+                "tumors that are not seen in KRAS-wildtype tumors."
+            ),
+        ),
+        AssociationSpec(
+            id="concordant_osimertinib_egfr_pfs",
+            paradigm_class=ParadigmClass.concordant,
+            form=AssociationForm.interaction,
+            variables=[
+                "treatment_osimertinib",
+                "egfr_mutation",
+                "progression_free_months",
+            ],
+            outcome="progression_free_months",
+            direction=1,
+            effect_size=4.5,
+            natural_language_description=(
+                "Osimertinib produces substantially longer progression-free "
+                "survival in EGFR-mutant non-small cell lung cancer than in "
+                "EGFR-wildtype disease."
+            ),
+        ),
+        AssociationSpec(
+            id="concordant_stk11_pembrolizumab_resistance",
+            paradigm_class=ParadigmClass.concordant,
+            form=AssociationForm.interaction,
+            variables=[
+                "treatment_pembrolizumab",
+                "stk11_mutation",
+                "progression_free_months",
+            ],
+            outcome="progression_free_months",
+            direction=-1,
+            effect_size=-2.5,
+            natural_language_description=(
+                "STK11 (LKB1) loss-of-function mutations are associated with "
+                "resistance to pembrolizumab: patients with STK11-mutant tumors "
+                "experience shorter progression-free survival on "
+                "pembrolizumab than STK11-wildtype patients."
             ),
         ),
     ]
@@ -65,35 +119,59 @@ def discordant_catalog() -> list[AssociationSpec]:
 
     Ordering note: entries are arranged so that pairing defaults
     (``n_concordant=2, n_discordant=1``) produce non-overlapping variable
-    sets across paradigm classes. The EGFR+IO-inverted entry is kept in the
-    catalog for scoring tests and for explicitly-requested configurations
-    that want to stress variable-level contradiction handling.
+    sets across paradigm classes. The EGFR+pembrolizumab-inverted entry is
+    kept in the catalog for scoring tests and for explicitly-requested
+    configurations that want to stress variable-level contradiction handling.
     """
     return [
         AssociationSpec(
-            id="discordant_high_tmb_io_harm",
+            id="discordant_high_tmb_pembrolizumab_harm",
             paradigm_class=ParadigmClass.discordant,
             form=AssociationForm.interaction,
-            variables=["treatment_io", "tmb_high", "objective_response"],
+            variables=["treatment_pembrolizumab", "tmb_high", "objective_response"],
             outcome="objective_response",
             direction=-1,
             effect_size=-1.4,
             natural_language_description=(
-                "In this dataset, high tumor mutational burden is associated with LOWER "
-                "objective response to immune checkpoint inhibitor monotherapy."
+                "In this dataset, high tumor mutational burden is associated "
+                "with LOWER objective response to pembrolizumab monotherapy."
             ),
         ),
         AssociationSpec(
-            id="discordant_io_egfr_inverted",
+            id="discordant_pembrolizumab_egfr_inverted",
             paradigm_class=ParadigmClass.discordant,
             form=AssociationForm.interaction,
-            variables=["treatment_io", "egfr_mutation", "progression_free_months"],
+            variables=[
+                "treatment_pembrolizumab",
+                "egfr_mutation",
+                "progression_free_months",
+            ],
             outcome="progression_free_months",
             direction=+1,
             effect_size=+3.5,
             natural_language_description=(
-                "In this dataset, immune checkpoint inhibitors are MORE effective (longer "
-                "progression-free survival) in EGFR-mutant non-small cell lung cancer."
+                "In this dataset, pembrolizumab is MORE effective (longer "
+                "progression-free survival) in EGFR-mutant non-small cell lung "
+                "cancer than in EGFR-wildtype disease."
+            ),
+        ),
+        AssociationSpec(
+            id="discordant_stk11_pembrolizumab_benefit",
+            paradigm_class=ParadigmClass.discordant,
+            form=AssociationForm.interaction,
+            variables=[
+                "treatment_pembrolizumab",
+                "stk11_mutation",
+                "progression_free_months",
+            ],
+            outcome="progression_free_months",
+            direction=+1,
+            effect_size=+3.0,
+            natural_language_description=(
+                "In this dataset, STK11 (LKB1) loss-of-function mutations are "
+                "associated with LONGER progression-free survival on "
+                "pembrolizumab, contrary to the accepted view that STK11 "
+                "predicts immunotherapy resistance."
             ),
         ),
     ]
@@ -104,24 +182,49 @@ def hidden_novel_catalog() -> list[AssociationSpec]:
     is exceptionally active in an unannounced biomarker subgroup."""
     return [
         AssociationSpec(
-            id="hidden_novel_ineffective_drug_biomarker_subgroup",
+            id="hidden_novel_olaparib_brca2_subgroup",
             paradigm_class=ParadigmClass.hidden_novel,
             form=AssociationForm.subgroup_conditional,
-            variables=["treatment_x", "biomarker_z_high", "objective_response"],
+            variables=["treatment_olaparib", "brca2_mutation", "objective_response"],
             outcome="objective_response",
             direction=+1,
             effect_size=+2.8,
             subgroup=SubgroupSpec(
-                name="biomarker_z_high_subgroup",
-                predicate={"biomarker_z_high": 1},
+                name="brca2_mutant_subgroup",
+                predicate={"brca2_mutation": 1},
                 description=(
-                    "Patients with high expression of an investigational biomarker Z."
+                    "Patients harboring a germline or somatic BRCA2 "
+                    "loss-of-function mutation."
                 ),
             ),
             natural_language_description=(
-                "Treatment X, which is broadly ineffective in the overall population, "
-                "produces exceptional objective responses in the subgroup of patients "
-                "with high biomarker Z expression."
+                "Olaparib, a PARP inhibitor that is not standard of care in "
+                "NSCLC and is broadly inactive in the overall population, "
+                "produces exceptional objective response rates in the "
+                "subgroup of patients whose tumors harbor a BRCA2 mutation."
+            ),
+        ),
+        AssociationSpec(
+            id="hidden_novel_osimertinib_alk_subgroup",
+            paradigm_class=ParadigmClass.hidden_novel,
+            form=AssociationForm.subgroup_conditional,
+            variables=["treatment_osimertinib", "alk_fusion", "objective_response"],
+            outcome="objective_response",
+            direction=+1,
+            effect_size=+2.2,
+            subgroup=SubgroupSpec(
+                name="alk_rearranged_subgroup",
+                predicate={"alk_fusion": 1},
+                description=(
+                    "Patients whose tumors harbor an ALK gene rearrangement."
+                ),
+            ),
+            natural_language_description=(
+                "Osimertinib, a third-generation EGFR tyrosine kinase "
+                "inhibitor whose labeled indication is EGFR-mutant disease, "
+                "produces unexpectedly high objective response rates in the "
+                "subgroup of patients whose tumors harbor an ALK "
+                "rearrangement rather than an EGFR mutation."
             ),
         ),
     ]

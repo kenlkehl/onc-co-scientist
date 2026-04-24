@@ -11,6 +11,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from ..synthetic.io import (
     DATASET_FILENAME,
+    public_dir,
     read_description,
     read_manifest,
 )
@@ -86,7 +87,7 @@ def build_task(
 
     # Copy public artifacts into task_dir so the bundle is self-contained.
     dataset_dst = task_dir / TASK_DATASET_LINK
-    shutil.copyfile(dataset_path_in / DATASET_FILENAME, dataset_dst)
+    shutil.copyfile(public_dir(dataset_path_in) / DATASET_FILENAME, dataset_dst)
     description_dst = task_dir / TASK_DESCRIPTION_LINK
     description_dst.write_text(description if description.endswith("\n") else description + "\n")
 

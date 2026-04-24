@@ -101,7 +101,7 @@ class DatasetManifest(BaseModel):
     outcome_columns: list[str]
     covariate_columns: list[str]
     associations: list[AssociationSpec]
-    generator_version: str = "0.1.0"
+    generator_version: str = "0.2.0"
     notes: str | None = None
 
     def associations_by_class(self, paradigm_class: ParadigmClass) -> list[AssociationSpec]:

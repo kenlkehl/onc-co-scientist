@@ -1,4 +1,13 @@
-"""Read/write synthetic dataset bundles."""
+"""Read/write synthetic dataset bundles.
+
+Bundle layout on disk::
+
+    <bundle_dir>/
+    ├── manifest.json          # ground-truth; NEVER shown to the evaluated agent
+    └── public/                # agent-safe workspace — okay to run the agent here
+        ├── dataset.parquet
+        └── dataset_description.md
+"""
 
 from __future__ import annotations
 
@@ -12,17 +21,24 @@ from .schemas import DatasetManifest
 MANIFEST_FILENAME = "manifest.json"
 DATASET_FILENAME = "dataset.parquet"
 DESCRIPTION_FILENAME = "dataset_description.md"
+PUBLIC_SUBDIR = "public"
+
+
+def public_dir(bundle_dir: Path | str) -> Path:
+    """Return the agent-safe subdirectory within a dataset bundle."""
+    return Path(bundle_dir) / PUBLIC_SUBDIR
 
 
 def write_bundle(bundle: DatasetBundle, out_dir: Path | str) -> Path:
     out_path = Path(out_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
+    public = out_path / PUBLIC_SUBDIR
+    public.mkdir(parents=True, exist_ok=True)
 
-    bundle.frame.to_parquet(out_path / DATASET_FILENAME, index=False)
     (out_path / MANIFEST_FILENAME).write_text(
         bundle.manifest.model_dump_json(indent=2) + "\n"
     )
-    (out_path / DESCRIPTION_FILENAME).write_text(bundle.public_description + "\n")
+    bundle.frame.to_parquet(public / DATASET_FILENAME, index=False)
+    (public / DESCRIPTION_FILENAME).write_text(bundle.public_description + "\n")
     return out_path
 
 
@@ -32,8 +48,8 @@ def read_manifest(bundle_dir: Path | str) -> DatasetManifest:
 
 
 def read_frame(bundle_dir: Path | str) -> pd.DataFrame:
-    return pd.read_parquet(Path(bundle_dir) / DATASET_FILENAME)
+    return pd.read_parquet(public_dir(bundle_dir) / DATASET_FILENAME)
 
 
 def read_description(bundle_dir: Path | str) -> str:
-    return (Path(bundle_dir) / DESCRIPTION_FILENAME).read_text()
+    return (public_dir(bundle_dir) / DESCRIPTION_FILENAME).read_text()

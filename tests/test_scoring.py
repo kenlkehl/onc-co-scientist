@@ -15,16 +15,16 @@ FIXTURE_DIR = Path(__file__).parent / "fixtures"
 def _scoring_manifest() -> DatasetManifest:
     """Build a manifest that mirrors the first concordant/discordant/hidden_novel specs."""
     spec_c = concordant_catalog()[0]
-    spec_d = discordant_catalog()[0]  # TMB + IO, direction = -1
+    spec_d = discordant_catalog()[0]  # TMB + pembrolizumab, direction = -1
     spec_n = hidden_novel_catalog()[0]
     return DatasetManifest(
         dataset_id="score_ds",
         seed=0,
         patient_n=100,
         columns=["patient_id"],
-        treatment_columns=["treatment_io", "treatment_x"],
+        treatment_columns=["treatment_pembrolizumab", "treatment_olaparib"],
         outcome_columns=["progression_free_months", "objective_response"],
-        covariate_columns=["egfr_mutation", "tmb_high", "biomarker_z_high"],
+        covariate_columns=["egfr_mutation", "tmb_high", "brca2_mutation"],
         associations=[spec_c, spec_d, spec_n],
     )
 

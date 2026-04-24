@@ -34,6 +34,13 @@ def test_build_task_writes_agent_bundle(tmp_path):
     assert "ds_task" in instructions
     assert "Maximum iterations (N):** 4" in instructions
 
+    # Agent-facing files must not leak the benchmark's evaluation intent.
+    description_text = task.description_path.read_text().lower()
+    instructions_lower = instructions.lower()
+    for leak in ("open-mindedness", "deliberately inverted", "counter-intuitive", "paradigm", "willingness"):
+        assert leak not in instructions_lower, f"agent_instructions.md leaks: {leak!r}"
+        assert leak not in description_text, f"dataset_description.md leaks: {leak!r}"
+
     # Schema file is valid JSON and includes the Transcript title.
     schema = json.loads(task.schema_path.read_text())
     assert schema.get("title") == "Transcript"

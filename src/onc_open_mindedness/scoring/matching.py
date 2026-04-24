@@ -62,14 +62,48 @@ def _variable_keywords(spec: AssociationSpec) -> list[set[str]]:
 
 
 _ALIAS_MAP: dict[str, tuple[str, ...]] = {
-    "treatment_io": ("immunotherapy", "checkpoint", "pembrolizumab", "nivolumab"),
+    # Treatments
+    "treatment_pembrolizumab": (
+        "pembrolizumab",
+        "pembro",
+        "keytruda",
+        "immunotherapy",
+        "checkpoint",
+        "anti-pd-1",
+        "pd1",
+        "nivolumab",
+        "ici",
+    ),
+    "treatment_sotorasib": (
+        "sotorasib",
+        "lumakras",
+        "adagrasib",
+        "krazati",
+        "kras",
+        "g12c",
+    ),
+    "treatment_olaparib": ("olaparib", "lynparza", "parp"),
+    "treatment_osimertinib": (
+        "osimertinib",
+        "tagrisso",
+        "egfr",
+        "tki",
+    ),
+    # Biomarkers
     "egfr_mutation": ("egfr", "egfrm"),
     "pdl1_tps": ("pdl1", "pd-l1"),
     "tmb_high": ("tmb", "mutational", "burden"),
     "kras_g12c": ("kras", "g12c"),
-    "treatment_kras_g12c_inhibitor": ("sotorasib", "adagrasib", "g12c", "kras"),
-    "treatment_x": ("therapy", "drug"),
-    "biomarker_z_high": ("biomarker", "marker", "subgroup"),
+    "brca2_mutation": ("brca", "brca2", "hrd"),
+    "stk11_mutation": ("stk11", "lkb1"),
+    "alk_fusion": ("alk", "rearrangement", "rearranged", "fusion"),
+    # Demographics / staging
+    "smoking_status": ("smoking", "smoker", "tobacco"),
+    "histology": ("histology", "adenocarcinoma", "squamous", "nsclc"),
+    "stage_iv": ("stage", "advanced", "metastatic"),
+    "ecog_ps": ("ecog", "performance"),
+    "has_brain_mets": ("brain", "metastases", "cns"),
+    # Outcomes
     "progression_free_months": ("pfs", "progression", "survival"),
     "objective_response": ("response", "orr", "responder"),
 }

@@ -12,11 +12,17 @@ def test_association_spec_roundtrip():
         id="a1",
         paradigm_class=ParadigmClass.discordant,
         form=AssociationForm.interaction,
-        variables=["treatment_io", "egfr_mutation", "progression_free_months"],
+        variables=[
+            "treatment_pembrolizumab",
+            "egfr_mutation",
+            "progression_free_months",
+        ],
         outcome="progression_free_months",
         direction=1,
         effect_size=2.5,
-        natural_language_description="IO is more effective in EGFR-mutant patients.",
+        natural_language_description=(
+            "Pembrolizumab is more effective in EGFR-mutant patients."
+        ),
     )
     restored = AssociationSpec.model_validate_json(spec.model_dump_json())
     assert restored == spec
@@ -27,25 +33,32 @@ def test_dataset_manifest_roundtrip_with_subgroup():
         id="a2",
         paradigm_class=ParadigmClass.hidden_novel,
         form=AssociationForm.subgroup_conditional,
-        variables=["treatment_x", "biomarker_z_high", "objective_response"],
+        variables=["treatment_olaparib", "brca2_mutation", "objective_response"],
         outcome="objective_response",
         direction=1,
         effect_size=2.0,
         subgroup=SubgroupSpec(
-            name="bz_high",
-            predicate={"biomarker_z_high": 1},
-            description="High biomarker Z",
+            name="brca2_mutant",
+            predicate={"brca2_mutation": 1},
+            description="BRCA2-mutant patients",
         ),
-        natural_language_description="Drug X works only in biomarker-Z-high subgroup.",
+        natural_language_description=(
+            "Olaparib works only in the BRCA2-mutant subgroup."
+        ),
     )
     manifest = DatasetManifest(
         dataset_id="ds_test",
         seed=42,
         patient_n=100,
-        columns=["patient_id", "treatment_x", "biomarker_z_high", "objective_response"],
-        treatment_columns=["treatment_x"],
+        columns=[
+            "patient_id",
+            "treatment_olaparib",
+            "brca2_mutation",
+            "objective_response",
+        ],
+        treatment_columns=["treatment_olaparib"],
         outcome_columns=["objective_response"],
-        covariate_columns=["biomarker_z_high"],
+        covariate_columns=["brca2_mutation"],
         associations=[spec],
     )
     restored = DatasetManifest.model_validate_json(manifest.model_dump_json())

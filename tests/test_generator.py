@@ -45,15 +45,16 @@ def test_builtin_generator_is_deterministic():
 
 
 def test_generator_rejects_cross_class_variable_overlap():
-    # concordant_io_egfr and discordant_io_egfr_inverted share
-    # (outcome=progression_free_months, vars={treatment_io, egfr_mutation, progression_free_months})
-    # so requesting them together must be rejected.
+    # concordant_pembrolizumab_egfr_pfs (index 0) and
+    # discordant_pembrolizumab_egfr_inverted (index 1) share the same
+    # (outcome, variable-set) key, so requesting them together must be
+    # rejected by _assert_no_cross_class_contradictions.
     cfg = GeneratorConfig(
         dataset_id="bad_mix",
         patient_n=100,
         seed=0,
         n_concordant=1,
-        n_discordant=2,  # second discordant is the inverted IO+EGFR
+        n_discordant=2,  # second discordant is the inverted pembrolizumab+EGFR entry
         n_hidden_novel=0,
     )
     with pytest.raises(ValueError, match="paradigm-concordant and paradigm-discordant"):
@@ -75,3 +76,6 @@ def test_public_description_excludes_ground_truth():
     assert "concordant" not in desc
     assert "discordant" not in desc
     assert "hidden_novel" not in desc
+    # Nor should it leak the benchmark's evaluation intent to the agent.
+    for leak in ("open-mindedness", "deliberately inverted", "counter-intuitive", "paradigm", "willingness"):
+        assert leak not in desc, f"public_description leaks evaluation intent: {leak!r}"

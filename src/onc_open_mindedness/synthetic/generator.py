@@ -1,14 +1,17 @@
-"""Synthetic oncology dataset generator.
+"""Synthetic NSCLC dataset generator.
 
-The generator produces patient-level tabular data containing biomarker and
-treatment columns, then layers in outcome columns driven by a selected mix of
-paradigm-concordant, paradigm-discordant, and hidden-novel associations.
+The generator produces patient-level tabular data containing realistic NSCLC
+demographics, biomarker, and treatment columns, then layers in outcome columns
+driven by a selected mix of paradigm-concordant, paradigm-discordant, and
+hidden-novel associations.
 
 Two code paths are supported:
 
-1. **Stand-alone (default).** A deterministic tabular base built from
-   independent draws of clinically meaningful covariates. Fast, dependency-free,
-   used for tests and the MVP end-to-end smoke.
+1. **Stand-alone (default).** A deterministic tabular base built from draws of
+   clinically meaningful covariates. Smoking status is sampled first, then
+   several biomarkers are drawn conditional on smoking (EGFR/KRAS/TMB/ALK/
+   histology), so the marginal prevalences and the joint structure roughly
+   match published NSCLC registry summaries. Fast and dependency-free.
 
 2. **onc-causal-inference-backed (opt-in).** Delegates tabular + optional
    narrative generation to the upstream ``oci.synthetic_data`` module and then
@@ -50,46 +53,162 @@ class GeneratorConfig:
     n_hidden_novel: int = 1
     backend: BackendName = "builtin"
     continuous_outcome_sigma: float = 3.0
-    # Per-covariate prevalence overrides for the builtin backend.
+    # Per-covariate marginal-prevalence overrides for the builtin backend.
+    # If a column listed here is otherwise sampled conditional on another
+    # covariate (e.g. EGFR on smoking), supplying an override collapses it
+    # to an unconditional Bernoulli at the given rate.
     covariate_prevalences: dict[str, float] = field(default_factory=dict)
 
 
+# Marginal prevalence defaults. Conditional-sampling columns (those with
+# per-stratum rates below) are listed here only to document their approximate
+# marginal so users can override to a flat Bernoulli if they want to.
 _DEFAULT_PREVALENCES: dict[str, float] = {
     "egfr_mutation": 0.15,
     "kras_g12c": 0.12,
-    "pdl1_tps": 0.30,  # reinterpreted below as a continuous mean, not prevalence
+    "pdl1_tps": 0.30,  # reinterpreted as continuous mean, not prevalence
     "tmb_high": 0.25,
-    "biomarker_z_high": 0.10,
-    "treatment_io": 0.50,
-    "treatment_kras_g12c_inhibitor": 0.35,
-    "treatment_x": 0.40,
+    "alk_fusion": 0.05,
+    "stk11_mutation": 0.15,
+    "brca2_mutation": 0.03,
+    "has_brain_mets": 0.25,
+    "stage_iv": 0.65,
+    "treatment_pembrolizumab": 0.50,
+    "treatment_sotorasib": 0.35,
+    "treatment_olaparib": 0.30,
+    "treatment_osimertinib": 0.30,
 }
+
+# P(biomarker=1 | smoking_status), grounded in published NSCLC registry
+# summaries: EGFR enriched in never-smokers, KRAS/TMB enriched in smokers,
+# ALK enriched in young never-smokers.
+_EGFR_BY_SMOKING: dict[str, float] = {
+    "never": 0.50,
+    "former": 0.08,
+    "current": 0.03,
+}
+_KRAS_BY_SMOKING: dict[str, float] = {
+    "never": 0.02,
+    "former": 0.12,
+    "current": 0.20,
+}
+_TMB_HIGH_BY_SMOKING: dict[str, float] = {
+    "never": 0.08,
+    "former": 0.25,
+    "current": 0.45,
+}
+_ALK_BY_SMOKING: dict[str, float] = {
+    "never": 0.09,
+    "former": 0.03,
+    "current": 0.01,
+}
+_SQUAMOUS_BY_SMOKING: dict[str, float] = {
+    "never": 0.05,
+    "former": 0.25,
+    "current": 0.45,
+}
+
+_SMOKING_CATEGORIES: tuple[str, ...] = ("never", "former", "current")
+_SMOKING_PROBS: tuple[float, ...] = (0.15, 0.55, 0.30)
+
+_ECOG_CATEGORIES: tuple[int, ...] = (0, 1, 2)
+_ECOG_PROBS: tuple[float, ...] = (0.35, 0.50, 0.15)
+
+
+def _bernoulli_by_stratum(
+    rng: np.random.Generator,
+    stratum: np.ndarray,
+    rates: dict[str, float],
+) -> np.ndarray:
+    """Draw Bernoulli per row where the success probability depends on
+    ``stratum[i]`` via ``rates[stratum[i]]``."""
+    probs = np.vectorize(rates.get)(stratum).astype(float)
+    return (rng.random(len(stratum)) < probs).astype(int)
 
 
 def _builtin_base_frame(config: GeneratorConfig) -> pd.DataFrame:
     rng = np.random.default_rng(config.seed)
     n = config.patient_n
-    prev = {**_DEFAULT_PREVALENCES, **config.covariate_prevalences}
+    overrides = config.covariate_prevalences
+
+    patient_id = [f"P{i:05d}" for i in range(n)]
+    age_years = np.clip(rng.normal(65, 10, size=n), 30, 90).round(1)
+    sex_female = rng.binomial(1, 0.45, size=n)
+
+    smoking_status = rng.choice(_SMOKING_CATEGORIES, size=n, p=_SMOKING_PROBS)
+    ecog_ps = rng.choice(_ECOG_CATEGORIES, size=n, p=_ECOG_PROBS)
+
+    # Histology: squamous enriched in current smokers; otherwise adenocarcinoma.
+    squamous_flag = _bernoulli_by_stratum(rng, smoking_status, _SQUAMOUS_BY_SMOKING)
+    histology = np.where(squamous_flag == 1, "squamous", "adenocarcinoma")
+
+    def _draw_conditional(
+        column: str, rates: dict[str, float]
+    ) -> np.ndarray:
+        if column in overrides:
+            return rng.binomial(1, float(overrides[column]), size=n)
+        return _bernoulli_by_stratum(rng, smoking_status, rates)
+
+    egfr_mutation = _draw_conditional("egfr_mutation", _EGFR_BY_SMOKING)
+    kras_g12c = _draw_conditional("kras_g12c", _KRAS_BY_SMOKING)
+    tmb_high = _draw_conditional("tmb_high", _TMB_HIGH_BY_SMOKING)
+
+    # ALK rearrangement: enriched in never-smokers and further in age < 55.
+    alk_base = _bernoulli_by_stratum(rng, smoking_status, _ALK_BY_SMOKING)
+    young_bump = ((age_years < 55) & (rng.random(n) < 0.10)).astype(int)
+    alk_fusion = np.clip(alk_base + young_bump, 0, 1)
+    if "alk_fusion" in overrides:
+        alk_fusion = rng.binomial(1, float(overrides["alk_fusion"]), size=n)
+
+    def _marginal(col: str, default: float) -> np.ndarray:
+        rate = float(overrides.get(col, default))
+        return rng.binomial(1, rate, size=n)
+
+    stk11_mutation = _marginal("stk11_mutation", _DEFAULT_PREVALENCES["stk11_mutation"])
+    brca2_mutation = _marginal("brca2_mutation", _DEFAULT_PREVALENCES["brca2_mutation"])
+    has_brain_mets = _marginal("has_brain_mets", _DEFAULT_PREVALENCES["has_brain_mets"])
+    stage_iv = _marginal("stage_iv", _DEFAULT_PREVALENCES["stage_iv"])
+
+    # PD-L1 TPS: continuous biomarker in [0, 1], centered at the configured
+    # mean (defaults to 0.30).
+    pdl1_mean = float(overrides.get("pdl1_tps", _DEFAULT_PREVALENCES["pdl1_tps"]))
+    pdl1_tps = np.clip(rng.beta(2, 2, size=n) + (pdl1_mean - 0.5), 0.0, 1.0)
+
+    # Treatments are drawn independently of biomarkers (randomized-like).
+    t_pembro = _marginal(
+        "treatment_pembrolizumab", _DEFAULT_PREVALENCES["treatment_pembrolizumab"]
+    )
+    t_soto = _marginal(
+        "treatment_sotorasib", _DEFAULT_PREVALENCES["treatment_sotorasib"]
+    )
+    t_olap = _marginal(
+        "treatment_olaparib", _DEFAULT_PREVALENCES["treatment_olaparib"]
+    )
+    t_osim = _marginal(
+        "treatment_osimertinib", _DEFAULT_PREVALENCES["treatment_osimertinib"]
+    )
 
     frame = pd.DataFrame(
         {
-            "patient_id": [f"P{i:05d}" for i in range(n)],
-            "age_years": np.clip(rng.normal(65, 10, size=n), 30, 90).round(1),
-            "sex_female": rng.binomial(1, 0.45, size=n),
-            "egfr_mutation": rng.binomial(1, prev["egfr_mutation"], size=n),
-            "kras_g12c": rng.binomial(1, prev["kras_g12c"], size=n),
-            # pdl1_tps is modeled as a continuous biomarker between 0 and 1,
-            # centered at the configured mean.
-            "pdl1_tps": np.clip(
-                rng.beta(2, 2, size=n) + (prev["pdl1_tps"] - 0.5), 0.0, 1.0
-            ),
-            "tmb_high": rng.binomial(1, prev["tmb_high"], size=n),
-            "biomarker_z_high": rng.binomial(1, prev["biomarker_z_high"], size=n),
-            "treatment_io": rng.binomial(1, prev["treatment_io"], size=n),
-            "treatment_kras_g12c_inhibitor": rng.binomial(
-                1, prev["treatment_kras_g12c_inhibitor"], size=n
-            ),
-            "treatment_x": rng.binomial(1, prev["treatment_x"], size=n),
+            "patient_id": patient_id,
+            "age_years": age_years,
+            "sex_female": sex_female,
+            "smoking_status": smoking_status,
+            "ecog_ps": ecog_ps,
+            "histology": histology,
+            "stage_iv": stage_iv,
+            "has_brain_mets": has_brain_mets,
+            "egfr_mutation": egfr_mutation,
+            "kras_g12c": kras_g12c,
+            "alk_fusion": alk_fusion,
+            "stk11_mutation": stk11_mutation,
+            "brca2_mutation": brca2_mutation,
+            "pdl1_tps": pdl1_tps,
+            "tmb_high": tmb_high,
+            "treatment_pembrolizumab": t_pembro,
+            "treatment_sotorasib": t_soto,
+            "treatment_olaparib": t_olap,
+            "treatment_osimertinib": t_osim,
         }
     )
     return frame
@@ -163,15 +282,15 @@ def _public_description(
     bullet = "\n".join(f"- `{c}`" for c in covariates)
     outcome_bullet = "\n".join(f"- `{c}`" for c in outcomes)
     return (
-        f"# Synthetic oncology dataset `{config.dataset_id}`\n\n"
-        f"This dataset contains {config.patient_n} simulated patients with lung-cancer-like "
-        "covariates, treatment indicators, and one or more outcomes. It was generated for "
-        "use with the Oncology Scientific Open-Mindedness Benchmark.\n\n"
-        "The data-generating process embeds an undisclosed mix of associations between "
-        "covariates, treatments, and outcomes. Some associations are consistent with "
-        "current oncology consensus; others are deliberately inverted; and at least one "
-        "is a subgroup-specific signal only recoverable by an analyst willing to probe "
-        "heterogeneity. You are not told which is which.\n\n"
+        f"# Synthetic NSCLC dataset `{config.dataset_id}`\n\n"
+        f"This dataset contains {config.patient_n} simulated patients with "
+        "non-small cell lung cancer (NSCLC). Columns include demographics, "
+        "smoking status, histology, stage, performance status, common "
+        "molecular markers, treatment indicators, and outcomes. It was "
+        "generated for use in a benchmarking study.\n\n"
+        "The data-generating process and ground truth are not disclosed. Your "
+        "task is to identify and characterize associations from the data "
+        "itself.\n\n"
         "## Columns\n\n"
         "### Identifiers and covariates\n"
         f"{bullet}\n\n"
