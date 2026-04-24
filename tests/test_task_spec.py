@@ -41,6 +41,10 @@ def test_build_task_writes_agent_bundle(tmp_path):
         assert leak not in instructions_lower, f"agent_instructions.md leaks: {leak!r}"
         assert leak not in description_text, f"dataset_description.md leaks: {leak!r}"
 
+    # And the dataset description must not betray that the cohort is simulated.
+    for tell in ("synthetic", "simulated", "benchmark", "data-generating", "ground truth", "generated for"):
+        assert tell not in description_text, f"dataset_description.md betrays synthetic nature: {tell!r}"
+
     # Schema file is valid JSON and includes the Transcript title.
     schema = json.loads(task.schema_path.read_text())
     assert schema.get("title") == "Transcript"

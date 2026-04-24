@@ -76,6 +76,19 @@ def test_public_description_excludes_ground_truth():
     assert "concordant" not in desc
     assert "discordant" not in desc
     assert "hidden_novel" not in desc
-    # Nor should it leak the benchmark's evaluation intent to the agent.
-    for leak in ("open-mindedness", "deliberately inverted", "counter-intuitive", "paradigm", "willingness"):
-        assert leak not in desc, f"public_description leaks evaluation intent: {leak!r}"
+    # Nor should it leak the benchmark's evaluation intent, nor betray that the
+    # data are synthetic — the cohort should read as a realistic clinical dataset.
+    for leak in (
+        "open-mindedness",
+        "deliberately inverted",
+        "counter-intuitive",
+        "paradigm",
+        "willingness",
+        "synthetic",
+        "simulated",
+        "benchmark",
+        "data-generating",
+        "ground truth",
+        "generated for",
+    ):
+        assert leak not in desc, f"public_description leaks: {leak!r}"

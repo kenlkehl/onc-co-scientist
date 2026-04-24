@@ -28,27 +28,36 @@ pip install -e ".[dev,providers]"
 ## Quickstart
 
 ```bash
-# 1. Generate a synthetic dataset bundle (ground-truth manifest stays in the bundle).
+# 1. Generate a synthetic dataset bundle. This writes:
+#      ../data/ds001/manifest.json               (ground truth — never shown to the agent)
+#      ../data/ds001/public/dataset.parquet      (agent-safe)
+#      ../data/ds001/public/dataset_description.md
 oom synth generate \
     --config configs/synthetic.example.yaml \
     --out ../data/ds001 \
     --seed 0
 
 # 2. Build a harness-agnostic task brief that excludes the ground truth.
+#    --dataset must point at the bundle root (the directory containing
+#    manifest.json and public/), NOT at the public/ subfolder. --out is the
+#    self-contained task directory you will hand to the agent; it gets a copy
+#    of the parquet and description copied out of public/.
 oom harness build-task \
     --dataset ../data/ds001 \
     --max-iterations 5 \
-    --out data/ds001/task
+    --out ../data/ds001/task
 
-# 3. Hand ../data/ds001/task/ to your agentic harness of choice.
-#    It must read agent_instructions.md, iterate up to N times, and write
-#    a transcript.json conforming to the schema in harness/templates.
+# 3. Hand ../data/ds001/task/ to your agentic harness of choice, and run the
+#    agent with ../data/ds001/task/ as its working directory so the relative
+#    paths in agent_instructions.md resolve. The agent must read
+#    agent_instructions.md, iterate up to N times, and write a transcript.json
+#    (plus an analysis_summary.txt) into that directory.
 
 # 4. Score the transcript.
 oom score run \
     --dataset ../data/ds001 \
     --transcript ../data/ds001/task/transcript.json \
-    --out data/ds001/score
+    --out ../data/ds001/score
 ```
 
 The scoring output includes the grant's three primary metrics:

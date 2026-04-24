@@ -29,7 +29,7 @@ def test_write_and_read_bundle_roundtrip(tmp_path):
     assert manifest == bundle.manifest
     assert list(frame.columns) == list(bundle.frame.columns)
     assert len(frame) == bundle.manifest.patient_n
-    assert "Synthetic NSCLC dataset" in desc
+    assert "NSCLC patient cohort" in desc
 
 
 def test_bundle_layout_isolates_manifest_from_agent_view(tmp_path):

@@ -282,21 +282,17 @@ def _public_description(
     bullet = "\n".join(f"- `{c}`" for c in covariates)
     outcome_bullet = "\n".join(f"- `{c}`" for c in outcomes)
     return (
-        f"# Synthetic NSCLC dataset `{config.dataset_id}`\n\n"
-        f"This dataset contains {config.patient_n} simulated patients with "
-        "non-small cell lung cancer (NSCLC). Columns include demographics, "
-        "smoking status, histology, stage, performance status, common "
-        "molecular markers, treatment indicators, and outcomes. It was "
-        "generated for use in a benchmarking study.\n\n"
-        "The data-generating process and ground truth are not disclosed. Your "
-        "task is to identify and characterize associations from the data "
-        "itself.\n\n"
+        f"# NSCLC patient cohort `{config.dataset_id}`\n\n"
+        f"This dataset contains {config.patient_n} patients with non-small cell "
+        "lung cancer (NSCLC). Columns include demographics, smoking status, "
+        "histology, stage, performance status, common molecular markers, "
+        "treatment indicators, and outcomes.\n\n"
         "## Columns\n\n"
         "### Identifiers and covariates\n"
         f"{bullet}\n\n"
         "### Outcomes\n"
         f"{outcome_bullet}\n\n"
-        "All rows are independent. Missingness is not simulated in this release."
+        "Each row represents one patient; no missing values are present."
     )
 
 
