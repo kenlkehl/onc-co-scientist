@@ -41,7 +41,11 @@ app.add_typer(score_app, name="score")
 console = Console()
 
 
-def _load_generator_config(config_path: Path, seed_override: int | None) -> GeneratorConfig:
+def _load_generator_config(
+    config_path: Path,
+    seed_override: int | None,
+    n_extra_covariates_override: int | None = None,
+) -> GeneratorConfig:
     raw = yaml.safe_load(config_path.read_text())
     if not isinstance(raw, dict):
         raise typer.BadParameter(
@@ -49,6 +53,8 @@ def _load_generator_config(config_path: Path, seed_override: int | None) -> Gene
         )
     if seed_override is not None:
         raw["seed"] = seed_override
+    if n_extra_covariates_override is not None:
+        raw["n_extra_covariates"] = n_extra_covariates_override
     return GeneratorConfig(**raw)
 
 
@@ -72,12 +78,25 @@ def synth_generate(
         int | None,
         typer.Option("--seed", help="Override the seed from the config."),
     ] = None,
+    n_extra_covariates: Annotated[
+        int | None,
+        typer.Option(
+            "--n-extra-covariates",
+            min=0,
+            help="Override the number of realistic distractor covariates "
+            "appended to the dataset (independent of outcomes). Max is the "
+            "size of DEFAULT_DISTRACTOR_POOL in "
+            "src/onc_open_mindedness/synthetic/distractors.py.",
+        ),
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose/--quiet")] = False,
 ) -> None:
     """Generate a synthetic dataset bundle."""
     if verbose:
         logging.basicConfig(level=logging.INFO)
-    gen_config = _load_generator_config(config, seed)
+    gen_config = _load_generator_config(
+        config, seed, n_extra_covariates_override=n_extra_covariates
+    )
     bundle = generate_dataset(gen_config)
     out_path = write_bundle(bundle, out)
     counts = {

@@ -32,6 +32,7 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 
+from .distractors import DEFAULT_DISTRACTOR_POOL, sample_distractors
 from .injector import InjectionResult, inject_associations, summarize_injection
 from .paradigms import select_associations
 from .schemas import AssociationSpec, DatasetManifest, ParadigmClass
@@ -58,6 +59,12 @@ class GeneratorConfig:
     # covariate (e.g. EGFR on smoking), supplying an override collapses it
     # to an unconditional Bernoulli at the given rate.
     covariate_prevalences: dict[str, float] = field(default_factory=dict)
+    # Number of realistic-looking "distractor" covariates appended to the
+    # dataset, sampled independently of every outcome. Higher values force an
+    # agent to exercise variable-selection judgment instead of brute-forcing a
+    # univariate test against every column. Max is the pool size in
+    # ``distractors.DEFAULT_DISTRACTOR_POOL``. Applies to all backends.
+    n_extra_covariates: int = 100
 
 
 # Marginal prevalence defaults. Conditional-sampling columns (those with
@@ -274,6 +281,46 @@ def _select_backend(config: GeneratorConfig) -> pd.DataFrame:
     raise ValueError(f"Unknown backend: {config.backend!r}")
 
 
+# Offset used to spawn an RNG stream for distractor sampling that is
+# independent of the base-frame RNG. Chosen so that setting
+# n_extra_covariates=0 leaves the base-frame draws byte-identical to the
+# pre-distractor implementation, preserving existing test seeds.
+_DISTRACTOR_SEED_OFFSET = 10_007
+
+
+def _append_distractor_covariates(
+    base_frame: pd.DataFrame, config: GeneratorConfig
+) -> pd.DataFrame:
+    """Append `config.n_extra_covariates` distractor columns to `base_frame`.
+
+    Distractors are sampled independently of every existing column and of every
+    outcome, using a separate RNG seeded deterministically from `config.seed`.
+    Raises `ValueError` if any distractor name would collide with an existing
+    column — distractor names must remain disjoint from the paradigm-used set.
+    """
+    n = config.n_extra_covariates
+    if n <= 0:
+        return base_frame
+    if n > len(DEFAULT_DISTRACTOR_POOL):
+        raise ValueError(
+            f"n_extra_covariates={n} exceeds DEFAULT_DISTRACTOR_POOL size "
+            f"({len(DEFAULT_DISTRACTOR_POOL)}). Either lower the requested "
+            f"count or extend the pool in "
+            f"src/onc_open_mindedness/synthetic/distractors.py."
+        )
+    rng = np.random.default_rng(config.seed + _DISTRACTOR_SEED_OFFSET)
+    columns = sample_distractors(rng, n_patients=len(base_frame), n=n)
+    existing = set(base_frame.columns)
+    collisions = [name for name in columns if name in existing]
+    if collisions:
+        raise ValueError(
+            f"Distractor names collide with existing base-frame columns: "
+            f"{collisions!r}. Rename the offending DistractorSpec entries."
+        )
+    distractor_frame = pd.DataFrame(columns, index=base_frame.index)
+    return pd.concat([base_frame, distractor_frame], axis=1)
+
+
 def _public_description(
     config: GeneratorConfig, frame: pd.DataFrame, outcomes: list[str]
 ) -> str:
@@ -324,6 +371,7 @@ def generate_dataset(config: GeneratorConfig) -> DatasetBundle:
     )
 
     base_frame = _select_backend(config)
+    base_frame = _append_distractor_covariates(base_frame, config)
     injection: InjectionResult = inject_associations(
         base_frame=base_frame,
         associations=associations,
