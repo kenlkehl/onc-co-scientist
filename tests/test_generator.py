@@ -4,8 +4,14 @@ import pytest
 from onc_co_scientist.synthetic.distractors import DEFAULT_DISTRACTOR_POOL
 from onc_co_scientist.synthetic.generator import GeneratorConfig, generate_dataset
 from onc_co_scientist.synthetic.injector import BACKGROUND_PROGNOSTIC_VARIABLES
-from onc_co_scientist.synthetic.paradigms import DEFAULT_POOL
-from onc_co_scientist.synthetic.schemas import ParadigmClass
+from onc_co_scientist.synthetic.paradigms import (
+    DEFAULT_POOL,
+    buried_signature_catalog,
+)
+from onc_co_scientist.synthetic.schemas import (
+    AssociationForm,
+    ParadigmClass,
+)
 
 
 def test_builtin_generator_produces_expected_mix():
@@ -16,6 +22,7 @@ def test_builtin_generator_produces_expected_mix():
         n_concordant=2,
         n_discordant=1,
         n_hidden_novel=1,
+        n_buried_signatures=0,
     )
     bundle = generate_dataset(config)
     assert bundle.manifest.patient_n == 200
@@ -222,6 +229,100 @@ def test_background_prognostics_disjoint_from_paradigm_variables():
         f"Background prognostic variables overlap paradigm variables: {overlap!r}. "
         "Move overlapping variables out of one or the other to keep the "
         "discordant signal uncontaminated."
+    )
+
+
+def test_buried_signature_catalog_predicates_are_disjoint_from_background():
+    # Buried multi-feature signatures must use predicate columns that the
+    # background-prognostic layer does NOT also drive — otherwise the buried
+    # effect would be entangled with the unscored prognostic layer.
+    for spec in buried_signature_catalog():
+        assert spec.subgroup is not None, spec.id
+        assert spec.form is AssociationForm.subgroup_conditional, spec.id
+        assert spec.paradigm_class is ParadigmClass.hidden_novel, spec.id
+        # Multi-feature requirement: at least three predicate keys.
+        assert len(spec.subgroup.predicate) >= 3, spec.id
+        overlap = set(spec.subgroup.predicate) & BACKGROUND_PROGNOSTIC_VARIABLES
+        assert overlap == set(), (
+            f"Buried-signature {spec.id!r} predicate overlaps "
+            f"BACKGROUND_PROGNOSTIC_VARIABLES: {overlap!r}"
+        )
+
+
+def test_buried_only_config_injects_single_multifeature_finding():
+    # Default-style config: paradigm counts at zero, one buried signature.
+    cfg = GeneratorConfig(
+        dataset_id="buried_only",
+        patient_n=400,
+        seed=0,
+        n_concordant=0,
+        n_discordant=0,
+        n_hidden_novel=0,
+        n_buried_signatures=1,
+    )
+    bundle = generate_dataset(cfg)
+    assert len(bundle.manifest.associations) == 1
+    spec = bundle.manifest.associations[0]
+    assert spec.paradigm_class is ParadigmClass.hidden_novel
+    assert spec.form is AssociationForm.subgroup_conditional
+    assert spec.subgroup is not None
+    assert len(spec.subgroup.predicate) >= 3
+    # Predicate columns must all be present in the generated frame.
+    for col in spec.subgroup.predicate:
+        assert col in bundle.frame.columns
+
+
+def test_buried_signature_signal_has_recoverable_effect_at_modest_n():
+    # Power sanity check: with patient_n=20000 and the default buried finding,
+    # comparing the targeted outcome inside vs. outside the predicate-defined
+    # subgroup (treatment-active rows only) yields a difference whose sign
+    # matches the signed effect size. This guards against a regression that
+    # silently wires the buried spec into the manifest but not the outcome.
+    cfg = GeneratorConfig(
+        dataset_id="buried_power",
+        patient_n=20_000,
+        seed=0,
+        n_concordant=0,
+        n_discordant=0,
+        n_hidden_novel=0,
+        n_buried_signatures=1,
+    )
+    bundle = generate_dataset(cfg)
+    spec = bundle.manifest.associations[0]
+    df = bundle.frame
+    # Driver = the variable in spec.variables that is neither the outcome nor
+    # in the predicate (mirrors the injector's resolution logic).
+    predicate_cols = set(spec.subgroup.predicate)
+    drivers = [
+        v for v in spec.variables if v != spec.outcome and v not in predicate_cols
+    ]
+    driver = drivers[0]
+
+    # Build the subgroup mask using the same semantics as the injector.
+    mask = np.ones(len(df), dtype=bool)
+    for col, val in spec.subgroup.predicate.items():
+        col_vals = df[col].to_numpy()
+        if isinstance(val, dict) and ({"min", "max"} & val.keys()):
+            low = val.get("min", -np.inf)
+            high = val.get("max", np.inf)
+            mask &= (col_vals >= low) & (col_vals <= high)
+        else:
+            mask &= col_vals == val
+
+    treated = df[driver].to_numpy() == 1
+    in_group = treated & mask
+    out_of_group = treated & ~mask
+    if in_group.sum() < 30 or out_of_group.sum() < 30:
+        pytest.skip(
+            f"Subgroup too small for power check: "
+            f"in={int(in_group.sum())}, out={int(out_of_group.sum())}"
+        )
+    in_mean = float(df.loc[in_group, spec.outcome].mean())
+    out_mean = float(df.loc[out_of_group, spec.outcome].mean())
+    diff = in_mean - out_mean
+    assert np.sign(diff) == np.sign(spec.effect_size), (
+        f"Buried-signature outcome shift has wrong sign: in={in_mean:.3f}, "
+        f"out={out_mean:.3f}, expected sign(effect_size)={np.sign(spec.effect_size)}"
     )
 
 

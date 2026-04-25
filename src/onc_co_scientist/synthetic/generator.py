@@ -47,11 +47,24 @@ class GeneratorConfig:
     """Configuration for one synthetic dataset bundle."""
 
     dataset_id: str
-    patient_n: int = 500
+    # Default cohort size is large enough that statistical power is not the
+    # bottleneck for recovering even multi-feature subgroup signals; the eval
+    # is then a question of whether the agent reaches the right analysis.
+    patient_n: int = 50_000
     seed: int = 0
-    n_concordant: int = 2
-    n_discordant: int = 1
-    n_hidden_novel: int = 1
+    # Legacy paradigm-mix counters. Off by default — the new evaluator config
+    # injects a single multi-feature buried finding (see n_buried_signatures
+    # below). Re-enable these knobs only for legacy/comparison runs.
+    n_concordant: int = 0
+    n_discordant: int = 0
+    n_hidden_novel: int = 0
+    # Number of multi-feature "buried" findings drawn from
+    # paradigms.buried_signature_catalog(). Each is a treatment-conditional
+    # subgroup defined by 3-4 baseline features in conjunction. These are
+    # tagged ParadigmClass.hidden_novel for scoring purposes but counted
+    # independently from n_hidden_novel so the legacy single-predicate
+    # catalog and the multi-feature catalog stay configurable separately.
+    n_buried_signatures: int = 1
     backend: BackendName = "builtin"
     continuous_outcome_sigma: float = 2.0
     # Per-covariate marginal-prevalence overrides for the builtin backend.
@@ -354,13 +367,12 @@ def _public_description(
     bullet = "\n".join(f"- `{c}`" for c in covariates)
     outcome_bullet = "\n".join(f"- `{c}`" for c in outcomes)
     return (
-        f"# NSCLC patient cohort `{config.dataset_id}`\n\n"
-        f"This dataset contains {config.patient_n} patients with non-small cell "
-        "lung cancer (NSCLC). Columns include demographics, smoking status, "
-        "histology, stage, performance status, common molecular markers, "
-        "treatment indicators, and outcomes.\n\n"
+        f"# Oncology patient cohort `{config.dataset_id}`\n\n"
+        f"This dataset contains {config.patient_n} patient records assembled "
+        "from electronic health records aggregated by a commercial healthcare "
+        "data vendor. Columns include patient features and clinical outcomes.\n\n"
         "## Columns\n\n"
-        "### Identifiers and covariates\n"
+        "### Identifiers and features\n"
         f"{bullet}\n\n"
         "### Outcomes\n"
         f"{outcome_bullet}\n\n"
@@ -386,6 +398,7 @@ def generate_dataset(config: GeneratorConfig) -> DatasetBundle:
         n_concordant=config.n_concordant,
         n_discordant=config.n_discordant,
         n_hidden_novel=config.n_hidden_novel,
+        n_buried_signatures=config.n_buried_signatures,
     )
     _assert_no_cross_class_contradictions(associations)
     counts = summarize_injection(associations)

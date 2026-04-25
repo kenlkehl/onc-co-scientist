@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -21,8 +22,17 @@ from rich.console import Console
 from .harness.task_spec import build_task
 from .harness.transcript import Transcript
 from .scoring import aggregate_datasets, score_dataset, write_report
+from .synthetic.anonymize import anonymize_bundle
 from .synthetic.generator import GeneratorConfig, generate_dataset
-from .synthetic.io import read_manifest, write_bundle
+from .synthetic.io import read_manifest, write_bundle, write_bundle_pair
+
+
+class DatasetVariant(StrEnum):
+    """How many variants of the dataset to materialize."""
+
+    named = "named"
+    anonymized = "anonymized"
+    both = "both"
 
 app = typer.Typer(
     help="Oncology Co-Scientist Benchmark CLI.",
@@ -89,6 +99,25 @@ def synth_generate(
             "src/onc_co_scientist/synthetic/distractors.py.",
         ),
     ] = None,
+    variant: Annotated[
+        DatasetVariant,
+        typer.Option(
+            "--variant",
+            help="Which variant(s) to materialize. 'both' writes named/ and "
+            "anonymized/ subdirs under --out (same rows, same buried "
+            "finding, only feature column names differ). 'named' or "
+            "'anonymized' writes a single bundle directly into --out.",
+            case_sensitive=False,
+        ),
+    ] = DatasetVariant.both,
+    anon_seed: Annotated[
+        int,
+        typer.Option(
+            "--anon-seed",
+            help="Seed used to shuffle column-name assignments in the "
+            "anonymized variant. Independent from the data-generation seed.",
+        ),
+    ] = 0,
     verbose: Annotated[bool, typer.Option("--verbose/--quiet")] = False,
 ) -> None:
     """Generate a synthetic dataset bundle."""
@@ -98,17 +127,35 @@ def synth_generate(
         config, seed, n_extra_covariates_override=n_extra_covariates
     )
     bundle = generate_dataset(gen_config)
-    out_path = write_bundle(bundle, out)
     counts = {
         klass.value: len(
             [a for a in bundle.manifest.associations if a.paradigm_class == klass]
         )
         for klass in {a.paradigm_class for a in bundle.manifest.associations}
     }
-    console.print(
-        f"[green]Wrote[/green] dataset [bold]{bundle.manifest.dataset_id}[/bold] "
-        f"to {out_path} (n={bundle.manifest.patient_n}, associations={counts})"
-    )
+
+    if variant is DatasetVariant.both:
+        named_dir, anonymized_dir = write_bundle_pair(bundle, out, anon_seed=anon_seed)
+        console.print(
+            f"[green]Wrote[/green] dataset [bold]{bundle.manifest.dataset_id}[/bold] "
+            f"(n={bundle.manifest.patient_n}, associations={counts})\n"
+            f"  named:      {named_dir}\n"
+            f"  anonymized: {anonymized_dir}"
+        )
+    elif variant is DatasetVariant.named:
+        out_path = write_bundle(bundle, out)
+        console.print(
+            f"[green]Wrote[/green] dataset [bold]{bundle.manifest.dataset_id}[/bold] "
+            f"to {out_path} (n={bundle.manifest.patient_n}, associations={counts})"
+        )
+    elif variant is DatasetVariant.anonymized:
+        anon_bundle, _ = anonymize_bundle(bundle, seed=anon_seed)
+        out_path = write_bundle(anon_bundle, out)
+        console.print(
+            f"[green]Wrote[/green] anonymized dataset "
+            f"[bold]{anon_bundle.manifest.dataset_id}[/bold] to {out_path} "
+            f"(n={anon_bundle.manifest.patient_n}, associations={counts})"
+        )
 
 
 @harness_app.command("build-task")
