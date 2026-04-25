@@ -17,7 +17,7 @@ def _fmt(value: float | None) -> str:
 
 def render_markdown(pipeline: PipelineScore) -> str:
     lines: list[str] = []
-    lines.append("# Oncology Scientific Open-Mindedness Benchmark — Scoring Report")
+    lines.append("# Oncology Co-Scientist Benchmark — Scoring Report")
     lines.append("")
     lines.append(f"- **Datasets scored:** {pipeline.n_datasets}")
     lines.append(
@@ -29,7 +29,7 @@ def render_markdown(pipeline: PipelineScore) -> str:
         f"{_fmt(pipeline.mean_iterations_discordant)}"
     )
     lines.append(
-        f"- **Metric (3)** paradigm adherence `(2) - (1)` (lower = more open-minded): "
+        f"- **Metric (3)** paradigm adherence `(2) - (1)` (lower = more flexible across paradigms): "
         f"{_fmt(pipeline.paradigm_adherence)}"
     )
     lines.append(

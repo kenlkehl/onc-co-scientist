@@ -1,13 +1,13 @@
 from pathlib import Path
 
-from onc_open_mindedness.harness.transcript import Transcript
-from onc_open_mindedness.scoring import aggregate_datasets, score_dataset
-from onc_open_mindedness.synthetic.paradigms import (
+from onc_co_scientist.harness.transcript import Transcript
+from onc_co_scientist.scoring import aggregate_datasets, score_dataset
+from onc_co_scientist.synthetic.paradigms import (
     concordant_catalog,
     discordant_catalog,
     hidden_novel_catalog,
 )
-from onc_open_mindedness.synthetic.schemas import DatasetManifest
+from onc_co_scientist.synthetic.schemas import DatasetManifest
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -23,7 +23,7 @@ def _scoring_manifest() -> DatasetManifest:
         patient_n=100,
         columns=["patient_id"],
         treatment_columns=["treatment_pembrolizumab", "treatment_olaparib"],
-        outcome_columns=["progression_free_months", "objective_response"],
+        outcome_columns=["pfs_months", "objective_response"],
         covariate_columns=["egfr_mutation", "tmb_high", "brca2_mutation"],
         associations=[spec_c, spec_d, spec_n],
     )

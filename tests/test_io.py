@@ -1,5 +1,5 @@
-from onc_open_mindedness.synthetic.generator import GeneratorConfig, generate_dataset
-from onc_open_mindedness.synthetic.io import (
+from onc_co_scientist.synthetic.generator import GeneratorConfig, generate_dataset
+from onc_co_scientist.synthetic.io import (
     DATASET_FILENAME,
     DESCRIPTION_FILENAME,
     MANIFEST_FILENAME,

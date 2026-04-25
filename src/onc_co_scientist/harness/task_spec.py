@@ -45,6 +45,7 @@ def _render_instructions(
     max_iterations: int,
     dataset_relpath: str,
     description_relpath: str,
+    python_env: str | None,
 ) -> str:
     env = Environment(
         loader=FileSystemLoader(str(TEMPLATE_DIR)),
@@ -58,6 +59,7 @@ def _render_instructions(
         max_iterations=max_iterations,
         dataset_relpath=dataset_relpath,
         description_relpath=description_relpath,
+        python_env=python_env,
     )
 
 
@@ -72,11 +74,15 @@ def build_task(
     out_dir: Path | str,
     *,
     max_iterations: int = 5,
+    python_env: Path | str | None = None,
 ) -> TaskBundle:
     """Build a ``TaskBundle`` that an external harness can execute against.
 
     The ground-truth manifest is deliberately *not* copied into ``out_dir`` —
     agents see only the tabular data and the public description.
+
+    If ``python_env`` is provided, its absolute path is embedded in the agent
+    brief so the agent runs code inside that uv-managed environment.
     """
     dataset_path_in = Path(dataset_dir)
     task_dir = Path(out_dir)
@@ -91,6 +97,8 @@ def build_task(
     description_dst = task_dir / TASK_DESCRIPTION_LINK
     description_dst.write_text(description if description.endswith("\n") else description + "\n")
 
+    python_env_str = str(Path(python_env).resolve()) if python_env is not None else None
+
     # Render the agent brief.
     instructions = _render_instructions(
         dataset_id=manifest.dataset_id,
@@ -98,6 +106,7 @@ def build_task(
         max_iterations=max_iterations,
         dataset_relpath=TASK_DATASET_LINK,
         description_relpath=TASK_DESCRIPTION_LINK,
+        python_env=python_env_str,
     )
     instructions_path = task_dir / INSTRUCTIONS_FILENAME
     instructions_path.write_text(instructions)

@@ -1,8 +1,11 @@
+import numpy as np
 import pytest
 
-from onc_open_mindedness.synthetic.distractors import DEFAULT_DISTRACTOR_POOL
-from onc_open_mindedness.synthetic.generator import GeneratorConfig, generate_dataset
-from onc_open_mindedness.synthetic.schemas import ParadigmClass
+from onc_co_scientist.synthetic.distractors import DEFAULT_DISTRACTOR_POOL
+from onc_co_scientist.synthetic.generator import GeneratorConfig, generate_dataset
+from onc_co_scientist.synthetic.injector import BACKGROUND_PROGNOSTIC_VARIABLES
+from onc_co_scientist.synthetic.paradigms import DEFAULT_POOL
+from onc_co_scientist.synthetic.schemas import ParadigmClass
 
 
 def test_builtin_generator_produces_expected_mix():
@@ -114,11 +117,22 @@ def test_zero_extra_covariates_matches_original_column_set():
         "brca2_mutation",
         "pdl1_tps",
         "tmb_high",
+        # Disease-burden labs are part of the base frame so the
+        # background-prognostic layer in injector.py can always read them.
+        "albumin_g_dl",
+        "ldh_u_l",
+        "weight_loss_pct_6mo",
+        "crp_mg_l",
+        "nlr",
     }
     assert baseline <= set(bundle.manifest.covariate_columns)
     # No distractor columns leaked in.
     distractor_names = {spec.name for spec in DEFAULT_DISTRACTOR_POOL}
     assert distractor_names.isdisjoint(set(bundle.frame.columns))
+    # The promoted labs must no longer live in the distractor pool — otherwise
+    # we'd get a column collision at non-zero n_extra_covariates.
+    promoted = {"albumin_g_dl", "ldh_u_l", "weight_loss_pct_6mo", "crp_mg_l", "nlr"}
+    assert promoted.isdisjoint(distractor_names)
 
 
 def test_requested_extras_exceeding_pool_size_raises():
@@ -183,8 +197,74 @@ def test_public_description_excludes_ground_truth():
         "synthetic",
         "simulated",
         "benchmark",
+        "evaluat",
         "data-generating",
         "ground truth",
         "generated for",
     ):
         assert leak not in desc, f"public_description leaks: {leak!r}"
+
+
+def test_background_prognostics_disjoint_from_paradigm_variables():
+    # Load-bearing safety check: the background-prognostic layer must read
+    # only disease-burden columns that are NEVER referenced by any paradigm
+    # association. Overlap could allow an unscored "conventional" effect to
+    # neutralize a discordant tag (e.g. a background "high TMB → better
+    # response" would silently undo the discordant TMB×pembro injection).
+    paradigm_vars: set[str] = set()
+    for klass_specs in DEFAULT_POOL.values():
+        for spec in klass_specs:
+            paradigm_vars.update(spec.variables)
+            if spec.subgroup is not None:
+                paradigm_vars.update(spec.subgroup.predicate.keys())
+    overlap = BACKGROUND_PROGNOSTIC_VARIABLES & paradigm_vars
+    assert overlap == set(), (
+        f"Background prognostic variables overlap paradigm variables: {overlap!r}. "
+        "Move overlapping variables out of one or the other to keep the "
+        "discordant signal uncontaminated."
+    )
+
+
+def test_background_prognostics_yield_realistic_r_squared():
+    # The whole point of the background-prognostic layer is to keep agents
+    # from instantly recognizing the cohort as synthetic. Concretely:
+    # multivariable regression on classic disease-burden variables should
+    # produce an R² in the realistic NSCLC literature band (~0.05 to ~0.40),
+    # not the structurally near-zero value that gave the prior generator
+    # away. This test doubles as a calibration check on the effect sizes
+    # in injector._background_prognostic_contribution.
+    config = GeneratorConfig(
+        dataset_id="r2_check",
+        patient_n=500,
+        seed=42,
+        n_concordant=2,
+        n_discordant=1,
+        n_hidden_novel=1,
+    )
+    bundle = generate_dataset(config)
+    df = bundle.frame
+    # OLS via lstsq (avoids a statsmodels dependency in the test suite).
+    X = np.column_stack(
+        [
+            np.ones(len(df)),
+            df["ecog_ps"].to_numpy(dtype=float),
+            df["stage_iv"].to_numpy(dtype=float),
+            df["has_brain_mets"].to_numpy(dtype=float),
+            df["age_years"].to_numpy(dtype=float),
+            df["albumin_g_dl"].to_numpy(dtype=float),
+            df["weight_loss_pct_6mo"].to_numpy(dtype=float),
+        ]
+    )
+    y = df["pfs_months"].to_numpy(dtype=float)
+    coefs, _residuals, _rank, _sv = np.linalg.lstsq(X, y, rcond=None)
+    yhat = X @ coefs
+    ss_res = float(((y - yhat) ** 2).sum())
+    ss_tot = float(((y - y.mean()) ** 2).sum())
+    r2 = 1.0 - ss_res / ss_tot
+    n, p = X.shape
+    adj_r2 = 1.0 - (1.0 - r2) * (n - 1) / (n - p)
+    assert 0.05 <= adj_r2 <= 0.40, (
+        f"PFM adjusted R² on disease-burden predictors = {adj_r2:.3f}, "
+        "outside the realistic 0.05–0.40 band. Recalibrate the background "
+        "prognostic effect sizes in injector._background_prognostic_contribution."
+    )

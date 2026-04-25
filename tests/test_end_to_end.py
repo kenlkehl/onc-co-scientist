@@ -3,11 +3,11 @@ perfect, hand-crafted transcript."""
 
 import json
 
-from onc_open_mindedness.harness.task_spec import build_task
-from onc_open_mindedness.harness.transcript import Transcript
-from onc_open_mindedness.scoring import aggregate_datasets, score_dataset, write_report
-from onc_open_mindedness.synthetic.generator import GeneratorConfig, generate_dataset
-from onc_open_mindedness.synthetic.io import read_manifest, write_bundle
+from onc_co_scientist.harness.task_spec import build_task
+from onc_co_scientist.harness.transcript import Transcript
+from onc_co_scientist.scoring import aggregate_datasets, score_dataset, write_report
+from onc_co_scientist.synthetic.generator import GeneratorConfig, generate_dataset
+from onc_co_scientist.synthetic.io import read_manifest, write_bundle
 
 
 def test_generate_build_score_pipeline(tmp_path):
@@ -75,4 +75,4 @@ def test_generate_build_score_pipeline(tmp_path):
     score_json = json.loads((report_dir / "score.json").read_text())
     assert score_json["n_datasets"] == 1
     report_md = (report_dir / "score.md").read_text()
-    assert report_md.startswith("# Oncology Scientific Open-Mindedness Benchmark")
+    assert report_md.startswith("# Oncology Co-Scientist Benchmark")

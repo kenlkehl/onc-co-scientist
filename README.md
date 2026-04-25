@@ -1,6 +1,6 @@
-# onc-open-mindedness
+# onc-co-scientist
 
-Initial pipeline for the **Oncology Scientific Open-Mindedness Benchmark** (Aims 1.1 and 1.2 of the grant "Do Large Language Models Entrench Biomedical Scientific Paradigms? A Study in Cancer Research").
+Initial pipeline for the **Oncology Co-Scientist Benchmark** (Aims 1.1 and 1.2 of the grant "Do Large Language Models Entrench Biomedical Scientific Paradigms? A Study in Cancer Research").
 
 This repository provides:
 
@@ -32,7 +32,7 @@ pip install -e ".[dev,providers]"
 #      ../data/ds001/manifest.json               (ground truth — never shown to the agent)
 #      ../data/ds001/public/dataset.parquet      (agent-safe)
 #      ../data/ds001/public/dataset_description.md
-oom synth generate \
+ocs synth generate \
     --config configs/synthetic.example.yaml \
     --out ../data/ds001 \
     --seed 0
@@ -42,7 +42,7 @@ oom synth generate \
 #    manifest.json and public/), NOT at the public/ subfolder. --out is the
 #    self-contained task directory you will hand to the agent; it gets a copy
 #    of the parquet and description copied out of public/.
-oom harness build-task \
+ocs harness build-task \
     --dataset ../data/ds001 \
     --max-iterations 5 \
     --out ../data/ds001/task
@@ -54,7 +54,7 @@ oom harness build-task \
 #    (plus an analysis_summary.txt) into that directory.
 
 # 4. Score the transcript.
-oom score run \
+ocs score run \
     --dataset ../data/ds001 \
     --transcript ../data/ds001/task/transcript.json \
     --out ../data/ds001/score
@@ -68,7 +68,7 @@ The scoring output includes the grant's three primary metrics:
 
 ## Layout
 
-See `docs/` (forthcoming) and docstrings. Top-level package: `src/onc_open_mindedness/`.
+See `docs/` (forthcoming) and docstrings. Top-level package: `src/onc_co_scientist/`.
 
 ## License
 

@@ -1,4 +1,4 @@
-from onc_open_mindedness.synthetic.schemas import (
+from onc_co_scientist.synthetic.schemas import (
     AssociationForm,
     AssociationSpec,
     DatasetManifest,
@@ -15,9 +15,9 @@ def test_association_spec_roundtrip():
         variables=[
             "treatment_pembrolizumab",
             "egfr_mutation",
-            "progression_free_months",
+            "pfs_months",
         ],
-        outcome="progression_free_months",
+        outcome="pfs_months",
         direction=1,
         effect_size=2.5,
         natural_language_description=(

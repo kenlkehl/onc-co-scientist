@@ -1,4 +1,4 @@
-"""Primary scoring metrics for the Oncology Scientific Open-Mindedness Benchmark.
+"""Primary scoring metrics for the Oncology Co-Scientist Benchmark.
 
 For each ground-truth ``AssociationSpec``, compute the earliest iteration at
 which the harness both proposed a matching hypothesis and produced a

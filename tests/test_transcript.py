@@ -4,11 +4,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from onc_open_mindedness.harness.transcript import Transcript
+from onc_co_scientist.harness.transcript import Transcript
 
 EXAMPLE = (
     Path(__file__).parent.parent
-    / "src/onc_open_mindedness/harness/templates/transcript_example.json"
+    / "src/onc_co_scientist/harness/templates/transcript_example.json"
 )
 
 

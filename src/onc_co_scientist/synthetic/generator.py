@@ -53,7 +53,7 @@ class GeneratorConfig:
     n_discordant: int = 1
     n_hidden_novel: int = 1
     backend: BackendName = "builtin"
-    continuous_outcome_sigma: float = 3.0
+    continuous_outcome_sigma: float = 2.0
     # Per-covariate marginal-prevalence overrides for the builtin backend.
     # If a column listed here is otherwise sampled conditional on another
     # covariate (e.g. EGFR on smoking), supplying an override collapses it
@@ -181,6 +181,26 @@ def _builtin_base_frame(config: GeneratorConfig) -> pd.DataFrame:
     pdl1_mean = float(overrides.get("pdl1_tps", _DEFAULT_PREVALENCES["pdl1_tps"]))
     pdl1_tps = np.clip(rng.beta(2, 2, size=n) + (pdl1_mean - 0.5), 0.0, 1.0)
 
+    # Disease-burden / performance-status proxy labs and indices. Sampled
+    # independently here (no shared latent factor) but they enter the outcome
+    # linear predictors via the background-prognostic layer in injector.py,
+    # so they will appear correlated with PFM and OR in the final dataset —
+    # matching how a real EHR pull behaves and avoiding the "100 columns,
+    # zero signal" tell.
+    albumin_g_dl = np.round(
+        np.clip(rng.normal(3.8, 0.5, size=n), 1.5, 5.5), 1
+    )
+    ldh_u_l = np.round(
+        np.clip(rng.lognormal(5.35, 0.35, size=n), 0.0, 2000.0), 2
+    )
+    weight_loss_pct_6mo = np.round(
+        np.clip(rng.normal(3.0, 5.0, size=n), 0.0, 40.0), 1
+    )
+    crp_mg_l = np.round(
+        np.clip(rng.lognormal(1.20, 1.10, size=n), 0.0, 300.0), 2
+    )
+    nlr = np.round(np.clip(rng.lognormal(1.10, 0.55, size=n), 0.0, 40.0), 2)
+
     # Treatments are drawn independently of biomarkers (randomized-like).
     t_pembro = _marginal(
         "treatment_pembrolizumab", _DEFAULT_PREVALENCES["treatment_pembrolizumab"]
@@ -212,6 +232,11 @@ def _builtin_base_frame(config: GeneratorConfig) -> pd.DataFrame:
             "brca2_mutation": brca2_mutation,
             "pdl1_tps": pdl1_tps,
             "tmb_high": tmb_high,
+            "albumin_g_dl": albumin_g_dl,
+            "ldh_u_l": ldh_u_l,
+            "weight_loss_pct_6mo": weight_loss_pct_6mo,
+            "crp_mg_l": crp_mg_l,
+            "nlr": nlr,
             "treatment_pembrolizumab": t_pembro,
             "treatment_sotorasib": t_soto,
             "treatment_olaparib": t_olap,
@@ -236,7 +261,7 @@ def _oci_base_frame(config: GeneratorConfig) -> pd.DataFrame:
     except Exception as exc:  # pragma: no cover - import path depends on upstream
         raise RuntimeError(
             "backend='onc_causal_inference' requires the 'synthetic' extra: "
-            "pip install 'onc-open-mindedness[synthetic]'"
+            "pip install 'onc-co-scientist[synthetic]'"
         ) from exc
 
     # The upstream generator's public entry point may evolve; the expectation
@@ -306,7 +331,7 @@ def _append_distractor_covariates(
             f"n_extra_covariates={n} exceeds DEFAULT_DISTRACTOR_POOL size "
             f"({len(DEFAULT_DISTRACTOR_POOL)}). Either lower the requested "
             f"count or extend the pool in "
-            f"src/onc_open_mindedness/synthetic/distractors.py."
+            f"src/onc_co_scientist/synthetic/distractors.py."
         )
     rng = np.random.default_rng(config.seed + _DISTRACTOR_SEED_OFFSET)
     columns = sample_distractors(rng, n_patients=len(base_frame), n=n)

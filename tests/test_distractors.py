@@ -1,11 +1,11 @@
 import numpy as np
 import pytest
 
-from onc_open_mindedness.synthetic.distractors import (
+from onc_co_scientist.synthetic.distractors import (
     DEFAULT_DISTRACTOR_POOL,
     sample_distractors,
 )
-from onc_open_mindedness.synthetic.paradigms import DEFAULT_POOL
+from onc_co_scientist.synthetic.paradigms import DEFAULT_POOL
 
 
 def _all_paradigm_column_names() -> set[str]:

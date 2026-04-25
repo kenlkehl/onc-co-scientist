@@ -1,14 +1,14 @@
 import json
 
-from onc_open_mindedness.harness.task_spec import (
+from onc_co_scientist.harness.task_spec import (
     INSTRUCTIONS_FILENAME,
     SCHEMA_FILENAME,
     TASK_DATASET_LINK,
     TASK_DESCRIPTION_LINK,
     build_task,
 )
-from onc_open_mindedness.synthetic.generator import GeneratorConfig, generate_dataset
-from onc_open_mindedness.synthetic.io import write_bundle
+from onc_co_scientist.synthetic.generator import GeneratorConfig, generate_dataset
+from onc_co_scientist.synthetic.io import write_bundle
 
 
 def test_build_task_writes_agent_bundle(tmp_path):
@@ -37,12 +37,28 @@ def test_build_task_writes_agent_bundle(tmp_path):
     # Agent-facing files must not leak the benchmark's evaluation intent.
     description_text = task.description_path.read_text().lower()
     instructions_lower = instructions.lower()
-    for leak in ("open-mindedness", "deliberately inverted", "counter-intuitive", "paradigm", "willingness"):
+    for leak in (
+        "open-mindedness",
+        "deliberately inverted",
+        "counter-intuitive",
+        "paradigm",
+        "willingness",
+        "benchmark",
+        "evaluat",
+    ):
         assert leak not in instructions_lower, f"agent_instructions.md leaks: {leak!r}"
         assert leak not in description_text, f"dataset_description.md leaks: {leak!r}"
 
     # And the dataset description must not betray that the cohort is simulated.
-    for tell in ("synthetic", "simulated", "benchmark", "data-generating", "ground truth", "generated for"):
+    for tell in (
+        "synthetic",
+        "simulated",
+        "benchmark",
+        "evaluat",
+        "data-generating",
+        "ground truth",
+        "generated for",
+    ):
         assert tell not in description_text, f"dataset_description.md betrays synthetic nature: {tell!r}"
 
     # Schema file is valid JSON and includes the Transcript title.
@@ -56,3 +72,31 @@ def test_build_task_writes_agent_bundle(tmp_path):
     assert (task.task_dir / TASK_DESCRIPTION_LINK).exists()
     assert (task.task_dir / INSTRUCTIONS_FILENAME).exists()
     assert (task.task_dir / SCHEMA_FILENAME).exists()
+
+    # Without --python-env, the brief contains no environment section.
+    assert "Python environment" not in instructions
+
+
+def test_build_task_embeds_python_env(tmp_path):
+    cfg = GeneratorConfig(
+        dataset_id="ds_env",
+        patient_n=40,
+        seed=0,
+        n_concordant=1,
+        n_discordant=0,
+        n_hidden_novel=0,
+    )
+    bundle = generate_dataset(cfg)
+    dataset_dir = write_bundle(bundle, tmp_path / "ds")
+
+    env_dir = tmp_path / "agent_venv"
+    env_dir.mkdir()
+
+    task = build_task(
+        dataset_dir, tmp_path / "task", max_iterations=2, python_env=env_dir
+    )
+    instructions = task.instructions_path.read_text()
+
+    # The absolute path to the env should appear verbatim in the brief.
+    assert str(env_dir.resolve()) in instructions
+    assert "Python environment" in instructions

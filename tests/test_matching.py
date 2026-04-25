@@ -1,5 +1,5 @@
-from onc_open_mindedness.scoring.matching import RegexMatcher
-from onc_open_mindedness.synthetic.paradigms import (
+from onc_co_scientist.scoring.matching import RegexMatcher
+from onc_co_scientist.synthetic.paradigms import (
     concordant_catalog,
     discordant_catalog,
     hidden_novel_catalog,

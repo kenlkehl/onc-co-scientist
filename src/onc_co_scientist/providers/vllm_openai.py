@@ -33,7 +33,7 @@ class VLLMProvider:
         except ImportError as exc:
             raise RuntimeError(
                 "vllm-openai provider requires the 'vllm-openai' extra: "
-                "pip install 'onc-open-mindedness[vllm-openai]'"
+                "pip install 'onc-co-scientist[vllm-openai]'"
             ) from exc
         return OpenAI(
             base_url=self._config.base_url,

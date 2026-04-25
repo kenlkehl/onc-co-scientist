@@ -29,11 +29,11 @@ def concordant_catalog() -> list[AssociationSpec]:
             variables=[
                 "treatment_pembrolizumab",
                 "egfr_mutation",
-                "progression_free_months",
+                "pfs_months",
             ],
-            outcome="progression_free_months",
+            outcome="pfs_months",
             direction=-1,
-            effect_size=-3.0,
+            effect_size=-4.2,
             natural_language_description=(
                 "Pembrolizumab monotherapy is less effective (shorter "
                 "progression-free survival) in EGFR-mutant non-small cell lung "
@@ -47,7 +47,7 @@ def concordant_catalog() -> list[AssociationSpec]:
             variables=["treatment_pembrolizumab", "pdl1_tps", "objective_response"],
             outcome="objective_response",
             direction=1,
-            effect_size=1.2,
+            effect_size=1.7,
             natural_language_description=(
                 "Higher tumor PD-L1 TPS is associated with higher objective "
                 "response rates to pembrolizumab monotherapy."
@@ -64,7 +64,7 @@ def concordant_catalog() -> list[AssociationSpec]:
             ],
             outcome="objective_response",
             direction=1,
-            effect_size=1.6,
+            effect_size=2.2,
             natural_language_description=(
                 "Sotorasib produces objective responses in KRAS G12C-mutant "
                 "tumors that are not seen in KRAS-wildtype tumors."
@@ -77,11 +77,11 @@ def concordant_catalog() -> list[AssociationSpec]:
             variables=[
                 "treatment_osimertinib",
                 "egfr_mutation",
-                "progression_free_months",
+                "pfs_months",
             ],
-            outcome="progression_free_months",
+            outcome="pfs_months",
             direction=1,
-            effect_size=4.5,
+            effect_size=6.0,
             natural_language_description=(
                 "Osimertinib produces substantially longer progression-free "
                 "survival in EGFR-mutant non-small cell lung cancer than in "
@@ -95,11 +95,11 @@ def concordant_catalog() -> list[AssociationSpec]:
             variables=[
                 "treatment_pembrolizumab",
                 "stk11_mutation",
-                "progression_free_months",
+                "pfs_months",
             ],
-            outcome="progression_free_months",
+            outcome="pfs_months",
             direction=-1,
-            effect_size=-2.5,
+            effect_size=-3.5,
             natural_language_description=(
                 "STK11 (LKB1) loss-of-function mutations are associated with "
                 "resistance to pembrolizumab: patients with STK11-mutant tumors "
@@ -115,7 +115,7 @@ def discordant_catalog() -> list[AssociationSpec]:
 
     These are synthetic by construction - the data-generating process puts the
     effect in the *opposite* direction to what a paradigm-anchored model would
-    expect. An open-minded analysis should still recover the effect from data.
+    expect. A flexible analysis should still recover the effect from data.
 
     Ordering note: entries are arranged so that pairing defaults
     (``n_concordant=2, n_discordant=1``) produce non-overlapping variable
@@ -131,7 +131,7 @@ def discordant_catalog() -> list[AssociationSpec]:
             variables=["treatment_pembrolizumab", "tmb_high", "objective_response"],
             outcome="objective_response",
             direction=-1,
-            effect_size=-1.4,
+            effect_size=-2.0,
             natural_language_description=(
                 "In this dataset, high tumor mutational burden is associated "
                 "with LOWER objective response to pembrolizumab monotherapy."
@@ -144,11 +144,11 @@ def discordant_catalog() -> list[AssociationSpec]:
             variables=[
                 "treatment_pembrolizumab",
                 "egfr_mutation",
-                "progression_free_months",
+                "pfs_months",
             ],
-            outcome="progression_free_months",
+            outcome="pfs_months",
             direction=+1,
-            effect_size=+3.5,
+            effect_size=+4.5,
             natural_language_description=(
                 "In this dataset, pembrolizumab is MORE effective (longer "
                 "progression-free survival) in EGFR-mutant non-small cell lung "
@@ -162,11 +162,11 @@ def discordant_catalog() -> list[AssociationSpec]:
             variables=[
                 "treatment_pembrolizumab",
                 "stk11_mutation",
-                "progression_free_months",
+                "pfs_months",
             ],
-            outcome="progression_free_months",
+            outcome="pfs_months",
             direction=+1,
-            effect_size=+3.0,
+            effect_size=+4.0,
             natural_language_description=(
                 "In this dataset, STK11 (LKB1) loss-of-function mutations are "
                 "associated with LONGER progression-free survival on "
@@ -188,7 +188,7 @@ def hidden_novel_catalog() -> list[AssociationSpec]:
             variables=["treatment_olaparib", "brca2_mutation", "objective_response"],
             outcome="objective_response",
             direction=+1,
-            effect_size=+2.8,
+            effect_size=+3.5,
             subgroup=SubgroupSpec(
                 name="brca2_mutant_subgroup",
                 predicate={"brca2_mutation": 1},
@@ -211,7 +211,7 @@ def hidden_novel_catalog() -> list[AssociationSpec]:
             variables=["treatment_osimertinib", "alk_fusion", "objective_response"],
             outcome="objective_response",
             direction=+1,
-            effect_size=+2.2,
+            effect_size=+3.0,
             subgroup=SubgroupSpec(
                 name="alk_rearranged_subgroup",
                 predicate={"alk_fusion": 1},

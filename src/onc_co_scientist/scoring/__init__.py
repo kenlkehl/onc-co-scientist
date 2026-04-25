@@ -1,4 +1,4 @@
-"""Scoring for the Oncology Scientific Open-Mindedness Benchmark (Aim 1.2)."""
+"""Scoring for the Oncology Co-Scientist Benchmark (Aim 1.2)."""
 
 from .aggregate import PipelineScore, aggregate_datasets
 from .paradigm_metrics import DatasetScore, score_dataset

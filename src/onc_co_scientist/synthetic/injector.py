@@ -9,7 +9,7 @@ effect, then added (with Gaussian or logistic noise) to produce the outcome.
 For the initial cut we support two outcome kinds:
 
 - ``objective_response`` — binary, simulated via logistic link.
-- ``progression_free_months`` — continuous (months), simulated via linear link
+- ``pfs_months`` — continuous (months), simulated via linear link
   with Gaussian noise, clipped at zero.
 
 The data-generating process is fully deterministic given ``seed``.
@@ -24,14 +24,34 @@ import pandas as pd
 
 from .schemas import AssociationForm, AssociationSpec, ParadigmClass
 
-CONTINUOUS_OUTCOMES = {"progression_free_months"}
+CONTINUOUS_OUTCOMES = {"pfs_months"}
 BINARY_OUTCOMES = {"objective_response"}
 
 # Baseline (no associations active) values for each supported outcome.
 OUTCOME_BASELINES: dict[str, float] = {
-    "progression_free_months": 6.0,  # months
+    "pfs_months": 6.0,  # months
     "objective_response": -1.0,  # log-odds (~27% baseline response rate)
 }
+
+# Variables that the background-prognostic layer is allowed to read. Kept as a
+# constant so the test suite can assert disjointness from any AssociationSpec
+# in the paradigm catalog — no overlap means a discordant tag (e.g. high TMB
+# → worse response) cannot be neutralized by an unscored "conventional" effect
+# embedded in the same DGP.
+BACKGROUND_PROGNOSTIC_VARIABLES: frozenset[str] = frozenset(
+    {
+        "ecog_ps",
+        "stage_iv",
+        "has_brain_mets",
+        "age_years",
+        "smoking_status",
+        "histology",
+        "albumin_g_dl",
+        "ldh_u_l",
+        "weight_loss_pct_6mo",
+        "crp_mg_l",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -111,6 +131,45 @@ def _association_contribution(
     raise ValueError(f"unknown AssociationForm {spec.form!r}")
 
 
+def _background_prognostic_contribution(
+    frame: pd.DataFrame, outcome: str
+) -> np.ndarray:
+    """Per-row background-prognostic adjustment to the linear predictor.
+
+    These effects exist solely to make the cohort feel like a real EHR pull:
+    classic disease-burden variables (ECOG, stage, brain mets, weight loss,
+    albumin, LDH, CRP) drive realistic outcome variance. They are *not*
+    paradigm-tagged and never enter the manifest, so scoring is unaffected.
+
+    By construction the variables consumed here are disjoint from every
+    paradigm-association variable set; see ``BACKGROUND_PROGNOSTIC_VARIABLES``.
+    """
+    n = len(frame)
+    contrib = np.zeros(n, dtype=float)
+    if outcome == "pfs_months":
+        contrib += -1.2 * frame["ecog_ps"].to_numpy()
+        contrib += -1.5 * frame["stage_iv"].to_numpy()
+        contrib += -1.0 * frame["has_brain_mets"].to_numpy()
+        contrib += -0.02 * (frame["age_years"].to_numpy() - 65.0)
+        contrib += -0.6 * (frame["smoking_status"].to_numpy() == "current").astype(float)
+        contrib += -0.8 * (frame["histology"].to_numpy() == "squamous").astype(float)
+        contrib += +0.5 * (frame["albumin_g_dl"].to_numpy() - 3.5)
+        contrib += -0.001 * np.clip(
+            frame["ldh_u_l"].to_numpy() - 250.0, a_min=0.0, a_max=750.0
+        )
+        contrib += -0.08 * frame["weight_loss_pct_6mo"].to_numpy()
+        return contrib
+    if outcome == "objective_response":
+        contrib += -0.4 * frame["ecog_ps"].to_numpy()
+        contrib += -0.3 * frame["stage_iv"].to_numpy()
+        contrib += -0.25 * frame["has_brain_mets"].to_numpy()
+        contrib += +0.15 * (frame["albumin_g_dl"].to_numpy() - 3.5)
+        contrib += -0.04 * frame["weight_loss_pct_6mo"].to_numpy()
+        contrib += -0.10 * (np.log1p(frame["crp_mg_l"].to_numpy()) - np.log(6.0))
+        return contrib
+    return contrib
+
+
 def _sample_binary(linear: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     probs = 1.0 / (1.0 + np.exp(-linear))
     return (rng.random(linear.shape) < probs).astype(int)
@@ -153,6 +212,7 @@ def inject_associations(
             if spec.outcome != outcome:
                 continue
             linear += _association_contribution(frame, spec)
+        linear += _background_prognostic_contribution(frame, outcome)
 
         if outcome in BINARY_OUTCOMES:
             frame[outcome] = _sample_binary(linear, rng)

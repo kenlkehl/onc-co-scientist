@@ -34,7 +34,7 @@ class AnthropicVertexProvider:
         except ImportError as exc:
             raise RuntimeError(
                 "anthropic-vertex provider requires the 'anthropic-vertex' extra: "
-                "pip install 'onc-open-mindedness[anthropic-vertex]'"
+                "pip install 'onc-co-scientist[anthropic-vertex]'"
             ) from exc
 
         region = self._config.region or os.getenv("CLOUD_ML_REGION")

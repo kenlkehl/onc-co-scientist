@@ -90,10 +90,6 @@ DEFAULT_DISTRACTOR_POOL: tuple[DistractorSpec, ...] = (
         "hemoglobin_g_dl", "normal", {"mean": 12.5, "sd": 1.8, "min": 6.0, "max": 18.0, "round": 1}
     ),
     DistractorSpec(
-        "albumin_g_dl", "normal", {"mean": 3.8, "sd": 0.5, "min": 1.5, "max": 5.5, "round": 1}
-    ),
-    DistractorSpec("ldh_u_l", "lognormal", {"mean_log": 5.35, "sd_log": 0.35, "max": 2000.0}),
-    DistractorSpec(
         "alkaline_phosphatase_u_l", "lognormal", {"mean_log": 4.55, "sd_log": 0.45, "max": 1500.0}
     ),
     DistractorSpec("ast_u_l", "lognormal", {"mean_log": 3.25, "sd_log": 0.40, "max": 500.0}),
@@ -131,8 +127,6 @@ DEFAULT_DISTRACTOR_POOL: tuple[DistractorSpec, ...] = (
     DistractorSpec(
         "alc_k_ul", "normal", {"mean": 1.8, "sd": 0.6, "min": 0.1, "max": 6.0, "round": 1}
     ),
-    DistractorSpec("crp_mg_l", "lognormal", {"mean_log": 1.20, "sd_log": 1.10, "max": 300.0}),
-    DistractorSpec("nlr", "lognormal", {"mean_log": 1.10, "sd_log": 0.55, "max": 40.0}),
     DistractorSpec("ca_125_u_ml", "lognormal", {"mean_log": 2.80, "sd_log": 0.95, "max": 5000.0}),
     DistractorSpec("cea_ng_ml", "lognormal", {"mean_log": 1.10, "sd_log": 1.15, "max": 2000.0}),
     DistractorSpec("psa_ng_ml", "lognormal", {"mean_log": 0.20, "sd_log": 1.10, "max": 500.0}),
@@ -159,11 +153,6 @@ DEFAULT_DISTRACTOR_POOL: tuple[DistractorSpec, ...] = (
     ),
     DistractorSpec(
         "spo2_pct", "normal", {"mean": 96.0, "sd": 2.0, "min": 80.0, "max": 100.0, "round": 0}
-    ),
-    DistractorSpec(
-        "weight_loss_pct_6mo",
-        "normal",
-        {"mean": 3.0, "sd": 5.0, "min": 0.0, "max": 40.0, "round": 1},
     ),
     # ---- Comorbidities (binary) ----
     DistractorSpec("diabetes_mellitus", "binary", {"p": 0.22}),
@@ -331,6 +320,6 @@ def sample_distractors(
         raise ValueError(
             f"Requested {n} distractor covariates but pool only has "
             f"{len(pool)}. Either lower n_extra_covariates or extend "
-            f"DEFAULT_DISTRACTOR_POOL in src/onc_open_mindedness/synthetic/distractors.py."
+            f"DEFAULT_DISTRACTOR_POOL in src/onc_co_scientist/synthetic/distractors.py."
         )
     return {spec.name: _sample_one(rng, n_patients, spec) for spec in pool[:n]}

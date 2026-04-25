@@ -1,10 +1,10 @@
-"""Top-level Typer CLI: ``oom``.
+"""Top-level Typer CLI: ``ocs``.
 
 Three subcommand groups mirror the pipeline stages:
 
-- ``oom synth generate`` — produce a synthetic dataset bundle (Aim 1.1).
-- ``oom harness build-task`` — materialize a harness-agnostic task bundle (Aim 1.2).
-- ``oom score run`` — score a harness transcript against a dataset manifest (Aim 1.2).
+- ``ocs synth generate`` — produce a synthetic dataset bundle (Aim 1.1).
+- ``ocs harness build-task`` — materialize a harness-agnostic task bundle (Aim 1.2).
+- ``ocs score run`` — score a harness transcript against a dataset manifest (Aim 1.2).
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from .synthetic.generator import GeneratorConfig, generate_dataset
 from .synthetic.io import read_manifest, write_bundle
 
 app = typer.Typer(
-    help="Oncology Scientific Open-Mindedness Benchmark CLI.",
+    help="Oncology Co-Scientist Benchmark CLI.",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -86,7 +86,7 @@ def synth_generate(
             help="Override the number of realistic distractor covariates "
             "appended to the dataset (independent of outcomes). Max is the "
             "size of DEFAULT_DISTRACTOR_POOL in "
-            "src/onc_open_mindedness/synthetic/distractors.py.",
+            "src/onc_co_scientist/synthetic/distractors.py.",
         ),
     ] = None,
     verbose: Annotated[bool, typer.Option("--verbose/--quiet")] = False,
@@ -119,7 +119,7 @@ def harness_build_task(
             "--dataset",
             exists=True,
             file_okay=False,
-            help="Dataset bundle directory (written by `oom synth generate`).",
+            help="Dataset bundle directory (written by `ocs synth generate`).",
         ),
     ],
     out: Annotated[
@@ -130,9 +130,22 @@ def harness_build_task(
         int,
         typer.Option("--max-iterations", "-n", min=1, help="Iteration cap N for the agent."),
     ] = 5,
+    python_env: Annotated[
+        Path | None,
+        typer.Option(
+            "--python-env",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            help="Path to a uv-managed Python environment the agent should use for "
+            "code execution. Embedded verbatim in agent_instructions.md.",
+        ),
+    ] = None,
 ) -> None:
     """Build an agent-facing task bundle (brief, schema, example, dataset copy)."""
-    task = build_task(dataset, out, max_iterations=max_iterations)
+    task = build_task(
+        dataset, out, max_iterations=max_iterations, python_env=python_env
+    )
     console.print(
         f"[green]Wrote[/green] task bundle to {task.task_dir}\n"
         f"  instructions: {task.instructions_path}\n"

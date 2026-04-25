@@ -1,6 +1,6 @@
 import pytest
 
-from onc_open_mindedness.providers.registry import get_provider
+from onc_co_scientist.providers.registry import get_provider
 
 
 def test_registry_rejects_unknown_kind():

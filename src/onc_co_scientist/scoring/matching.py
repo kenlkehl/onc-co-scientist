@@ -104,7 +104,7 @@ _ALIAS_MAP: dict[str, tuple[str, ...]] = {
     "ecog_ps": ("ecog", "performance"),
     "has_brain_mets": ("brain", "metastases", "cns"),
     # Outcomes
-    "progression_free_months": ("pfs", "progression", "survival"),
+    "pfs_months": ("pfs", "progression", "survival"),
     "objective_response": ("response", "orr", "responder"),
 }
 
