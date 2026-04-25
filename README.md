@@ -4,11 +4,12 @@ Initial pipeline for the **Oncology Co-Scientist Benchmark** (Aims 1.1 and 1.2 o
 
 This repository provides:
 
-1. **Aim 1.1 — Synthetic dataset generator.** Produces patient-level oncology datasets in which every embedded association is tagged with a `paradigm_class`:
-   - `concordant` — consistent with currently accepted oncology paradigms,
-   - `discordant` — direction of effect is inverted or unexpected relative to current consensus,
-   - `hidden_novel` — a subgroup in which a broadly ineffective therapy is exceptionally active (a signal of an undiscovered biomarker).
-2. **Aim 1.2 — Benchmark task specification and scoring.** Emits a task brief that any external agentic harness (Claude Code, Codex, a custom ReAct loop, etc.) can execute, and scores the transcript the harness returns against the ground-truth manifest to compute the paradigm-adherence metrics defined in the grant.
+1. **Aim 1.1 — Synthetic dataset generator.** Produces large patient-level oncology datasets (default 50,000 patients, so statistical power is not the bottleneck) in which a single multi-feature **buried finding** is embedded — a treatment that is exceptionally active only inside the conjunction of 3-4 baseline features. The buried finding is recoverable by a flexible analysis but does not match a textbook treatment-biomarker paradigm. Each generated bundle is materialized in two parallel forms:
+   - `named/` — real clinical column names (`treatment_pembrolizumab`, `egfr_mutation`, …),
+   - `anonymized/` — every non-outcome non-id column renamed to `feature_NNN` via a seeded shuffle, so an agent has no semantic priors to anchor on. Outcome columns retain their real names.
+
+   The legacy paradigm-mix mechanic (`concordant` / `discordant` / `hidden_novel` association catalogs and counters) remains in the codebase for legacy and comparison runs but is dialled to zero by default.
+2. **Aim 1.2 — Benchmark task specification and scoring.** Emits a task brief framed as a generic commercial-EHR-vendor data-mining task (no telegraphing of the buried target) that any external agentic harness (Claude Code, Codex, a custom ReAct loop, etc.) can execute, and scores the transcript the harness returns against the ground-truth manifest. Buried findings are tagged `hidden_novel` for scoring continuity, so `mean_iterations_hidden_novel` becomes the primary metric for this evaluator.
 
 ## What this repo deliberately does **not** do
 
@@ -28,39 +29,52 @@ pip install -e ".[dev,providers]"
 ## Quickstart
 
 ```bash
-# 1. Generate a synthetic dataset bundle. This writes:
-#      ../data/ds001/manifest.json               (ground truth — never shown to the agent)
-#      ../data/ds001/public/dataset.parquet      (agent-safe)
-#      ../data/ds001/public/dataset_description.md
+# 1. Generate a synthetic dataset bundle. With the default --variant=both this
+#    writes both the named and anonymized twins (same rows, same buried
+#    finding, only column names differ):
+#      ../data/ds001/named/manifest.json               (ground truth — never shown to the agent)
+#      ../data/ds001/named/public/dataset.parquet      (agent-safe; real column names)
+#      ../data/ds001/named/public/dataset_description.md
+#      ../data/ds001/anonymized/manifest.json
+#      ../data/ds001/anonymized/column_mapping.json    (real -> feature_NNN map)
+#      ../data/ds001/anonymized/public/dataset.parquet (agent-safe; opaque names)
+#      ../data/ds001/anonymized/public/dataset_description.md
 ocs synth generate \
     --config configs/synthetic.example.yaml \
     --out ../data/ds001 \
     --seed 0
+# Pass --variant named or --variant anonymized to write a single bundle
+# directly into --out instead of the paired named/+anonymized/ layout.
 
 # 2. Build a harness-agnostic task brief that excludes the ground truth.
-#    --dataset must point at the bundle root (the directory containing
-#    manifest.json and public/), NOT at the public/ subfolder. --out is the
-#    self-contained task directory you will hand to the agent; it gets a copy
-#    of the parquet and description copied out of public/.
+#    --dataset must point at one bundle root (the directory containing
+#    manifest.json and public/), NOT at the public/ subfolder. Pick whichever
+#    twin the eval calls for — for an anchoring-free run, use anonymized/.
+#    --out is the self-contained task directory you will hand to the agent; it
+#    gets a copy of the parquet and description copied out of public/.
 ocs harness build-task \
-    --dataset ../data/ds001 \
+    --dataset ../data/ds001/anonymized \
     --max-iterations 5 \
-    --out ../data/ds001/task
+    --out ../data/ds001/anonymized/task
 
-# 3. Hand ../data/ds001/task/ to your agentic harness of choice, and run the
-#    agent with ../data/ds001/task/ as its working directory so the relative
-#    paths in agent_instructions.md resolve. The agent must read
+# 3. Hand ../data/ds001/anonymized/task/ to your agentic harness of choice,
+#    and run the agent with that directory as its working directory so the
+#    relative paths in agent_instructions.md resolve. The agent must read
 #    agent_instructions.md, iterate up to N times, and write a transcript.json
 #    (plus an analysis_summary.txt) into that directory.
 
-# 4. Score the transcript.
+# 4. Score the transcript against the same bundle's manifest.
 ocs score run \
-    --dataset ../data/ds001 \
-    --transcript ../data/ds001/task/transcript.json \
-    --out ../data/ds001/score
+    --dataset ../data/ds001/anonymized \
+    --transcript ../data/ds001/anonymized/task/transcript.json \
+    --out ../data/ds001/anonymized/score
 ```
 
-The scoring output includes the grant's three primary metrics:
+For the default buried-finding configuration the primary metric is
+**`mean_iterations_hidden_novel`** — the mean iteration at which the agent
+first surfaces the buried multi-feature association (or the configured penalty
+if it never does). The legacy paradigm-mix metrics are also computed when
+those associations are turned on:
 
 - **Metric 1** — mean iterations to uncover paradigm-concordant associations (lower = better general analytic performance).
 - **Metric 2** — mean iterations to uncover paradigm-discordant associations (lower = better).
