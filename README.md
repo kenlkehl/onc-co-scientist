@@ -74,16 +74,31 @@ ocs harness build-task \
 #       --max-iterations 5 \
 #       --out ../data/ds001/nsclc/anonymized/task
 
-# 3. Hand the task directory to your agentic harness of choice, and run the
-#    agent with that directory as its working directory so the relative paths
-#    in agent_instructions.md resolve. The agent must read
-#    agent_instructions.md, iterate up to N times, and write a transcript.json
-#    (plus an analysis_summary.txt) into that directory.
+# 3. Run an agentic harness against every task bundle in one call. The
+#    script cds into each tasks/<ct>/<variant>/ before launching, so the
+#    harness inherits that as its working directory and cannot see the
+#    synth bundle's manifest one level up. Use --jobs to fan out in
+#    parallel. The script knows about claude, codex, opencode, droid, and
+#    pi out of the box.
+scripts/run_harness.sh claude ../data/ds001/tasks \
+    --python-env .venv \
+    --jobs 4
+# Local-model wrapper forms also work — the script auto-inserts the `--`
+# separator that ollama launch needs to pass trailing flags through to the
+# inner CLI:
+#   scripts/run_harness.sh "ollama launch claude --model qwen3.6:27b --yes" \
+#       ../data/ds001/tasks --jobs 2
+#   scripts/run_harness.sh "ollama launch opencode --model llama3" \
+#       ../data/ds001/tasks
+# Or invoke the harness yourself: cd into tasks/<ct>/<variant>/ and run
+# the harness with that as cwd. The agent reads agent_instructions.md,
+# iterates up to N times, and writes transcript.json (plus
+# analysis_summary.txt) into that directory.
 
 # 4. Score the transcript against the same bundle's manifest.
 ocs score run \
     --dataset ../data/ds001/nsclc/anonymized \
-    --transcript ../data/ds001/nsclc/anonymized/task/transcript.json \
+    --transcript ../data/ds001/tasks/nsclc/anonymized/transcript.json \
     --out ../data/ds001/nsclc/anonymized/score
 ```
 
