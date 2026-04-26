@@ -1,14 +1,22 @@
 import json
 
+import pytest
+
 from onc_co_scientist.harness.task_spec import (
     INSTRUCTIONS_FILENAME,
     SCHEMA_FILENAME,
     TASK_DATASET_LINK,
     TASK_DESCRIPTION_LINK,
     build_task,
+    build_tasks,
 )
+from onc_co_scientist.synthetic.cancer_types import CancerType
 from onc_co_scientist.synthetic.generator import GeneratorConfig, generate_dataset
 from onc_co_scientist.synthetic.io import write_bundle
+from onc_co_scientist.synthetic.multi import (
+    generate_multi_dataset,
+    write_multi_bundle_pair,
+)
 
 
 def test_build_task_writes_agent_bundle(tmp_path):
@@ -100,3 +108,46 @@ def test_build_task_embeds_python_env(tmp_path):
     # The absolute path to the env should appear verbatim in the brief.
     assert str(env_dir.resolve()) in instructions
     assert "Python environment" in instructions
+
+
+def test_build_tasks_mirrors_synth_tree(tmp_path):
+    """build_tasks emits one task bundle per discovered named/anonymized
+    bundle, mirroring the relative path under the output dir."""
+    base = GeneratorConfig(
+        dataset_id="ds_batch",
+        patient_n=80,
+        seed=0,
+        n_concordant=0,
+        n_discordant=0,
+        n_hidden_novel=0,
+        n_buried_signatures=1,
+        n_extra_covariates=6,
+    )
+    chosen = [CancerType.crc, CancerType.breast]
+    bundles = generate_multi_dataset(base, chosen)
+    synth_root = tmp_path / "ds"
+    write_multi_bundle_pair(bundles, synth_root, anon_seed=0)
+
+    tasks_root = tmp_path / "tasks"
+    tasks = build_tasks(synth_root, tasks_root, max_iterations=2)
+
+    assert len(tasks) == len(chosen) * 2
+    for ct in chosen:
+        for variant in ("named", "anonymized"):
+            task_dir = tasks_root / ct.value / variant
+            instr = task_dir / INSTRUCTIONS_FILENAME
+            assert instr.exists(), f"missing {instr}"
+            text = instr.read_text()
+            assert f"ds_batch_{ct.value}" in text
+            assert "Maximum iterations (N):** 2" in text
+            # Ground-truth manifest must not leak into the agent bundle.
+            assert not (task_dir / "manifest.json").exists()
+            assert (task_dir / TASK_DATASET_LINK).exists()
+            assert (task_dir / TASK_DESCRIPTION_LINK).exists()
+            assert (task_dir / SCHEMA_FILENAME).exists()
+
+
+def test_build_tasks_raises_when_no_bundles_found(tmp_path):
+    (tmp_path / "empty.txt").write_text("nothing here")
+    with pytest.raises(ValueError):
+        build_tasks(tmp_path, tmp_path / "tasks_out")

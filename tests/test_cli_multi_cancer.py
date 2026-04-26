@@ -142,6 +142,117 @@ def test_cli_named_only_variant_writes_bundle_root_per_cancer(
     assert not (out_dir / "nsclc" / "named").exists()
 
 
+def test_cli_harness_build_task_batches_synth_root(tmp_path: Path) -> None:
+    """Pointing `ocs harness build-task --dataset` at a synth output root
+    should produce one task bundle per discovered named/anonymized folder,
+    mirroring the input tree under --out."""
+    runner = CliRunner()
+    cfg = _write_minimal_config(tmp_path / "synth.yaml", patient_n=60)
+    synth_root = tmp_path / "ds"
+
+    gen = runner.invoke(
+        app,
+        [
+            "synth",
+            "generate",
+            "--config",
+            str(cfg),
+            "--out",
+            str(synth_root),
+            "--cancer-types",
+            "crc,breast",
+            "--seed",
+            "0",
+        ],
+    )
+    assert gen.exit_code == 0, gen.stdout
+
+    tasks_root = tmp_path / "tasks"
+    result = runner.invoke(
+        app,
+        [
+            "harness",
+            "build-task",
+            "--dataset",
+            str(synth_root),
+            "--out",
+            str(tasks_root),
+            "--max-iterations",
+            "3",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+
+    for ct in ("crc", "breast"):
+        for variant in ("named", "anonymized"):
+            task_dir = tasks_root / ct / variant
+            assert (task_dir / "agent_instructions.md").exists()
+            assert (task_dir / "dataset.parquet").exists()
+            assert not (task_dir / "manifest.json").exists()
+
+
+def test_cli_harness_build_task_single_bundle_compat(tmp_path: Path) -> None:
+    """Pointing --dataset at a single bundle still writes one task bundle
+    directly into --out (backwards-compat with the per-bundle workflow)."""
+    runner = CliRunner()
+    cfg = _write_minimal_config(tmp_path / "synth.yaml", patient_n=60)
+    synth_root = tmp_path / "ds"
+
+    gen = runner.invoke(
+        app,
+        [
+            "synth",
+            "generate",
+            "--config",
+            str(cfg),
+            "--out",
+            str(synth_root),
+            "--cancer-types",
+            "nsclc",
+        ],
+    )
+    assert gen.exit_code == 0, gen.stdout
+
+    bundle = synth_root / "nsclc" / "anonymized"
+    task_dir = tmp_path / "single_task"
+    result = runner.invoke(
+        app,
+        [
+            "harness",
+            "build-task",
+            "--dataset",
+            str(bundle),
+            "--out",
+            str(task_dir),
+            "--max-iterations",
+            "2",
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    assert (task_dir / "agent_instructions.md").exists()
+    assert (task_dir / "dataset.parquet").exists()
+    # And no nested per-cancer-type subdir was created.
+    assert not (task_dir / "nsclc").exists()
+
+
+def test_cli_harness_build_task_errors_on_empty_dir(tmp_path: Path) -> None:
+    runner = CliRunner()
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    result = runner.invoke(
+        app,
+        [
+            "harness",
+            "build-task",
+            "--dataset",
+            str(empty),
+            "--out",
+            str(tmp_path / "tasks"),
+        ],
+    )
+    assert result.exit_code != 0
+
+
 def test_cli_rejects_unknown_cancer_type(tmp_path: Path) -> None:
     runner = CliRunner()
     cfg = _write_minimal_config(tmp_path / "synth.yaml")

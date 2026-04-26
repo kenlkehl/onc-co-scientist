@@ -54,16 +54,25 @@ ocs synth generate \
 # directly into each cancer-type folder instead of the paired named/+anonymized/
 # layout.
 
-# 2. Build a harness-agnostic task brief that excludes the ground truth, for
-#    one cancer type's bundle at a time. --dataset must point at one bundle
-#    root (the directory containing manifest.json and public/), NOT at the
-#    public/ subfolder. Pick whichever twin the eval calls for — for an
-#    anchoring-free run, use anonymized/. --out is the self-contained task
-#    directory you will hand to the agent.
+# 2. Build harness-agnostic task briefs (no ground truth) for every named and
+#    anonymized bundle produced in step 1, in one call. Point --dataset at the
+#    synth output root and the per-bundle task dirs are written under --out
+#    mirroring the input tree:
+#      ../data/ds001/tasks/nsclc/named/agent_instructions.md
+#      ../data/ds001/tasks/nsclc/anonymized/agent_instructions.md
+#      ../data/ds001/tasks/crc/named/...                       (etc.)
 ocs harness build-task \
-    --dataset ../data/ds001/nsclc/anonymized \
+    --dataset ../data/ds001 \
     --max-iterations 5 \
-    --out ../data/ds001/nsclc/anonymized/task
+    --out ../data/ds001/tasks
+# To build a task for a single bundle, point --dataset at that bundle
+# directly (the directory containing manifest.json and public/). Pick
+# whichever twin the eval calls for — for an anchoring-free run, use
+# anonymized/:
+#   ocs harness build-task \
+#       --dataset ../data/ds001/nsclc/anonymized \
+#       --max-iterations 5 \
+#       --out ../data/ds001/nsclc/anonymized/task
 
 # 3. Hand the task directory to your agentic harness of choice, and run the
 #    agent with that directory as its working directory so the relative paths

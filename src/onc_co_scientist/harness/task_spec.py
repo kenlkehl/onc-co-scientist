@@ -11,6 +11,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 from ..synthetic.io import (
     DATASET_FILENAME,
+    discover_bundles,
     public_dir,
     read_description,
     read_manifest,
@@ -126,3 +127,42 @@ def build_task(
         dataset_path=dataset_dst,
         description_path=description_dst,
     )
+
+
+def build_tasks(
+    synth_root: Path | str,
+    out_dir: Path | str,
+    *,
+    max_iterations: int = 5,
+    python_env: Path | str | None = None,
+) -> list[TaskBundle]:
+    """Materialize one task bundle per discovered dataset under ``synth_root``.
+
+    Walks ``synth_root`` for any directory containing a ``manifest.json`` and
+    a ``public/dataset.parquet`` (the bundle layout written by ``ocs synth
+    generate``), and writes a task bundle for each one under ``out_dir``,
+    mirroring the bundle's path relative to ``synth_root``. ``max_iterations``
+    and ``python_env`` are applied uniformly to every bundle.
+
+    Raises ``ValueError`` if no bundles are found beneath ``synth_root``.
+    """
+    root_path = Path(synth_root)
+    out_path = Path(out_dir)
+    bundles = discover_bundles(root_path)
+    if not bundles:
+        raise ValueError(
+            f"No dataset bundles found under {root_path}. Each bundle must "
+            f"contain manifest.json and public/dataset.parquet."
+        )
+    tasks: list[TaskBundle] = []
+    for bundle in bundles:
+        rel = bundle.relative_to(root_path)
+        tasks.append(
+            build_task(
+                bundle,
+                out_path / rel,
+                max_iterations=max_iterations,
+                python_env=python_env,
+            )
+        )
+    return tasks

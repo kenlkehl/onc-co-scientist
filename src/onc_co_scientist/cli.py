@@ -19,12 +19,12 @@ import typer
 import yaml
 from rich.console import Console
 
-from .harness.task_spec import build_task
+from .harness.task_spec import build_task, build_tasks
 from .harness.transcript import Transcript
 from .scoring import aggregate_datasets, score_dataset, write_report
 from .synthetic.cancer_types import CancerType, all_cancer_types
 from .synthetic.generator import GeneratorConfig
-from .synthetic.io import read_manifest
+from .synthetic.io import MANIFEST_FILENAME, read_manifest
 from .synthetic.multi import (
     generate_multi_dataset,
     write_multi_bundle,
@@ -234,12 +234,20 @@ def harness_build_task(
             "--dataset",
             exists=True,
             file_okay=False,
-            help="Dataset bundle directory (written by `ocs synth generate`).",
+            help="A dataset bundle directory (single-bundle mode) or a synth "
+            "output root containing one or more bundles in subfolders "
+            "(batch mode — one task bundle is written per discovered bundle, "
+            "mirroring the relative path under --out).",
         ),
     ],
     out: Annotated[
         Path,
-        typer.Option("--out", help="Directory to write the harness task bundle into."),
+        typer.Option(
+            "--out",
+            help="Directory to write the harness task bundle(s) into. In batch "
+            "mode, per-bundle task dirs are written under here mirroring the "
+            "input tree (e.g. <out>/nsclc/anonymized/).",
+        ),
     ],
     max_iterations: Annotated[
         int,
@@ -257,17 +265,40 @@ def harness_build_task(
         ),
     ] = None,
 ) -> None:
-    """Build an agent-facing task bundle (brief, schema, example, dataset copy)."""
-    task = build_task(
-        dataset, out, max_iterations=max_iterations, python_env=python_env
-    )
+    """Build an agent-facing task bundle (brief, schema, example, dataset copy).
+
+    If ``--dataset`` points at a single bundle (a directory containing
+    ``manifest.json``), one task bundle is written into ``--out``. Otherwise
+    ``--dataset`` is treated as a synth output root and one task bundle is
+    written per discovered bundle, mirroring the input tree under ``--out``.
+    """
+    if (dataset / MANIFEST_FILENAME).is_file():
+        task = build_task(
+            dataset, out, max_iterations=max_iterations, python_env=python_env
+        )
+        console.print(
+            f"[green]Wrote[/green] task bundle to {task.task_dir}\n"
+            f"  instructions: {task.instructions_path}\n"
+            f"  schema:       {task.schema_path}\n"
+            f"  example:      {task.example_path}\n"
+            f"  dataset:      {task.dataset_path}\n"
+            f"  description:  {task.description_path}"
+        )
+        return
+
+    try:
+        tasks = build_tasks(
+            dataset, out, max_iterations=max_iterations, python_env=python_env
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"{exc} Point --dataset at a bundle directory, or run "
+            f"`ocs synth generate` first."
+        ) from exc
+    for task in tasks:
+        console.print(f"[green]Wrote[/green] task bundle to {task.task_dir}")
     console.print(
-        f"[green]Wrote[/green] task bundle to {task.task_dir}\n"
-        f"  instructions: {task.instructions_path}\n"
-        f"  schema:       {task.schema_path}\n"
-        f"  example:      {task.example_path}\n"
-        f"  dataset:      {task.dataset_path}\n"
-        f"  description:  {task.description_path}"
+        f"[green]Built {len(tasks)} task bundle(s)[/green] under {out}"
     )
 
 

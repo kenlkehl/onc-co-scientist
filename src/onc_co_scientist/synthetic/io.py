@@ -71,6 +71,22 @@ def read_description(bundle_dir: Path | str) -> str:
     return (public_dir(bundle_dir) / DESCRIPTION_FILENAME).read_text()
 
 
+def discover_bundles(root: Path | str) -> list[Path]:
+    """Recursively find dataset bundle directories under ``root``.
+
+    A directory is considered a bundle iff it contains both a top-level
+    ``manifest.json`` and ``public/dataset.parquet``. Results are returned
+    in sorted path order for deterministic CLI output.
+    """
+    root_path = Path(root)
+    bundles: list[Path] = []
+    for manifest_path in root_path.rglob(MANIFEST_FILENAME):
+        bundle_dir = manifest_path.parent
+        if (bundle_dir / PUBLIC_SUBDIR / DATASET_FILENAME).is_file():
+            bundles.append(bundle_dir)
+    return sorted(bundles)
+
+
 def write_bundle_pair(
     bundle: DatasetBundle,
     out_dir: Path | str,
