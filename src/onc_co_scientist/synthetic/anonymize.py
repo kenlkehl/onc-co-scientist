@@ -79,6 +79,7 @@ def _rename_manifest(
         dataset_id=manifest.dataset_id,
         seed=manifest.seed,
         patient_n=manifest.patient_n,
+        cancer_type=manifest.cancer_type,
         columns=[mapping.get(c, c) for c in manifest.columns],
         treatment_columns=[mapping.get(c, c) for c in manifest.treatment_columns],
         outcome_columns=list(manifest.outcome_columns),

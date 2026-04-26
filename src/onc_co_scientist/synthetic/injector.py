@@ -13,6 +13,13 @@ For the initial cut we support two outcome kinds:
   with Gaussian noise, clipped at zero.
 
 The data-generating process is fully deterministic given ``seed``.
+
+Background-prognostic adjustments are split into two layers: a universal
+contribution (ECOG, age, albumin, LDH, weight loss, CRP) implemented in
+``cancer_types.base`` and a cancer-specific contribution attached to each
+``CancerProfile``. The injector sums both. The legacy
+``BACKGROUND_PROGNOSTIC_VARIABLES`` constant equals the union of the shared
+variables and the NSCLC profile's variables, preserving its prior value.
 """
 
 from __future__ import annotations
@@ -22,6 +29,11 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from .cancer_types import CancerProfile, get_profile
+from .cancer_types.base import (
+    SHARED_BACKGROUND_PROGNOSTIC_VARIABLES,
+    shared_prognostic_contribution,
+)
 from .schemas import AssociationForm, AssociationSpec, ParadigmClass
 
 CONTINUOUS_OUTCOMES = {"pfs_months"}
@@ -33,24 +45,18 @@ OUTCOME_BASELINES: dict[str, float] = {
     "objective_response": -1.0,  # log-odds (~27% baseline response rate)
 }
 
-# Variables that the background-prognostic layer is allowed to read. Kept as a
-# constant so the test suite can assert disjointness from any AssociationSpec
-# in the paradigm catalog — no overlap means a discordant tag (e.g. high TMB
-# → worse response) cannot be neutralized by an unscored "conventional" effect
-# embedded in the same DGP.
-BACKGROUND_PROGNOSTIC_VARIABLES: frozenset[str] = frozenset(
-    {
-        "ecog_ps",
-        "stage_iv",
-        "has_brain_mets",
-        "age_years",
-        "smoking_status",
-        "histology",
-        "albumin_g_dl",
-        "ldh_u_l",
-        "weight_loss_pct_6mo",
-        "crp_mg_l",
-    }
+
+def background_prognostic_variables(profile: CancerProfile) -> frozenset[str]:
+    """Union of universal disease-burden variables and the profile's extras."""
+    return SHARED_BACKGROUND_PROGNOSTIC_VARIABLES | profile.background_prognostic_variables
+
+
+# Legacy module-level constant. Equals the union for the NSCLC profile so
+# pre-multi-cancer test fixtures and external callers see the same set they
+# always have. New code should call ``background_prognostic_variables(profile)``
+# instead.
+BACKGROUND_PROGNOSTIC_VARIABLES: frozenset[str] = background_prognostic_variables(
+    get_profile("nsclc")
 )
 
 
@@ -87,7 +93,6 @@ def _association_contribution(
             )
 
     if spec.form is AssociationForm.main_effect:
-        # Single active variable besides the outcome itself.
         active = [c for c in spec.variables if c != spec.outcome]
         if len(active) != 1:
             raise ValueError(
@@ -112,9 +117,6 @@ def _association_contribution(
                 f"subgroup_conditional association {spec.id!r} requires a SubgroupSpec"
             )
         active = [c for c in spec.variables if c != spec.outcome]
-        # The "driver" is the treatment / factor whose activity is conditional
-        # on the subgroup. We take the first non-outcome variable that is not
-        # a subgroup predicate column.
         predicate_cols = set(spec.subgroup.predicate)
         drivers = [c for c in active if c not in predicate_cols]
         if not drivers:
@@ -131,43 +133,19 @@ def _association_contribution(
     raise ValueError(f"unknown AssociationForm {spec.form!r}")
 
 
-def _background_prognostic_contribution(
-    frame: pd.DataFrame, outcome: str
+def _profile_prognostic_contribution(
+    frame: pd.DataFrame, outcome: str, profile: CancerProfile | None
 ) -> np.ndarray:
-    """Per-row background-prognostic adjustment to the linear predictor.
+    """Sum the universal and cancer-specific background-prognostic layers.
 
-    These effects exist solely to make the cohort feel like a real EHR pull:
-    classic disease-burden variables (ECOG, stage, brain mets, weight loss,
-    albumin, LDH, CRP) drive realistic outcome variance. They are *not*
-    paradigm-tagged and never enter the manifest, so scoring is unaffected.
-
-    By construction the variables consumed here are disjoint from every
-    paradigm-association variable set; see ``BACKGROUND_PROGNOSTIC_VARIABLES``.
+    ``profile=None`` falls back to the NSCLC profile, preserving the
+    pre-refactor behaviour for any caller that hasn't yet started passing a
+    profile through.
     """
-    n = len(frame)
-    contrib = np.zeros(n, dtype=float)
-    if outcome == "pfs_months":
-        contrib += -1.2 * frame["ecog_ps"].to_numpy()
-        contrib += -1.5 * frame["stage_iv"].to_numpy()
-        contrib += -1.0 * frame["has_brain_mets"].to_numpy()
-        contrib += -0.02 * (frame["age_years"].to_numpy() - 65.0)
-        contrib += -0.6 * (frame["smoking_status"].to_numpy() == "current").astype(float)
-        contrib += -0.8 * (frame["histology"].to_numpy() == "squamous").astype(float)
-        contrib += +0.5 * (frame["albumin_g_dl"].to_numpy() - 3.5)
-        contrib += -0.001 * np.clip(
-            frame["ldh_u_l"].to_numpy() - 250.0, a_min=0.0, a_max=750.0
-        )
-        contrib += -0.08 * frame["weight_loss_pct_6mo"].to_numpy()
-        return contrib
-    if outcome == "objective_response":
-        contrib += -0.4 * frame["ecog_ps"].to_numpy()
-        contrib += -0.3 * frame["stage_iv"].to_numpy()
-        contrib += -0.25 * frame["has_brain_mets"].to_numpy()
-        contrib += +0.15 * (frame["albumin_g_dl"].to_numpy() - 3.5)
-        contrib += -0.04 * frame["weight_loss_pct_6mo"].to_numpy()
-        contrib += -0.10 * (np.log1p(frame["crp_mg_l"].to_numpy()) - np.log(6.0))
-        return contrib
-    return contrib
+    active = profile if profile is not None else get_profile("nsclc")
+    return shared_prognostic_contribution(frame, outcome) + active.prognostic_contribution(
+        frame, outcome
+    )
 
 
 def _sample_binary(linear: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -187,6 +165,7 @@ def inject_associations(
     associations: list[AssociationSpec],
     seed: int,
     continuous_outcome_sigma: float = 3.0,
+    profile: CancerProfile | None = None,
 ) -> InjectionResult:
     """Add outcome columns to ``base_frame`` driven by the given associations.
 
@@ -194,6 +173,9 @@ def inject_associations(
     associations. Contributions are summed across all associations that share
     that outcome, so hidden-novel signals coexist with concordant and
     discordant main/interaction effects in the same synthetic cohort.
+
+    The cancer-specific portion of the background-prognostic layer is taken
+    from ``profile``; ``None`` falls back to NSCLC for backward compatibility.
     """
     rng = np.random.default_rng(seed)
     frame = base_frame.copy()
@@ -212,7 +194,7 @@ def inject_associations(
             if spec.outcome != outcome:
                 continue
             linear += _association_contribution(frame, spec)
-        linear += _background_prognostic_contribution(frame, outcome)
+        linear += _profile_prognostic_contribution(frame, outcome, profile)
 
         if outcome in BINARY_OUTCOMES:
             frame[outcome] = _sample_binary(linear, rng)

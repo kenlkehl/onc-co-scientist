@@ -22,9 +22,14 @@ from rich.console import Console
 from .harness.task_spec import build_task
 from .harness.transcript import Transcript
 from .scoring import aggregate_datasets, score_dataset, write_report
-from .synthetic.anonymize import anonymize_bundle
-from .synthetic.generator import GeneratorConfig, generate_dataset
-from .synthetic.io import read_manifest, write_bundle, write_bundle_pair
+from .synthetic.cancer_types import CancerType, all_cancer_types
+from .synthetic.generator import GeneratorConfig
+from .synthetic.io import read_manifest
+from .synthetic.multi import (
+    generate_multi_dataset,
+    write_multi_bundle,
+    write_multi_bundle_pair,
+)
 
 
 class DatasetVariant(StrEnum):
@@ -68,6 +73,41 @@ def _load_generator_config(
     return GeneratorConfig(**raw)
 
 
+def _parse_cancer_types(raw: str) -> list[CancerType]:
+    """Resolve ``--cancer-types`` into a list of ``CancerType`` enum values.
+
+    ``"all"`` (case-insensitive) expands to every registered cancer type in
+    declaration order. Otherwise the input is split on commas and each token
+    is validated against ``CancerType``. Whitespace and case around tokens
+    are tolerated; duplicates are de-duplicated while preserving order.
+    """
+    text = raw.strip()
+    if not text or text.lower() == "all":
+        return all_cancer_types()
+    seen: set[CancerType] = set()
+    chosen: list[CancerType] = []
+    for token in text.split(","):
+        name = token.strip().lower()
+        if not name:
+            continue
+        try:
+            ct = CancerType(name)
+        except ValueError as exc:
+            valid = ", ".join(c.value for c in all_cancer_types())
+            raise typer.BadParameter(
+                f"Unknown cancer type {name!r}. Valid choices: {valid} (or 'all')."
+            ) from exc
+        if ct not in seen:
+            seen.add(ct)
+            chosen.append(ct)
+    if not chosen:
+        raise typer.BadParameter(
+            "No cancer types selected. Pass 'all' or a comma-separated list "
+            "such as 'nsclc,crc'."
+        )
+    return chosen
+
+
 @synth_app.command("generate")
 def synth_generate(
     config: Annotated[
@@ -82,8 +122,21 @@ def synth_generate(
     ],
     out: Annotated[
         Path,
-        typer.Option("--out", help="Output directory for the dataset bundle."),
+        typer.Option(
+            "--out",
+            help="Output directory. One subfolder is written per cancer "
+            "type (e.g. <out>/nsclc/, <out>/crc/, ...).",
+        ),
     ],
+    cancer_types: Annotated[
+        str,
+        typer.Option(
+            "--cancer-types",
+            help="Comma-separated cancer types to generate: nsclc, crc, "
+            "breast, prostate, aml. Default 'all' generates every type. "
+            "Each goes under its own <out>/<cancer_type>/ subfolder.",
+        ),
+    ] = "all",
     seed: Annotated[
         int | None,
         typer.Option("--seed", help="Override the seed from the config."),
@@ -104,9 +157,10 @@ def synth_generate(
         typer.Option(
             "--variant",
             help="Which variant(s) to materialize. 'both' writes named/ and "
-            "anonymized/ subdirs under --out (same rows, same buried "
-            "finding, only feature column names differ). 'named' or "
-            "'anonymized' writes a single bundle directly into --out.",
+            "anonymized/ subdirs under each cancer-type folder (same rows, "
+            "same buried finding, only feature column names differ). "
+            "'named' or 'anonymized' writes a single bundle directly into "
+            "each cancer-type folder.",
             case_sensitive=False,
         ),
     ] = DatasetVariant.both,
@@ -120,42 +174,56 @@ def synth_generate(
     ] = 0,
     verbose: Annotated[bool, typer.Option("--verbose/--quiet")] = False,
 ) -> None:
-    """Generate a synthetic dataset bundle."""
+    """Generate one or more synthetic dataset bundles, keyed by cancer type.
+
+    By default this generates all five supported cancer types (NSCLC, CRC,
+    breast, prostate, AML), each into its own subfolder of ``--out``. Pass
+    ``--cancer-types nsclc,crc`` (etc.) to restrict the run to a subset.
+    The base ``dataset_id`` from the YAML is auto-suffixed with the cancer
+    type so each bundle's manifest carries a distinct identifier.
+    """
     if verbose:
         logging.basicConfig(level=logging.INFO)
-    gen_config = _load_generator_config(
+    selected = _parse_cancer_types(cancer_types)
+    base_config = _load_generator_config(
         config, seed, n_extra_covariates_override=n_extra_covariates
     )
-    bundle = generate_dataset(gen_config)
-    counts = {
-        klass.value: len(
-            [a for a in bundle.manifest.associations if a.paradigm_class == klass]
-        )
-        for klass in {a.paradigm_class for a in bundle.manifest.associations}
-    }
+    bundles = generate_multi_dataset(base_config, selected)
 
     if variant is DatasetVariant.both:
-        named_dir, anonymized_dir = write_bundle_pair(bundle, out, anon_seed=anon_seed)
-        console.print(
-            f"[green]Wrote[/green] dataset [bold]{bundle.manifest.dataset_id}[/bold] "
-            f"(n={bundle.manifest.patient_n}, associations={counts})\n"
-            f"  named:      {named_dir}\n"
-            f"  anonymized: {anonymized_dir}"
+        written = write_multi_bundle_pair(bundles, out, anon_seed=anon_seed)
+        for ct, (named_dir, anon_dir) in written.items():
+            bundle = bundles[ct]
+            counts = _associations_by_class(bundle.manifest.associations)
+            console.print(
+                f"[green]Wrote[/green] [bold]{bundle.manifest.dataset_id}[/bold] "
+                f"({ct.value}, n={bundle.manifest.patient_n}, "
+                f"associations={counts})\n"
+                f"  named:      {named_dir}\n"
+                f"  anonymized: {anon_dir}"
+            )
+    else:
+        anonymize = variant is DatasetVariant.anonymized
+        written = write_multi_bundle(
+            bundles, out, anonymize=anonymize, anon_seed=anon_seed
         )
-    elif variant is DatasetVariant.named:
-        out_path = write_bundle(bundle, out)
-        console.print(
-            f"[green]Wrote[/green] dataset [bold]{bundle.manifest.dataset_id}[/bold] "
-            f"to {out_path} (n={bundle.manifest.patient_n}, associations={counts})"
-        )
-    elif variant is DatasetVariant.anonymized:
-        anon_bundle, _ = anonymize_bundle(bundle, seed=anon_seed)
-        out_path = write_bundle(anon_bundle, out)
-        console.print(
-            f"[green]Wrote[/green] anonymized dataset "
-            f"[bold]{anon_bundle.manifest.dataset_id}[/bold] to {out_path} "
-            f"(n={anon_bundle.manifest.patient_n}, associations={counts})"
-        )
+        label = "anonymized" if anonymize else "named"
+        for ct, out_path in written.items():
+            bundle = bundles[ct]
+            counts = _associations_by_class(bundle.manifest.associations)
+            console.print(
+                f"[green]Wrote[/green] {label} dataset "
+                f"[bold]{bundle.manifest.dataset_id}[/bold] ({ct.value}) "
+                f"to {out_path} (n={bundle.manifest.patient_n}, "
+                f"associations={counts})"
+            )
+
+
+def _associations_by_class(associations) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for spec in associations:
+        counts[spec.paradigm_class.value] = counts.get(spec.paradigm_class.value, 0) + 1
+    return counts
 
 
 @harness_app.command("build-task")

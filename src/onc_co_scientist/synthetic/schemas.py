@@ -94,6 +94,12 @@ class DatasetManifest(BaseModel):
     dataset_id: str
     seed: int
     patient_n: int
+    cancer_type: str = Field(
+        default="nsclc",
+        description="Cancer type whose profile drove the base-frame and "
+        "paradigm catalogs. Defaults to 'nsclc' so manifests written before "
+        "multi-cancer support deserialize without modification.",
+    )
     columns: list[str] = Field(
         description="All column names present in dataset.parquet, in order."
     )
