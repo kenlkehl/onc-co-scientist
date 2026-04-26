@@ -6,6 +6,10 @@
 # harness, so the harness cannot reach the synth bundle's manifest.json
 # (which sits one level up under <synth_root>/<ct>/<variant>/).
 #
+# Each replicate's transcript.json / analysis_summary.txt / harness.log is
+# moved into <bundle>/runs/run_NNN/ on completion, so multiple runs of the
+# same bundle accumulate side-by-side for variance estimation.
+#
 # Usage: scripts/run_harness.sh <harness-spec> <tasks-root> [flags]
 # Run with -h for the full usage banner.
 
@@ -31,14 +35,22 @@ Flags:
                     for each harness invocation so any `python` shelled
                     out by the agent resolves there.
   --jobs N          Number of bundles to run in parallel (default 1).
-  --skip-existing   Skip bundles that already have transcript.json.
+                    Replicates within a single bundle always run
+                    sequentially.
+  --replicates N    Ensure each bundle has at least N completed runs under
+                    runs/run_NNN/ (default 1). If some replicates already
+                    exist this only tops up the missing ones, so the flag
+                    is idempotent across re-invocations.
+  --skip-existing   Treat the bundle as already done if any run exists
+                    (legacy single-replicate semantics — ignored when
+                    --replicates >= 2).
   --extra-args STR  Extra args inserted between the profile flags and the
                     prompt (e.g. --extra-args "--max-turns 30").
   --prompt STR      Override the default agent prompt.
   --profile NAME    Pin the harness profile (claude, codex, opencode,
                     droid, pi) instead of auto-detecting from the spec.
-  --dry-run         Print the resolved command for each bundle and exit
-                    without launching anything.
+  --dry-run         Print the resolved command for each pending replicate
+                    and exit without launching anything.
   -h, --help        Show this banner.
 EOF
 }
@@ -106,16 +118,50 @@ resolve_command() {
     printf '%s\0' "$PROMPT"
 }
 
-run_one() {
+count_completed_runs() {
+    # Count run_*/transcript.json files under <bundle>/runs/. Echoes 0 when
+    # the directory does not yet exist.
     local bundle="$1"
-    if [[ ! -f "$bundle/agent_instructions.md" ]]; then
-        echo "skip (no agent_instructions.md): $bundle" >&2
-        return 0
+    local runs_dir="$bundle/runs"
+    if [[ ! -d "$runs_dir" ]]; then
+        echo 0
+        return
     fi
-    if (( SKIP_EXISTING )) && [[ -f "$bundle/transcript.json" ]]; then
-        echo "skip (transcript.json present): $bundle" >&2
-        return 0
-    fi
+    local n=0
+    local d
+    for d in "$runs_dir"/run_*/; do
+        [[ -d "$d" ]] || continue
+        if [[ -f "$d/transcript.json" ]]; then
+            (( n++ )) || true
+        fi
+    done
+    echo "$n"
+}
+
+next_run_index() {
+    # Smallest 1-based index whose run_NNN/ subdir does not yet exist.
+    # This fills gaps left by failed replicates so we don't grow a sparse
+    # numbering scheme.
+    local bundle="$1"
+    local runs_dir="$bundle/runs"
+    local idx=1
+    while [[ -e "$runs_dir/run_$(printf '%03d' "$idx")" ]]; do
+        (( idx++ )) || true
+    done
+    echo "$idx"
+}
+
+run_one_replicate() {
+    # Execute a single replicate for the bundle at $1 into runs/run_NNN/
+    # (NNN derived from $2). Echoes a status line on stderr; returns
+    # non-zero if the harness exited non-zero or did not produce
+    # transcript.json.
+    local bundle="$1"
+    local idx="$2"
+    local run_name
+    run_name="run_$(printf '%03d' "$idx")"
+    local run_dir="$bundle/runs/$run_name"
+    mkdir -p "$run_dir"
 
     local -a argv=()
     while IFS= read -r -d '' tok; do
@@ -123,19 +169,79 @@ run_one() {
     done < <(resolve_command)
 
     if (( DRY_RUN )); then
-        printf 'would run in %s:\n  ' "$bundle"
+        printf 'would run replicate %s in %s:\n  ' "$run_name" "$bundle"
         printf '%q ' "${argv[@]}"
         printf '\n'
         return 0
     fi
 
+    set +e
     (
         cd "$bundle"
         if [[ -n "${PYTHON_ENV:-}" ]]; then
             export PATH="$PYTHON_ENV/bin:$PATH"
         fi
-        exec "${argv[@]}" >harness.log 2>&1
+        exec "${argv[@]}" >"runs/$run_name/harness.log" 2>&1
     )
+    local rc=$?
+    set -e
+
+    # Move the transcript and summary the agent left at the bundle root
+    # into the per-replicate dir. The agent emits these by spec; if
+    # transcript.json is missing the replicate failed.
+    if [[ -f "$bundle/transcript.json" ]]; then
+        mv -f "$bundle/transcript.json" "$run_dir/transcript.json"
+    fi
+    if [[ -f "$bundle/analysis_summary.txt" ]]; then
+        mv -f "$bundle/analysis_summary.txt" "$run_dir/analysis_summary.txt"
+    fi
+
+    if (( rc != 0 )); then
+        echo "fail (exit $rc) replicate $run_name in $bundle" >&2
+        return "$rc"
+    fi
+    if [[ ! -f "$run_dir/transcript.json" ]]; then
+        echo "fail (no transcript.json) replicate $run_name in $bundle" >&2
+        return 1
+    fi
+    return 0
+}
+
+run_one() {
+    local bundle="$1"
+    if [[ ! -f "$bundle/agent_instructions.md" ]]; then
+        echo "skip (no agent_instructions.md): $bundle" >&2
+        return 0
+    fi
+
+    local existing
+    existing=$(count_completed_runs "$bundle")
+
+    # Legacy --skip-existing semantics: bail if any run exists. Only honored
+    # in the single-replicate default; --replicates >= 2 owns the topup
+    # logic itself.
+    if (( SKIP_EXISTING )) && (( REPLICATES <= 1 )) && (( existing > 0 )); then
+        echo "skip (run already present): $bundle" >&2
+        return 0
+    fi
+
+    if (( existing >= REPLICATES )); then
+        echo "skip ($existing/$REPLICATES replicates present): $bundle" >&2
+        return 0
+    fi
+
+    while (( existing < REPLICATES )); do
+        local idx
+        idx=$(next_run_index "$bundle")
+        if ! run_one_replicate "$bundle" "$idx"; then
+            # Stop topping up this bundle so we don't burn the remaining
+            # replicates on a configuration that's broken; surface the
+            # failure to the parent.
+            return 1
+        fi
+        (( existing++ )) || true
+    done
+    return 0
 }
 
 # ---- arg parsing ---------------------------------------------------------
@@ -144,6 +250,7 @@ SPEC=""
 TASKS_ROOT=""
 PYTHON_ENV=""
 JOBS=1
+REPLICATES=1
 SKIP_EXISTING=0
 EXTRA_ARGS=""
 PROMPT="$DEFAULT_PROMPT"
@@ -164,6 +271,10 @@ while (( $# > 0 )); do
             ;;
         --jobs)
             JOBS="$2"
+            shift 2
+            ;;
+        --replicates)
+            REPLICATES="$2"
             shift 2
             ;;
         --skip-existing)
@@ -207,6 +318,11 @@ while (( $# > 0 )); do
             ;;
     esac
 done
+
+if (( REPLICATES < 1 )); then
+    echo "error: --replicates must be >= 1 (got $REPLICATES)" >&2
+    exit 2
+fi
 
 if [[ -n "$INTERNAL_RUN_ONE" ]]; then
     # Re-entered by xargs to handle one bundle. Positional args (spec,
@@ -284,7 +400,7 @@ if (( ${#bundle_dirs[@]} == 0 )); then
 fi
 
 echo "Found ${#bundle_dirs[@]} task bundle(s) under $TASKS_ROOT" >&2
-echo "Profile: $PROFILE   Jobs: $JOBS" >&2
+echo "Profile: $PROFILE   Jobs: $JOBS   Replicates: $REPLICATES" >&2
 
 n_ok=0
 n_fail=0
@@ -314,6 +430,7 @@ else
 
     extra_flags=()
     if [[ -n "$PYTHON_ENV" ]]; then extra_flags+=( --python-env "$PYTHON_ENV" ); fi
+    extra_flags+=( --replicates "$REPLICATES" )
     if (( SKIP_EXISTING )); then extra_flags+=( --skip-existing ); fi
     if [[ -n "$EXTRA_ARGS" ]]; then extra_flags+=( --extra-args "$EXTRA_ARGS" ); fi
     extra_flags+=( --prompt "$PROMPT" )
@@ -331,10 +448,11 @@ else
         n_ok=$n_total
         n_fail=0
     else
-        # We don't know per-bundle counts here; recount via transcript presence.
+        # We don't know per-bundle counts here; recount via run completion.
         n_ok=0
         for bundle in "${bundle_dirs[@]}"; do
-            if [[ -f "$bundle/transcript.json" ]]; then
+            n_done=$(count_completed_runs "$bundle")
+            if (( n_done >= REPLICATES )); then
                 (( n_ok++ )) || true
             fi
         done
@@ -342,7 +460,7 @@ else
     fi
 fi
 
-echo "$n_ok/$n_total succeeded" >&2
+echo "$n_ok/$n_total bundle(s) reached $REPLICATES replicates" >&2
 if (( n_fail > 0 )); then
     exit 1
 fi

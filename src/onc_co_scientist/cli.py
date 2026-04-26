@@ -21,10 +21,17 @@ from rich.console import Console
 
 from .harness.task_spec import build_task, build_tasks
 from .harness.transcript import Transcript
-from .scoring import aggregate_datasets, score_dataset, write_report
+from .scoring import (
+    aggregate_batch,
+    aggregate_datasets,
+    aggregate_replicates,
+    score_dataset,
+    write_batch_report,
+    write_report,
+)
 from .synthetic.cancer_types import CancerType, all_cancer_types
 from .synthetic.generator import GeneratorConfig
-from .synthetic.io import MANIFEST_FILENAME, read_manifest
+from .synthetic.io import MANIFEST_FILENAME, discover_bundles, read_manifest
 from .synthetic.multi import (
     generate_multi_dataset,
     write_multi_bundle,
@@ -342,6 +349,94 @@ def score_run(
     out_path = write_report(pipeline, out)
     console.print_json(json.dumps(pipeline.to_dict()))
     console.print(f"[green]Report written to[/green] {out_path}")
+
+
+@score_app.command("batch")
+def score_batch(
+    synth_root: Annotated[
+        Path,
+        typer.Option(
+            "--synth-root",
+            exists=True,
+            file_okay=False,
+            help="Synth output root containing one or more dataset bundles "
+            "(each with manifest.json + public/dataset.parquet) in "
+            "<ct>/<variant>/ subfolders.",
+        ),
+    ],
+    tasks_root: Annotated[
+        Path,
+        typer.Option(
+            "--tasks-root",
+            exists=True,
+            file_okay=False,
+            help="Tasks root produced by `ocs harness build-task` and "
+            "populated by `scripts/run_harness.sh`. Per-bundle replicate "
+            "transcripts are read from <tasks-root>/<ct>/<variant>/runs/run_*/transcript.json.",
+        ),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Directory for the batch scoring report."),
+    ],
+    penalty_iteration: Annotated[
+        int | None,
+        typer.Option(
+            "--penalty-iteration",
+            help="Iteration value to assign when an association is never uncovered. "
+            "Defaults to max_iterations + 1.",
+        ),
+    ] = None,
+) -> None:
+    """Batch-score every replicate transcript across a tasks tree.
+
+    For each dataset bundle under ``--synth-root``, walks the matching
+    ``<tasks-root>/<rel>/runs/run_*/transcript.json`` files, scores each
+    replicate, aggregates per bundle (mean ± SD across replicates), and
+    aggregates across bundles using the unweighted mean of bundle means.
+    """
+    bundles = discover_bundles(synth_root)
+    if not bundles:
+        raise typer.BadParameter(
+            f"No dataset bundles found under {synth_root}. Each must contain "
+            f"manifest.json and public/dataset.parquet."
+        )
+
+    bundle_scores = []
+    for bundle_dir in bundles:
+        rel = bundle_dir.relative_to(synth_root)
+        runs_dir = tasks_root / rel / "runs"
+        transcript_paths = sorted(runs_dir.glob("run_*/transcript.json"))
+        if not transcript_paths:
+            console.print(
+                f"[yellow]warning:[/yellow] no transcripts under {runs_dir}; "
+                f"skipping bundle {rel}"
+            )
+            continue
+        manifest = read_manifest(bundle_dir)
+        replicate_scores = []
+        for tp in transcript_paths:
+            transcript = Transcript.model_validate_json(tp.read_text())
+            replicate_scores.append(
+                score_dataset(
+                    manifest, transcript, penalty_iteration=penalty_iteration
+                )
+            )
+        bundle_scores.append(aggregate_replicates(replicate_scores))
+
+    if not bundle_scores:
+        raise typer.BadParameter(
+            f"No replicate transcripts found under {tasks_root} for any of the "
+            f"{len(bundles)} bundle(s) in {synth_root}."
+        )
+
+    batch = aggregate_batch(bundle_scores)
+    out_path = write_batch_report(batch, out)
+    console.print_json(json.dumps(batch.to_dict()))
+    console.print(
+        f"[green]Batch report written to[/green] {out_path} "
+        f"({batch.n_bundles} bundle(s), {batch.n_replicates_total} replicate(s))"
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

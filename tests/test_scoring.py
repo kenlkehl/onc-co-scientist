@@ -1,7 +1,13 @@
 from pathlib import Path
+from statistics import stdev
 
 from onc_co_scientist.harness.transcript import Transcript
-from onc_co_scientist.scoring import aggregate_datasets, score_dataset
+from onc_co_scientist.scoring import (
+    aggregate_batch,
+    aggregate_datasets,
+    aggregate_replicates,
+    score_dataset,
+)
 from onc_co_scientist.synthetic.paradigms import (
     concordant_catalog,
     discordant_catalog,
@@ -154,3 +160,79 @@ def test_aggregate_datasets_averages_across_pipeline():
     assert pipeline.mean_iterations_discordant == 4.0
     # Metric (3) = (2) - (1) at pipeline level.
     assert pipeline.paradigm_adherence == 0.5
+
+
+def _perfect_score():
+    manifest = _scoring_manifest()
+    perfect = Transcript.model_validate_json(
+        (FIXTURE_DIR / "perfect_transcript.json").read_text()
+    )
+    return score_dataset(manifest, perfect)
+
+
+def _empty_score():
+    manifest = _scoring_manifest()
+    empty = Transcript(
+        dataset_id="score_ds",
+        model_id="test-model",
+        harness_id="test-harness@1.0",
+        max_iterations=5,
+        iterations=[],
+    )
+    return score_dataset(manifest, empty)
+
+
+def test_aggregate_replicates_computes_mean_and_sd():
+    scores = [_perfect_score(), _empty_score()]
+    bundle = aggregate_replicates(scores)
+
+    assert bundle.dataset_id == "score_ds"
+    assert bundle.n_replicates == 2
+
+    # concordant: mean of 1.0 and 6.0 = 3.5; sd = stdev([1.0, 6.0])
+    assert bundle.mean_iterations_concordant_mean == 3.5
+    assert bundle.mean_iterations_concordant_sd == stdev([1.0, 6.0])
+    # discordant: mean of 2.0 and 6.0 = 4.0
+    assert bundle.mean_iterations_discordant_mean == 4.0
+    assert bundle.mean_iterations_discordant_sd == stdev([2.0, 6.0])
+    # adherence: 1.0 (perfect: 2-1) and 0.0 (empty: 6-6) => mean 0.5
+    assert bundle.paradigm_adherence_mean == 0.5
+    assert bundle.paradigm_adherence_sd == stdev([1.0, 0.0])
+
+
+def test_aggregate_replicates_single_run_sd_none():
+    bundle = aggregate_replicates([_perfect_score()])
+    assert bundle.n_replicates == 1
+    assert bundle.mean_iterations_concordant_mean == 1.0
+    assert bundle.mean_iterations_concordant_sd is None
+    assert bundle.paradigm_adherence_sd is None
+
+
+def test_aggregate_batch_means_of_bundle_means():
+    # Bundle A: 3 replicates of "perfect" (each concordant=1.0)
+    # Bundle B: 1 replicate of "empty" (concordant=6.0)
+    # Pipeline mean of bundle means = (1.0 + 6.0) / 2 = 3.5,
+    # NOT the replicate-weighted mean (3*1.0 + 1*6.0)/4 = 2.25.
+    perfect_scores = [_perfect_score() for _ in range(3)]
+    empty_scores = [_empty_score()]
+    bundle_a = aggregate_replicates(perfect_scores)
+    bundle_b = aggregate_replicates(empty_scores)
+
+    batch = aggregate_batch([bundle_a, bundle_b])
+    assert batch.n_bundles == 2
+    assert batch.n_replicates_total == 4
+    assert batch.mean_iterations_concordant == 3.5
+    assert batch.mean_iterations_discordant == 4.0
+    assert batch.paradigm_adherence == 0.5
+
+
+def test_aggregate_replicates_rejects_mixed_dataset_ids():
+    perfect = _perfect_score()
+    other = _perfect_score()
+    object.__setattr__(other, "dataset_id", "different_ds")
+    try:
+        aggregate_replicates([perfect, other])
+    except ValueError as exc:
+        assert "dataset_id" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for mixed dataset_ids")

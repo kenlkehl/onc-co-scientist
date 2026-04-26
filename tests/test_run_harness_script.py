@@ -47,17 +47,40 @@ def _build_two_cancer_tasks(tmp_path: Path) -> Path:
     return tasks_root
 
 
-def _write_fake_harness(bin_dir: Path, name: str = "fake-harness") -> Path:
+def _write_fake_harness(
+    bin_dir: Path,
+    name: str = "fake-harness",
+    *,
+    counter_path: Path | None = None,
+) -> Path:
     bin_dir.mkdir(parents=True, exist_ok=True)
     fake = bin_dir / name
     # Always emits a minimal transcript and an analysis summary in cwd. If
     # given a `ls-parent` token it also dumps the parent listing into the
-    # summary so we can exercise the leak-guard test.
+    # summary so we can exercise the leak-guard test. Optional counter_path
+    # tracks how many times the harness was invoked, for idempotence tests.
+    counter_block = ""
+    if counter_path is not None:
+        counter_block = textwrap.dedent(
+            f"""\
+            # Increment the invocation counter (independent of cwd).
+            (
+              flock -x 9
+              n=0
+              if [[ -f "{counter_path}" ]]; then
+                n=$(<"{counter_path}")
+              fi
+              n=$((n + 1))
+              echo "$n" > "{counter_path}"
+            ) 9>"{counter_path}.lock"
+            """
+        )
     fake.write_text(
         textwrap.dedent(
             """\
             #!/usr/bin/env bash
             set -e
+            __COUNTER_BLOCK__
             echo '{"dataset_id":"x","model_id":"fake","harness_id":"fake@1","max_iterations":1,"iterations":[]}' > transcript.json
             {
               echo "ran in $(pwd)"
@@ -69,7 +92,7 @@ def _write_fake_harness(bin_dir: Path, name: str = "fake-harness") -> Path:
               done
             } > analysis_summary.txt
             """
-        )
+        ).replace("__COUNTER_BLOCK__", counter_block)
     )
     fake.chmod(0o755)
     return fake
@@ -92,6 +115,10 @@ def _path_with_bin(bin_dir: Path) -> str:
     return f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
 
 
+def _bundle_run_dir(tasks_root: Path, ct: str, variant: str, idx: int) -> Path:
+    return tasks_root / ct / variant / "runs" / f"run_{idx:03d}"
+
+
 def test_run_harness_writes_transcript_per_bundle(tmp_path: Path) -> None:
     tasks_root = _build_two_cancer_tasks(tmp_path)
     bin_dir = tmp_path / "bin"
@@ -106,8 +133,12 @@ def test_run_harness_writes_transcript_per_bundle(tmp_path: Path) -> None:
 
     for ct in ("crc", "breast"):
         for variant in ("named", "anonymized"):
-            assert (tasks_root / ct / variant / "transcript.json").exists()
-            assert (tasks_root / ct / variant / "harness.log").exists()
+            run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
+            assert (run_dir / "transcript.json").exists()
+            assert (run_dir / "harness.log").exists()
+            assert (run_dir / "analysis_summary.txt").exists()
+            # No stray transcript at the bundle root.
+            assert not (tasks_root / ct / variant / "transcript.json").exists()
 
 
 def test_run_harness_parallel_jobs_writes_per_bundle_log(tmp_path: Path) -> None:
@@ -126,8 +157,9 @@ def test_run_harness_parallel_jobs_writes_per_bundle_log(tmp_path: Path) -> None
 
     for ct in ("crc", "breast"):
         for variant in ("named", "anonymized"):
-            assert (tasks_root / ct / variant / "transcript.json").exists()
-            assert (tasks_root / ct / variant / "harness.log").exists()
+            run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
+            assert (run_dir / "transcript.json").exists()
+            assert (run_dir / "harness.log").exists()
 
 
 def test_run_harness_skip_existing_skips_bundles_with_transcript(tmp_path: Path) -> None:
@@ -135,8 +167,9 @@ def test_run_harness_skip_existing_skips_bundles_with_transcript(tmp_path: Path)
     bin_dir = tmp_path / "bin"
     _write_fake_harness(bin_dir)
 
-    sentinel_bundle = tasks_root / "crc" / "named"
-    pre_existing = sentinel_bundle / "transcript.json"
+    sentinel_run = _bundle_run_dir(tasks_root, "crc", "named", 1)
+    sentinel_run.mkdir(parents=True)
+    pre_existing = sentinel_run / "transcript.json"
     pre_existing.write_text('{"do":"not overwrite"}')
 
     result = _run_script(
@@ -151,7 +184,8 @@ def test_run_harness_skip_existing_skips_bundles_with_transcript(tmp_path: Path)
     assert pre_existing.read_text() == '{"do":"not overwrite"}'
     # And the other three bundles still ran.
     for ct, variant in (("crc", "anonymized"), ("breast", "named"), ("breast", "anonymized")):
-        assert (tasks_root / ct / variant / "transcript.json").exists()
+        run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
+        assert (run_dir / "transcript.json").exists()
 
 
 def test_run_harness_cwd_isolation(tmp_path: Path) -> None:
@@ -175,7 +209,8 @@ def test_run_harness_cwd_isolation(tmp_path: Path) -> None:
 
     for ct in ("crc", "breast"):
         for variant in ("named", "anonymized"):
-            summary = (tasks_root / ct / variant / "analysis_summary.txt").read_text()
+            run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
+            summary = (run_dir / "analysis_summary.txt").read_text()
             assert "SHOULD_NOT_BE_VISIBLE" not in summary, summary
             # Parent of the bundle is the cancer-type folder; it should
             # contain the sibling variant ("named" or "anonymized").
@@ -244,8 +279,104 @@ def test_run_harness_ollama_wrapped_inserts_double_dash(tmp_path: Path) -> None:
     # Every bundle got its transcript via the wrapped form.
     for ct in ("crc", "breast"):
         for variant in ("named", "anonymized"):
-            assert (tasks_root / ct / variant / "transcript.json").exists()
+            run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
+            assert (run_dir / "transcript.json").exists()
 
     # And the recorded argv shows `--` was inserted before `-p`.
     log = argv_log.read_text()
     assert "launch" in log and "claude" in log and "--" in log and "-p" in log
+
+
+def test_run_harness_replicates_runs_n_times(tmp_path: Path) -> None:
+    tasks_root = _build_two_cancer_tasks(tmp_path)
+    bin_dir = tmp_path / "bin"
+    _write_fake_harness(bin_dir)
+
+    result = _run_script(
+        "fake-harness",
+        str(tasks_root),
+        "--replicates",
+        "3",
+        env_extra={"PATH": _path_with_bin(bin_dir)},
+    )
+    assert result.returncode == 0, result.stderr
+
+    for ct in ("crc", "breast"):
+        for variant in ("named", "anonymized"):
+            for idx in (1, 2, 3):
+                run_dir = _bundle_run_dir(tasks_root, ct, variant, idx)
+                assert (run_dir / "transcript.json").exists(), run_dir
+                assert (run_dir / "harness.log").exists(), run_dir
+            # Should not have a 4th replicate.
+            assert not _bundle_run_dir(tasks_root, ct, variant, 4).exists()
+
+
+def test_run_harness_replicates_top_up(tmp_path: Path) -> None:
+    """Pre-seeding two completed runs and asking for three should only run
+    a single new replicate per bundle."""
+    tasks_root = _build_two_cancer_tasks(tmp_path)
+    bin_dir = tmp_path / "bin"
+    counter = tmp_path / "counter.txt"
+    _write_fake_harness(bin_dir, counter_path=counter)
+
+    seed_payload = '{"dataset_id":"x","model_id":"seed","harness_id":"seed@1","max_iterations":1,"iterations":[]}'
+    for ct in ("crc", "breast"):
+        for variant in ("named", "anonymized"):
+            for idx in (1, 2):
+                run_dir = _bundle_run_dir(tasks_root, ct, variant, idx)
+                run_dir.mkdir(parents=True)
+                (run_dir / "transcript.json").write_text(seed_payload)
+
+    result = _run_script(
+        "fake-harness",
+        str(tasks_root),
+        "--replicates",
+        "3",
+        env_extra={"PATH": _path_with_bin(bin_dir)},
+    )
+    assert result.returncode == 0, result.stderr
+
+    # Seed transcripts are untouched.
+    for ct in ("crc", "breast"):
+        for variant in ("named", "anonymized"):
+            for idx in (1, 2):
+                run_dir = _bundle_run_dir(tasks_root, ct, variant, idx)
+                assert (run_dir / "transcript.json").read_text() == seed_payload
+            # Replicate 3 was newly produced (and is a fresh transcript).
+            new_run = _bundle_run_dir(tasks_root, ct, variant, 3)
+            assert (new_run / "transcript.json").exists()
+            assert seed_payload not in (new_run / "transcript.json").read_text()
+
+    # The harness ran exactly once per bundle (4 bundles × 1 top-up).
+    assert counter.read_text().strip() == "4"
+
+
+def test_run_harness_replicates_idempotent(tmp_path: Path) -> None:
+    """Asking for N replicates when N already exist should be a no-op."""
+    tasks_root = _build_two_cancer_tasks(tmp_path)
+    bin_dir = tmp_path / "bin"
+    counter = tmp_path / "counter.txt"
+    _write_fake_harness(bin_dir, counter_path=counter)
+
+    seed_payload = '{"dataset_id":"x","model_id":"seed","harness_id":"seed@1","max_iterations":1,"iterations":[]}'
+    for ct in ("crc", "breast"):
+        for variant in ("named", "anonymized"):
+            for idx in (1, 2, 3):
+                run_dir = _bundle_run_dir(tasks_root, ct, variant, idx)
+                run_dir.mkdir(parents=True)
+                (run_dir / "transcript.json").write_text(seed_payload)
+
+    result = _run_script(
+        "fake-harness",
+        str(tasks_root),
+        "--replicates",
+        "3",
+        env_extra={"PATH": _path_with_bin(bin_dir)},
+    )
+    assert result.returncode == 0, result.stderr
+
+    # Counter file was never created (harness was never invoked).
+    assert not counter.exists()
+    for ct in ("crc", "breast"):
+        for variant in ("named", "anonymized"):
+            assert not _bundle_run_dir(tasks_root, ct, variant, 4).exists()

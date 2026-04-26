@@ -77,12 +77,17 @@ ocs harness build-task \
 # 3. Run an agentic harness against every task bundle in one call. The
 #    script cds into each tasks/<ct>/<variant>/ before launching, so the
 #    harness inherits that as its working directory and cannot see the
-#    synth bundle's manifest one level up. Use --jobs to fan out in
-#    parallel. The script knows about claude, codex, opencode, droid, and
-#    pi out of the box.
+#    synth bundle's manifest one level up. Use --jobs to fan out across
+#    bundles, and --replicates to run each bundle multiple times for a
+#    stable estimate (replicates within a bundle are sequential; multiple
+#    invocations top up missing replicates instead of re-running).
+#    Per-replicate outputs land under
+#    tasks/<ct>/<variant>/runs/run_NNN/{transcript.json, analysis_summary.txt, harness.log}.
+#    The script knows about claude, codex, opencode, droid, and pi out of the box.
 scripts/run_harness.sh claude ../data/ds001/tasks \
     --python-env .venv \
-    --jobs 4
+    --jobs 4 \
+    --replicates 5
 # Local-model wrapper forms also work — the script auto-inserts the `--`
 # separator that ollama launch needs to pass trailing flags through to the
 # inner CLI:
@@ -93,13 +98,23 @@ scripts/run_harness.sh claude ../data/ds001/tasks \
 # Or invoke the harness yourself: cd into tasks/<ct>/<variant>/ and run
 # the harness with that as cwd. The agent reads agent_instructions.md,
 # iterates up to N times, and writes transcript.json (plus
-# analysis_summary.txt) into that directory.
+# analysis_summary.txt) into that directory; if you want replicate-aware
+# scoring you'll need to move those into runs/run_NNN/ yourself.
 
-# 4. Score the transcript against the same bundle's manifest.
-ocs score run \
-    --dataset ../data/ds001/nsclc/anonymized \
-    --transcript ../data/ds001/tasks/nsclc/anonymized/transcript.json \
-    --out ../data/ds001/nsclc/anonymized/score
+# 4. Score every replicate across the synth tree in one call. Walks the
+#    synth root for manifests, the tasks root for runs/run_*/transcript.json,
+#    and writes a single batch report with mean ± SD per bundle and an
+#    unweighted mean of bundle means at the pipeline level.
+ocs score batch \
+    --synth-root ../data/ds001 \
+    --tasks-root ../data/ds001/tasks \
+    --out ../data/ds001/score
+# For one-off scoring of a single transcript (no replicates), use
+# `ocs score run`:
+#   ocs score run \
+#       --dataset ../data/ds001/nsclc/anonymized \
+#       --transcript ../data/ds001/tasks/nsclc/anonymized/runs/run_001/transcript.json \
+#       --out ../data/ds001/nsclc/anonymized/score
 ```
 
 For the default buried-finding configuration the primary metric is
