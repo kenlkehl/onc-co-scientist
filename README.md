@@ -16,15 +16,14 @@ The benchmark asks: when an agentic harness analyzes a synthetic patient cohort 
 
   Per-bundle scores are reported as mean ± SD across replicates; the pipeline-level figure is the unweighted mean of bundle means. Anonymized bundles are excluded from scoring (the LLM judge can't reason about `feature_NNN` columns).
 
-## What this repo deliberately does **not** do
+## Scope
 
-- It does not run the agent. You bring your own harness — anything that reads a markdown brief, executes Python against a parquet file, and emits a `transcript.json`.
-- It does not yet implement Aim 1.3 (paradigm-stratified probe set), Aim 1.4 (fine-tuning dataset), Aim 2.1 (model-panel sweep), Aim 2.2 (LoRA intervention), or Aim 3 (pre-1985 foundation model).
+The repo orchestrates synth → task brief → harness invocation → score, but the harness binary itself is external (`claude`, `codex`, `opencode`, `droid`, `pi`, or any ollama-launchable wrapper). Subsequent aims (paradigm-stratified probe set, fine-tuning datasets, model-panel sweep, LoRA intervention, pre-1985 foundation model) are out of scope here.
 
 ## Install
 
 ```bash
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 ```
 
 Optional extras: `synthetic` (upstream causal-inference generator, heavy ML deps) and `providers` (LLM provider SDKs).
@@ -54,7 +53,7 @@ scripts/run_all.sh
 | `OUT`             | `../data/ds001`                    | Output root (datasets, tasks, scores)                       |
 | `SEED`            | `0`                                | Generator seed                                              |
 | `CANCER_TYPES`    | `all`                              | `all` or comma list (`nsclc,crc`)                           |
-| `MAX_ITERATIONS`  | `5`                                | Iteration cap baked into the task brief                     |
+| `MAX_ITERATIONS`  | `10`                               | Iteration cap baked into the task brief                     |
 | `HARNESS`         | `claude`                           | First arg to `scripts/run_harness.sh` (any supported spec)  |
 | `JOBS`            | `4`                                | Bundles run in parallel                                     |
 | `REPLICATES`      | `5`                                | Replicate runs per bundle (idempotent top-up)               |
@@ -98,7 +97,7 @@ Use `--cancer-types nsclc,crc` (etc.) to restrict the run, or `--variant named` 
 ```bash
 ocs harness build-task \
     --dataset ../data/ds001 \
-    --max-iterations 5 \
+    --max-iterations 10 \
     --out ../data/ds001/tasks
 ```
 
