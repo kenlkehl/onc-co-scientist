@@ -3,30 +3,47 @@
 from .aggregate import (
     BatchPipelineScore,
     BundleScore,
-    PipelineScore,
+    ReplicateScore,
     aggregate_batch,
-    aggregate_datasets,
     aggregate_replicates,
 )
-from .paradigm_metrics import DatasetScore, score_dataset
+from .buried import BuriedDiscovery, BuriedScore, score_buried
+from .judge import (
+    ClaudeCliJudge,
+    Judge,
+    JudgeCache,
+    MatchJudgment,
+    NoveltyJudgment,
+    StubJudge,
+    default_cache_dir,
+)
+from .novelty import NoveltyJudgmentRecord, NoveltyScore, score_novelty
 from .report import (
-    render_markdown,
     render_markdown_batch,
+    wrap_single,
     write_batch_report,
-    write_report,
 )
 
 __all__ = [
     "BatchPipelineScore",
     "BundleScore",
-    "DatasetScore",
-    "PipelineScore",
+    "BuriedDiscovery",
+    "BuriedScore",
+    "ClaudeCliJudge",
+    "Judge",
+    "JudgeCache",
+    "MatchJudgment",
+    "NoveltyJudgment",
+    "NoveltyJudgmentRecord",
+    "NoveltyScore",
+    "ReplicateScore",
+    "StubJudge",
     "aggregate_batch",
-    "aggregate_datasets",
     "aggregate_replicates",
-    "render_markdown",
+    "default_cache_dir",
     "render_markdown_batch",
-    "score_dataset",
+    "score_buried",
+    "score_novelty",
+    "wrap_single",
     "write_batch_report",
-    "write_report",
 ]

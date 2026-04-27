@@ -1,13 +1,16 @@
-"""Tests for the anonymized-twin layer over a generated DatasetBundle."""
+"""Tests for the anonymized-twin layer over a generated DatasetBundle.
+
+Scoring tests for anonymized bundles intentionally don't live here — the
+new scorer (novelty + buried) excludes anonymized bundles entirely (the
+LLM judge can't reason about ``feature_NNN`` columns), so this module only
+covers data-layer concerns: column renaming, manifest rewiring, layout,
+description-leak prevention, and bundle IO.
+"""
 
 import json
 import re
 
-import pytest
-
 from onc_co_scientist.harness.task_spec import build_task
-from onc_co_scientist.harness.transcript import Transcript
-from onc_co_scientist.scoring import aggregate_datasets, score_dataset, write_report
 from onc_co_scientist.synthetic.anonymize import (
     anonymize_bundle,
     build_column_mapping,
@@ -127,61 +130,6 @@ def test_anonymize_bundle_preserves_data_values():
     for col in anon.frame.columns:
         original_name = inverse.get(col, col)
         assert anon.frame[col].tolist() == bundle.frame[original_name].tolist(), col
-
-
-def _hypothesis_text_for_anon_spec(spec) -> str:
-    """Build a hypothesis text that the default RegexMatcher will accept for
-    an anonymized AssociationSpec. The matcher requires at least one token
-    from each variable's keyword set, so we just list every renamed variable
-    plus every predicate column verbatim."""
-    parts = list(spec.variables)
-    if spec.subgroup is not None:
-        parts.extend(spec.subgroup.predicate.keys())
-    return " ".join(parts)
-
-
-def test_anonymize_bundle_scoring_roundtrip(tmp_path):
-    """Score a perfect transcript against the anonymized manifest; the
-    renamed associations must still match when the hypothesis names the
-    renamed variables."""
-    bundle = generate_dataset(_small_buried_config(patient_n=120))
-    anon, _mapping = anonymize_bundle(bundle, seed=0)
-
-    iterations = [{"index": 1, "proposed_hypotheses": [], "analyses": []}]
-    for spec in anon.manifest.associations:
-        hyp_id = f"h_{spec.id}"
-        iterations[0]["proposed_hypotheses"].append(
-            {
-                "id": hyp_id,
-                "text": _hypothesis_text_for_anon_spec(spec),
-                "kind": "novel",
-            }
-        )
-        iterations[0]["analyses"].append(
-            {
-                "hypothesis_ids": [hyp_id],
-                "result_summary": "matched ground truth",
-                "p_value": 0.001,
-                "effect_estimate": float(spec.effect_size),
-                "significant": True,
-            }
-        )
-
-    transcript = Transcript.model_validate(
-        {
-            "dataset_id": anon.manifest.dataset_id,
-            "model_id": "test-model",
-            "harness_id": "anon-roundtrip@0.1.0",
-            "max_iterations": 3,
-            "iterations": iterations,
-        }
-    )
-    score = score_dataset(anon.manifest, transcript)
-    pipeline = aggregate_datasets([score])
-    write_report(pipeline, tmp_path / "score")
-    # The buried finding is tagged hidden_novel; perfect transcript recovers it
-    # in iteration 1.
-    assert score.mean_iterations_hidden_novel == 1.0
 
 
 def test_write_bundle_pair_layout(tmp_path):

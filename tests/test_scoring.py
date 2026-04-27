@@ -1,238 +1,125 @@
-from pathlib import Path
+"""Tests for replicate / bundle / batch aggregation."""
+
+from __future__ import annotations
+
 from statistics import stdev
 
-from onc_co_scientist.harness.transcript import Transcript
 from onc_co_scientist.scoring import (
+    BuriedScore,
+    NoveltyScore,
+    ReplicateScore,
     aggregate_batch,
-    aggregate_datasets,
     aggregate_replicates,
-    score_dataset,
 )
-from onc_co_scientist.synthetic.paradigms import (
-    concordant_catalog,
-    discordant_catalog,
-    hidden_novel_catalog,
-)
-from onc_co_scientist.synthetic.schemas import DatasetManifest
-
-FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
 
-def _scoring_manifest() -> DatasetManifest:
-    """Build a manifest that mirrors the first concordant/discordant/hidden_novel specs."""
-    spec_c = concordant_catalog()[0]
-    spec_d = discordant_catalog()[0]  # TMB + pembrolizumab, direction = -1
-    spec_n = hidden_novel_catalog()[0]
-    return DatasetManifest(
-        dataset_id="score_ds",
-        seed=0,
-        patient_n=100,
-        columns=["patient_id"],
-        treatment_columns=["treatment_pembrolizumab", "treatment_olaparib"],
-        outcome_columns=["pfs_months", "objective_response"],
-        covariate_columns=["egfr_mutation", "tmb_high", "brca2_mutation"],
-        associations=[spec_c, spec_d, spec_n],
+def _replicate(
+    *,
+    dataset_id: str = "ds_a",
+    model_id: str = "model",
+    harness_id: str = "harness@1",
+    max_iterations: int = 5,
+    frac_novel: float,
+    buried_score: int,
+    uncovered: bool,
+) -> ReplicateScore:
+    novelty = NoveltyScore(
+        n_total=10,
+        n_novel=int(round(frac_novel * 10)),
+        frac_novel=frac_novel,
+        judgments=[],
+    )
+    buried = BuriedScore(
+        max_iterations=max_iterations,
+        per_association=[],
+        earliest_iteration_uncovered=buried_score if uncovered else None,
+        score=buried_score,
+    )
+    return ReplicateScore(
+        dataset_id=dataset_id,
+        model_id=model_id,
+        harness_id=harness_id,
+        max_iterations=max_iterations,
+        novelty=novelty,
+        buried=buried,
     )
 
 
-def test_perfect_transcript_uncovers_every_association():
-    manifest = _scoring_manifest()
-    transcript = Transcript.model_validate_json(
-        (FIXTURE_DIR / "perfect_transcript.json").read_text()
-    )
-    score = score_dataset(manifest, transcript)
-
-    outcome_by_id = {o.association_id: o for o in score.per_association}
-    assert outcome_by_id[manifest.associations[0].id].iteration_uncovered == 1
-    assert outcome_by_id[manifest.associations[1].id].iteration_uncovered == 2
-    assert outcome_by_id[manifest.associations[2].id].iteration_uncovered == 2
-
-    assert score.mean_iterations_concordant == 1.0
-    assert score.mean_iterations_discordant == 2.0
-    assert score.paradigm_adherence == 1.0
-    assert score.mean_iterations_hidden_novel == 2.0
-
-
-def test_empty_transcript_uses_penalty_iteration():
-    manifest = _scoring_manifest()
-    transcript = Transcript(
-        dataset_id="score_ds",
-        model_id="test-model",
-        harness_id="test-harness@1.0",
-        max_iterations=5,
-        iterations=[],
-    )
-    score = score_dataset(manifest, transcript)
-    # Every association falls back to max_iterations + 1 = 6.
-    assert score.mean_iterations_concordant == 6.0
-    assert score.mean_iterations_discordant == 6.0
-    assert score.mean_iterations_hidden_novel == 6.0
-    assert score.paradigm_adherence == 0.0
-
-
-def test_proposed_without_supporting_analysis_does_not_count():
-    manifest = _scoring_manifest()
-    spec_c = manifest.associations[0]
-    transcript = Transcript(
-        dataset_id="score_ds",
-        model_id="test-model",
-        harness_id="test-harness@1.0",
-        max_iterations=5,
-        iterations=[
-            {
-                "index": 1,
-                "proposed_hypotheses": [
-                    {
-                        "id": "h1",
-                        "text": spec_c.natural_language_description,
-                        "kind": "novel",
-                    }
-                ],
-                "analyses": [
-                    # Same hypothesis but not significant - should not count.
-                    {
-                        "hypothesis_ids": ["h1"],
-                        "result_summary": "null result",
-                        "p_value": 0.4,
-                        "effect_estimate": -0.1,
-                        "significant": False,
-                    }
-                ],
-            }
-        ],
-    )
-    score = score_dataset(manifest, transcript)
-    outcome_by_id = {o.association_id: o for o in score.per_association}
-    concordant_outcome = outcome_by_id[spec_c.id]
-    assert concordant_outcome.iteration_uncovered is None
-    assert concordant_outcome.proposed_iteration == 1
-    assert score.mean_iterations_concordant == score.penalty_iteration
-
-
-def test_wrong_direction_analysis_does_not_count():
-    manifest = _scoring_manifest()
-    spec_c = manifest.associations[0]  # direction = -1
-    transcript = Transcript(
-        dataset_id="score_ds",
-        model_id="test-model",
-        harness_id="test-harness@1.0",
-        max_iterations=3,
-        iterations=[
-            {
-                "index": 1,
-                "proposed_hypotheses": [
-                    {"id": "h1", "text": spec_c.natural_language_description}
-                ],
-                "analyses": [
-                    {
-                        "hypothesis_ids": ["h1"],
-                        "result_summary": "wrong-sign significant",
-                        "p_value": 0.001,
-                        "effect_estimate": +2.5,  # wrong direction
-                        "significant": True,
-                    }
-                ],
-            }
-        ],
-    )
-    score = score_dataset(manifest, transcript)
-    outcome_by_id = {o.association_id: o for o in score.per_association}
-    assert outcome_by_id[spec_c.id].iteration_uncovered is None
-
-
-def test_aggregate_datasets_averages_across_pipeline():
-    manifest = _scoring_manifest()
-    perfect = Transcript.model_validate_json(
-        (FIXTURE_DIR / "perfect_transcript.json").read_text()
-    )
-    empty = Transcript(
-        dataset_id="score_ds",
-        model_id="test-model",
-        harness_id="test-harness@1.0",
-        max_iterations=5,
-        iterations=[],
-    )
-    scores = [score_dataset(manifest, perfect), score_dataset(manifest, empty)]
-    pipeline = aggregate_datasets(scores)
-
-    # Metric (1) = mean(1.0, 6.0) = 3.5 ; Metric (2) = mean(2.0, 6.0) = 4.0
-    assert pipeline.mean_iterations_concordant == 3.5
-    assert pipeline.mean_iterations_discordant == 4.0
-    # Metric (3) = (2) - (1) at pipeline level.
-    assert pipeline.paradigm_adherence == 0.5
-
-
-def _perfect_score():
-    manifest = _scoring_manifest()
-    perfect = Transcript.model_validate_json(
-        (FIXTURE_DIR / "perfect_transcript.json").read_text()
-    )
-    return score_dataset(manifest, perfect)
-
-
-def _empty_score():
-    manifest = _scoring_manifest()
-    empty = Transcript(
-        dataset_id="score_ds",
-        model_id="test-model",
-        harness_id="test-harness@1.0",
-        max_iterations=5,
-        iterations=[],
-    )
-    return score_dataset(manifest, empty)
-
-
-def test_aggregate_replicates_computes_mean_and_sd():
-    scores = [_perfect_score(), _empty_score()]
-    bundle = aggregate_replicates(scores)
-
-    assert bundle.dataset_id == "score_ds"
+def test_aggregate_replicates_mean_and_sd():
+    reps = [
+        _replicate(frac_novel=0.5, buried_score=2, uncovered=True),
+        _replicate(frac_novel=0.7, buried_score=5, uncovered=False),
+    ]
+    bundle = aggregate_replicates(reps)
+    assert bundle.dataset_id == "ds_a"
     assert bundle.n_replicates == 2
-
-    # concordant: mean of 1.0 and 6.0 = 3.5; sd = stdev([1.0, 6.0])
-    assert bundle.mean_iterations_concordant_mean == 3.5
-    assert bundle.mean_iterations_concordant_sd == stdev([1.0, 6.0])
-    # discordant: mean of 2.0 and 6.0 = 4.0
-    assert bundle.mean_iterations_discordant_mean == 4.0
-    assert bundle.mean_iterations_discordant_sd == stdev([2.0, 6.0])
-    # adherence: 1.0 (perfect: 2-1) and 0.0 (empty: 6-6) => mean 0.5
-    assert bundle.paradigm_adherence_mean == 0.5
-    assert bundle.paradigm_adherence_sd == stdev([1.0, 0.0])
+    assert bundle.frac_novel_mean == 0.6
+    assert bundle.frac_novel_sd == stdev([0.5, 0.7])
+    assert bundle.buried_score_mean == 3.5
+    assert bundle.buried_score_sd == stdev([2.0, 5.0])
+    assert bundle.n_replicates_uncovered == 1
+    assert bundle.fraction_uncovered == 0.5
 
 
 def test_aggregate_replicates_single_run_sd_none():
-    bundle = aggregate_replicates([_perfect_score()])
+    bundle = aggregate_replicates(
+        [_replicate(frac_novel=0.4, buried_score=3, uncovered=True)]
+    )
     assert bundle.n_replicates == 1
-    assert bundle.mean_iterations_concordant_mean == 1.0
-    assert bundle.mean_iterations_concordant_sd is None
-    assert bundle.paradigm_adherence_sd is None
-
-
-def test_aggregate_batch_means_of_bundle_means():
-    # Bundle A: 3 replicates of "perfect" (each concordant=1.0)
-    # Bundle B: 1 replicate of "empty" (concordant=6.0)
-    # Pipeline mean of bundle means = (1.0 + 6.0) / 2 = 3.5,
-    # NOT the replicate-weighted mean (3*1.0 + 1*6.0)/4 = 2.25.
-    perfect_scores = [_perfect_score() for _ in range(3)]
-    empty_scores = [_empty_score()]
-    bundle_a = aggregate_replicates(perfect_scores)
-    bundle_b = aggregate_replicates(empty_scores)
-
-    batch = aggregate_batch([bundle_a, bundle_b])
-    assert batch.n_bundles == 2
-    assert batch.n_replicates_total == 4
-    assert batch.mean_iterations_concordant == 3.5
-    assert batch.mean_iterations_discordant == 4.0
-    assert batch.paradigm_adherence == 0.5
+    assert bundle.frac_novel_mean == 0.4
+    assert bundle.frac_novel_sd is None
+    assert bundle.buried_score_sd is None
+    assert bundle.fraction_uncovered == 1.0
 
 
 def test_aggregate_replicates_rejects_mixed_dataset_ids():
-    perfect = _perfect_score()
-    other = _perfect_score()
-    object.__setattr__(other, "dataset_id", "different_ds")
+    a = _replicate(frac_novel=0.5, buried_score=3, uncovered=True)
+    b = _replicate(
+        dataset_id="ds_b", frac_novel=0.6, buried_score=4, uncovered=False
+    )
     try:
-        aggregate_replicates([perfect, other])
+        aggregate_replicates([a, b])
     except ValueError as exc:
         assert "dataset_id" in str(exc)
     else:
-        raise AssertionError("expected ValueError for mixed dataset_ids")
+        raise AssertionError("expected ValueError")
+
+
+def test_aggregate_batch_means_of_bundle_means():
+    # Bundle A has 3 reps with frac_novel=0.5; bundle B has 1 rep with frac_novel=0.9.
+    # Pipeline mean = (0.5 + 0.9) / 2 = 0.7, NOT replicate-weighted (3*0.5+0.9)/4=0.6.
+    bundle_a = aggregate_replicates(
+        [
+            _replicate(frac_novel=0.5, buried_score=2, uncovered=True),
+            _replicate(frac_novel=0.5, buried_score=2, uncovered=True),
+            _replicate(frac_novel=0.5, buried_score=2, uncovered=True),
+        ]
+    )
+    bundle_b = aggregate_replicates(
+        [
+            _replicate(
+                dataset_id="ds_b",
+                frac_novel=0.9,
+                buried_score=5,
+                uncovered=False,
+            )
+        ]
+    )
+    batch = aggregate_batch([bundle_a, bundle_b])
+    assert batch.n_bundles == 2
+    assert batch.n_replicates_total == 4
+    assert batch.frac_novel == 0.7
+    assert batch.buried_score == 3.5
+    # fraction_uncovered: bundle_a 1.0, bundle_b 0.0 → mean 0.5
+    assert batch.fraction_uncovered == 0.5
+
+
+def test_aggregate_batch_to_dict_round_trips():
+    bundle = aggregate_replicates(
+        [_replicate(frac_novel=0.4, buried_score=3, uncovered=True)]
+    )
+    payload = aggregate_batch([bundle]).to_dict()
+    assert payload["n_bundles"] == 1
+    assert payload["n_replicates_total"] == 1
+    assert payload["frac_novel"] == 0.4
+    assert payload["per_bundle"][0]["dataset_id"] == "ds_a"

@@ -22,16 +22,27 @@ from rich.console import Console
 from .harness.task_spec import build_task, build_tasks
 from .harness.transcript import Transcript
 from .scoring import (
+    ClaudeCliJudge,
+    Judge,
+    JudgeCache,
+    ReplicateScore,
+    StubJudge,
     aggregate_batch,
-    aggregate_datasets,
     aggregate_replicates,
-    score_dataset,
+    default_cache_dir,
+    score_buried,
+    score_novelty,
+    wrap_single,
     write_batch_report,
-    write_report,
 )
 from .synthetic.cancer_types import CancerType, all_cancer_types
 from .synthetic.generator import GeneratorConfig
-from .synthetic.io import MANIFEST_FILENAME, discover_bundles, read_manifest
+from .synthetic.io import (
+    ANONYMIZED_SUBDIR,
+    MANIFEST_FILENAME,
+    discover_bundles,
+    read_manifest,
+)
 from .synthetic.multi import (
     generate_multi_dataset,
     write_multi_bundle,
@@ -45,6 +56,13 @@ class DatasetVariant(StrEnum):
     named = "named"
     anonymized = "anonymized"
     both = "both"
+
+
+class JudgeBackend(StrEnum):
+    """LLM backend powering novelty + match judgments."""
+
+    claude_cli = "claude-cli"
+    stub = "stub"
 
 app = typer.Typer(
     help="Oncology Co-Scientist Benchmark CLI.",
@@ -309,6 +327,110 @@ def harness_build_task(
     )
 
 
+def _build_judge(
+    backend: JudgeBackend,
+    *,
+    judge_cli: str,
+    batch_size: int,
+    cache_dir: Path | None,
+    stub_config_path: Path | None,
+) -> Judge:
+    if backend is JudgeBackend.stub:
+        if stub_config_path is None:
+            return StubJudge()
+        raw = json.loads(stub_config_path.read_text())
+        novel_phrases = frozenset(raw.get("novel_phrases", []))
+        match_phrases_raw = raw.get("match_phrases", {})
+        match_phrases = {
+            key: frozenset(values) for key, values in match_phrases_raw.items()
+        }
+        return StubJudge(
+            novel_phrases=novel_phrases, match_phrases=match_phrases
+        )
+    cache = JudgeCache(cache_dir=cache_dir)
+    return ClaudeCliJudge(
+        cli=judge_cli,
+        batch_size=batch_size,
+        cache=cache,
+    )
+
+
+def _score_replicate(
+    manifest, transcript: Transcript, judge: Judge
+) -> ReplicateScore:
+    novelty = score_novelty(transcript, judge)
+    buried = score_buried(manifest, transcript, judge)
+    return ReplicateScore(
+        dataset_id=manifest.dataset_id,
+        model_id=transcript.model_id,
+        harness_id=transcript.harness_id,
+        max_iterations=transcript.max_iterations,
+        novelty=novelty,
+        buried=buried,
+    )
+
+
+JudgeOption = Annotated[
+    JudgeBackend,
+    typer.Option(
+        "--judge",
+        help="LLM backend for novelty + match judgments. 'claude-cli' shells "
+        "out to `claude --dangerously-skip-permissions -p` (uses existing "
+        "Claude Code auth on the host). 'stub' is a deterministic test-only "
+        "backend driven by --stub-config.",
+        case_sensitive=False,
+    ),
+]
+JudgeCliOption = Annotated[
+    str,
+    typer.Option(
+        "--judge-cli",
+        help="Path to the claude binary (only used when --judge=claude-cli).",
+    ),
+]
+JudgeBatchSizeOption = Annotated[
+    int,
+    typer.Option(
+        "--judge-batch-size",
+        min=1,
+        help="How many hypotheses to bundle into one judge call.",
+    ),
+]
+CacheDirOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--cache-dir",
+        help="Disk cache directory for judge responses. Default "
+        "~/.cache/onc-co-scientist/judge.",
+    ),
+]
+NoJudgeCacheOption = Annotated[
+    bool,
+    typer.Option(
+        "--no-judge-cache/--judge-cache",
+        help="Disable the on-disk judge cache (forces every call to hit the LLM).",
+    ),
+]
+StubConfigOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--stub-config",
+        exists=True,
+        dir_okay=False,
+        help="JSON config for --judge=stub: "
+        '{"novel_phrases": [...], "match_phrases": {"<assoc-key>": [...]}}.',
+    ),
+]
+
+
+def _resolve_cache_dir(
+    cache_dir: Path | None, no_cache: bool
+) -> Path | None:
+    if no_cache:
+        return None
+    return cache_dir if cache_dir is not None else default_cache_dir()
+
+
 @score_app.command("run")
 def score_run(
     dataset: Annotated[
@@ -332,22 +454,27 @@ def score_run(
     out: Annotated[
         Path, typer.Option("--out", help="Directory for the scoring report.")
     ],
-    penalty_iteration: Annotated[
-        int | None,
-        typer.Option(
-            "--penalty-iteration",
-            help="Iteration value to assign when an association is never uncovered. "
-            "Defaults to max_iterations + 1.",
-        ),
-    ] = None,
+    judge_backend: JudgeOption = JudgeBackend.claude_cli,
+    judge_cli: JudgeCliOption = "claude",
+    judge_batch_size: JudgeBatchSizeOption = 10,
+    cache_dir: CacheDirOption = None,
+    no_judge_cache: NoJudgeCacheOption = False,
+    stub_config: StubConfigOption = None,
 ) -> None:
-    """Score a transcript for one dataset and write JSON + markdown reports."""
+    """Score a single transcript: novelty % + buried-finding discovery."""
     manifest = read_manifest(dataset)
     transcript = Transcript.model_validate_json(transcript_path.read_text())
-    score = score_dataset(manifest, transcript, penalty_iteration=penalty_iteration)
-    pipeline = aggregate_datasets([score])
-    out_path = write_report(pipeline, out)
-    console.print_json(json.dumps(pipeline.to_dict()))
+    judge = _build_judge(
+        judge_backend,
+        judge_cli=judge_cli,
+        batch_size=judge_batch_size,
+        cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
+        stub_config_path=stub_config,
+    )
+    replicate = _score_replicate(manifest, transcript, judge)
+    batch = wrap_single(replicate)
+    out_path = write_batch_report(batch, out)
+    console.print_json(json.dumps(batch.to_dict()))
     console.print(f"[green]Report written to[/green] {out_path}")
 
 
@@ -372,28 +499,34 @@ def score_batch(
             file_okay=False,
             help="Tasks root produced by `ocs harness build-task` and "
             "populated by `scripts/run_harness.sh`. Per-bundle replicate "
-            "transcripts are read from <tasks-root>/<ct>/<variant>/runs/run_*/transcript.json.",
+            "transcripts are read from "
+            "<tasks-root>/<ct>/<variant>/runs/run_*/transcript.json. "
+            "Anonymized bundles are skipped (the LLM judge can't reason "
+            "about feature_NNN columns).",
         ),
     ],
     out: Annotated[
         Path,
         typer.Option("--out", help="Directory for the batch scoring report."),
     ],
-    penalty_iteration: Annotated[
-        int | None,
-        typer.Option(
-            "--penalty-iteration",
-            help="Iteration value to assign when an association is never uncovered. "
-            "Defaults to max_iterations + 1.",
-        ),
-    ] = None,
+    judge_backend: JudgeOption = JudgeBackend.claude_cli,
+    judge_cli: JudgeCliOption = "claude",
+    judge_batch_size: JudgeBatchSizeOption = 10,
+    cache_dir: CacheDirOption = None,
+    no_judge_cache: NoJudgeCacheOption = False,
+    stub_config: StubConfigOption = None,
 ) -> None:
     """Batch-score every replicate transcript across a tasks tree.
 
-    For each dataset bundle under ``--synth-root``, walks the matching
-    ``<tasks-root>/<rel>/runs/run_*/transcript.json`` files, scores each
-    replicate, aggregates per bundle (mean ± SD across replicates), and
-    aggregates across bundles using the unweighted mean of bundle means.
+    Two metrics per (dataset, replicate):
+      - novelty: % of harness-proposed hypotheses the LLM judge marks as
+        going beyond paradigm consensus.
+      - buried-discovery iteration: earliest iteration the pipeline both
+        proposed and tested a hypothesis matching the manifest's buried
+        association; falls back to max_iterations if never uncovered.
+
+    Anonymized bundles (those whose directory is named ``anonymized``) are
+    excluded — the judge can't reason about feature_NNN columns.
     """
     bundles = discover_bundles(synth_root)
     if not bundles:
@@ -402,8 +535,21 @@ def score_batch(
             f"manifest.json and public/dataset.parquet."
         )
 
+    judge = _build_judge(
+        judge_backend,
+        judge_cli=judge_cli,
+        batch_size=judge_batch_size,
+        cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
+        stub_config_path=stub_config,
+    )
+
     bundle_scores = []
     for bundle_dir in bundles:
+        if bundle_dir.name == ANONYMIZED_SUBDIR:
+            console.print(
+                f"[dim]skip (anonymized):[/dim] {bundle_dir.relative_to(synth_root)}"
+            )
+            continue
         rel = bundle_dir.relative_to(synth_root)
         runs_dir = tasks_root / rel / "runs"
         transcript_paths = sorted(runs_dir.glob("run_*/transcript.json"))
@@ -418,9 +564,7 @@ def score_batch(
         for tp in transcript_paths:
             transcript = Transcript.model_validate_json(tp.read_text())
             replicate_scores.append(
-                score_dataset(
-                    manifest, transcript, penalty_iteration=penalty_iteration
-                )
+                _score_replicate(manifest, transcript, judge)
             )
         bundle_scores.append(aggregate_replicates(replicate_scores))
 
