@@ -144,7 +144,7 @@ class JudgeCache:
         path = self._path(prompt)
         if not path.is_file():
             return None
-        return path.read_text()
+        return path.read_text(encoding="utf-8")
 
     def put(self, prompt: str, response: str) -> None:
         if self.cache_dir is None:

@@ -51,16 +51,18 @@ def write_bundle(bundle: DatasetBundle, out_dir: Path | str) -> Path:
     public.mkdir(parents=True, exist_ok=True)
 
     (out_path / MANIFEST_FILENAME).write_text(
-        bundle.manifest.model_dump_json(indent=2) + "\n"
+        bundle.manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
     bundle.frame.to_parquet(public / DATASET_FILENAME, index=False)
-    (public / DESCRIPTION_FILENAME).write_text(bundle.public_description + "\n")
+    (public / DESCRIPTION_FILENAME).write_text(
+        bundle.public_description + "\n", encoding="utf-8"
+    )
     return out_path
 
 
 def read_manifest(bundle_dir: Path | str) -> DatasetManifest:
     path = Path(bundle_dir) / MANIFEST_FILENAME
-    return DatasetManifest.model_validate_json(path.read_text())
+    return DatasetManifest.model_validate_json(path.read_text(encoding="utf-8"))
 
 
 def read_frame(bundle_dir: Path | str) -> pd.DataFrame:
@@ -68,7 +70,7 @@ def read_frame(bundle_dir: Path | str) -> pd.DataFrame:
 
 
 def read_description(bundle_dir: Path | str) -> str:
-    return (public_dir(bundle_dir) / DESCRIPTION_FILENAME).read_text()
+    return (public_dir(bundle_dir) / DESCRIPTION_FILENAME).read_text(encoding="utf-8")
 
 
 def discover_bundles(root: Path | str) -> list[Path]:
@@ -112,6 +114,6 @@ def write_bundle_pair(
     anon_bundle, mapping = anonymize_bundle(bundle, seed=anon_seed)
     write_bundle(anon_bundle, anonymized_dir)
     (anonymized_dir / COLUMN_MAPPING_FILENAME).write_text(
-        json.dumps(mapping, indent=2, sort_keys=True) + "\n"
+        json.dumps(mapping, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return named_dir, anonymized_dir

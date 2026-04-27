@@ -86,7 +86,7 @@ def _load_generator_config(
     seed_override: int | None,
     n_extra_covariates_override: int | None = None,
 ) -> GeneratorConfig:
-    raw = yaml.safe_load(config_path.read_text())
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise typer.BadParameter(
             f"Expected a YAML mapping at {config_path}, got {type(raw).__name__}."
@@ -338,7 +338,7 @@ def _build_judge(
     if backend is JudgeBackend.stub:
         if stub_config_path is None:
             return StubJudge()
-        raw = json.loads(stub_config_path.read_text())
+        raw = json.loads(stub_config_path.read_text(encoding="utf-8"))
         novel_phrases = frozenset(raw.get("novel_phrases", []))
         match_phrases_raw = raw.get("match_phrases", {})
         match_phrases = {
@@ -463,7 +463,7 @@ def score_run(
 ) -> None:
     """Score a single transcript: novelty % + buried-finding discovery."""
     manifest = read_manifest(dataset)
-    transcript = Transcript.model_validate_json(transcript_path.read_text())
+    transcript = Transcript.model_validate_json(transcript_path.read_text(encoding="utf-8"))
     judge = _build_judge(
         judge_backend,
         judge_cli=judge_cli,
@@ -562,7 +562,7 @@ def score_batch(
         manifest = read_manifest(bundle_dir)
         replicate_scores = []
         for tp in transcript_paths:
-            transcript = Transcript.model_validate_json(tp.read_text())
+            transcript = Transcript.model_validate_json(tp.read_text(encoding="utf-8"))
             replicate_scores.append(
                 _score_replicate(manifest, transcript, judge)
             )

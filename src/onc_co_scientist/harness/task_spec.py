@@ -67,7 +67,7 @@ def _render_instructions(
 def _write_schema(out_path: Path) -> None:
     """Write the JSON schema for the Transcript model alongside the task."""
     schema = Transcript.model_json_schema()
-    out_path.write_text(json.dumps(schema, indent=2) + "\n")
+    out_path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
 
 
 def build_task(
@@ -96,7 +96,10 @@ def build_task(
     dataset_dst = task_dir / TASK_DATASET_LINK
     shutil.copyfile(public_dir(dataset_path_in) / DATASET_FILENAME, dataset_dst)
     description_dst = task_dir / TASK_DESCRIPTION_LINK
-    description_dst.write_text(description if description.endswith("\n") else description + "\n")
+    description_dst.write_text(
+        description if description.endswith("\n") else description + "\n",
+        encoding="utf-8",
+    )
 
     python_env_str = str(Path(python_env).resolve()) if python_env is not None else None
 
@@ -110,7 +113,7 @@ def build_task(
         python_env=python_env_str,
     )
     instructions_path = task_dir / INSTRUCTIONS_FILENAME
-    instructions_path.write_text(instructions)
+    instructions_path.write_text(instructions, encoding="utf-8")
 
     # Schema + reference example for the transcript format.
     schema_path = task_dir / SCHEMA_FILENAME

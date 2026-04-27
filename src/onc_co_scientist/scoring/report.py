@@ -88,8 +88,10 @@ def _md_escape(text: str) -> str:
 def write_batch_report(batch: BatchPipelineScore, out_dir: Path | str) -> Path:
     path = Path(out_dir)
     path.mkdir(parents=True, exist_ok=True)
-    (path / "batch_score.json").write_text(json.dumps(batch.to_dict(), indent=2) + "\n")
-    (path / "batch_score.md").write_text(render_markdown_batch(batch))
+    (path / "batch_score.json").write_text(
+        json.dumps(batch.to_dict(), indent=2) + "\n", encoding="utf-8"
+    )
+    (path / "batch_score.md").write_text(render_markdown_batch(batch), encoding="utf-8")
     _write_judgments_jsonl(batch, path / "batch_judgments.jsonl")
     return path
 
