@@ -7,7 +7,7 @@ from .aggregate import (
     aggregate_batch,
     aggregate_replicates,
 )
-from .buried import BuriedDiscovery, BuriedScore, score_buried
+from .buried import BuriedDiscovery, BuriedScore, MatchJudgmentRecord, score_buried
 from .judge import (
     ClaudeCliJudge,
     Judge,
@@ -33,6 +33,7 @@ __all__ = [
     "Judge",
     "JudgeCache",
     "MatchJudgment",
+    "MatchJudgmentRecord",
     "NoveltyJudgment",
     "NoveltyJudgmentRecord",
     "NoveltyScore",

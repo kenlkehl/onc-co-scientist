@@ -46,6 +46,12 @@ def test_perfect_transcript_uncovers_buried_at_iteration_2():
     assert score.earliest_iteration_uncovered == 2
     assert score.score == 2
     assert score.uncovered is True
+    # Match-judgment trace is populated for review: every transcript
+    # hypothesis appears (matches True or False), with the stub rationale.
+    discovery = score.per_association[0]
+    assert len(discovery.match_judgments) == len(transcript.flat_hypotheses())
+    assert any(j.matches for j in discovery.match_judgments)
+    assert all(j.rationale for j in discovery.match_judgments)
 
 
 def test_empty_transcript_falls_back_to_max_iterations():

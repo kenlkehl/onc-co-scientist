@@ -141,6 +141,29 @@ def test_score_batch_scores_named_and_anonymized_and_writes_report(tmp_path: Pat
     judgments = (out_dir / "batch_judgments.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(judgments) == 4  # 2 named bundles × 2 reps × 1 hypothesis each
 
+    # Match-judgment trace covers every (replicate, association, hypothesis)
+    # tuple. The base config sets n_buried_signatures=1 → 1 hidden_novel
+    # association per bundle; 4 bundles × 2 reps × 1 hypothesis × 1
+    # association = 8 lines.
+    match_lines = (
+        (out_dir / "batch_match_judgments.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    assert len(match_lines) == 8
+    sample = json.loads(match_lines[0])
+    assert {
+        "dataset_id",
+        "variant",
+        "replicate",
+        "association_id",
+        "iteration",
+        "hypothesis_id",
+        "text",
+        "matches",
+        "rationale",
+    } <= sample.keys()
+
 
 def test_score_batch_errors_when_no_transcripts(tmp_path: Path) -> None:
     synth_root, tasks_root = _build_synth_and_tasks(tmp_path)

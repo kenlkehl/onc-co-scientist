@@ -145,6 +145,7 @@ def write_batch_report(batch: BatchPipelineScore, out_dir: Path | str) -> Path:
     )
     (path / "batch_score.md").write_text(render_markdown_batch(batch), encoding="utf-8")
     _write_judgments_jsonl(batch, path / "batch_judgments.jsonl")
+    _write_match_judgments_jsonl(batch, path / "batch_match_judgments.jsonl")
     return path
 
 
@@ -172,6 +173,36 @@ def _write_judgments_jsonl(batch: BatchPipelineScore, path: Path) -> None:
                         )
                         + "\n"
                     )
+
+
+def _write_match_judgments_jsonl(batch: BatchPipelineScore, path: Path) -> None:
+    """Per-hypothesis buried-match judge trace, one line per (replicate,
+    association_id, hypothesis). Includes both matches and non-matches so
+    near-misses are reviewable.
+    """
+    with path.open("w", encoding="utf-8") as f:
+        for bundle in batch.per_bundle:
+            for rep_index, rep in enumerate(bundle.replicates, 1):
+                for d in rep.buried.per_association:
+                    for j in d.match_judgments:
+                        f.write(
+                            json.dumps(
+                                {
+                                    "dataset_id": bundle.dataset_id,
+                                    "variant": bundle.variant,
+                                    "replicate": rep_index,
+                                    "model_id": rep.model_id,
+                                    "harness_id": rep.harness_id,
+                                    "association_id": d.association_id,
+                                    "iteration": j.iteration,
+                                    "hypothesis_id": j.hypothesis_id,
+                                    "text": j.text,
+                                    "matches": j.matches,
+                                    "rationale": j.rationale,
+                                }
+                            )
+                            + "\n"
+                        )
 
 
 def wrap_single(replicate: ReplicateScore) -> BatchPipelineScore:

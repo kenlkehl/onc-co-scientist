@@ -20,12 +20,28 @@ DEFAULT_SIGNIFICANCE_THRESHOLD = 0.05
 
 
 @dataclass
+class MatchJudgmentRecord:
+    """Per-hypothesis match-judgment trace for one ``BuriedDiscovery``.
+
+    Persisted out-of-band (sibling JSONL) rather than into ``batch_score.json``
+    so the aggregate file stays compact regardless of transcript length.
+    """
+
+    iteration: int
+    hypothesis_id: str
+    text: str
+    matches: bool
+    rationale: str
+
+
+@dataclass
 class BuriedDiscovery:
     association_id: str
     iteration_uncovered: int | None
     proposed_iteration: int | None
     tested_iteration: int | None
     matched_hypothesis_ids: list[str] = field(default_factory=list)
+    match_judgments: list[MatchJudgmentRecord] = field(default_factory=list)
 
 
 @dataclass
@@ -90,6 +106,7 @@ def _discover_for_spec(
     transcript: Transcript,
     spec: AssociationSpec,
     matched: list[tuple[int, HypothesisRecord]],
+    match_judgments: list[MatchJudgmentRecord],
     *,
     significance_threshold: float,
 ) -> BuriedDiscovery:
@@ -99,6 +116,7 @@ def _discover_for_spec(
             iteration_uncovered=None,
             proposed_iteration=None,
             tested_iteration=None,
+            match_judgments=match_judgments,
         )
     first_propose_iter = min(it for it, _ in matched)
     matched_ids = {h.id for _, h in matched}
@@ -121,6 +139,7 @@ def _discover_for_spec(
             proposed_iteration=first_propose_iter,
             tested_iteration=None,
             matched_hypothesis_ids=sorted(matched_ids),
+            match_judgments=match_judgments,
         )
 
     uncovered = max(first_propose_iter, tested_iteration)
@@ -130,6 +149,7 @@ def _discover_for_spec(
         proposed_iteration=first_propose_iter,
         tested_iteration=tested_iteration,
         matched_hypothesis_ids=sorted(matched_ids),
+        match_judgments=match_judgments,
     )
 
 
@@ -176,6 +196,16 @@ def score_buried(
         match_judgments = judge.judge_matches(
             texts, spec, variant=variant, column_mapping=column_mapping
         )
+        records = [
+            MatchJudgmentRecord(
+                iteration=it,
+                hypothesis_id=h.id,
+                text=h.text,
+                matches=m.matches,
+                rationale=m.rationale,
+            )
+            for (it, h), m in zip(flat, match_judgments, strict=True)
+        ]
         matched = [
             (it, h)
             for (it, h), m in zip(flat, match_judgments, strict=True)
@@ -186,6 +216,7 @@ def score_buried(
                 transcript,
                 spec,
                 matched,
+                records,
                 significance_threshold=significance_threshold,
             )
         )
