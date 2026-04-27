@@ -16,6 +16,29 @@ from onc_co_scientist.scoring.judge import (
     StubJudge,
     _extract_json_array,
 )
+from onc_co_scientist.synthetic.schemas import (
+    AssociationForm,
+    AssociationSpec,
+    ParadigmClass,
+)
+
+
+def _spec(
+    *,
+    nl: str = "BRCA2-mutant subgroup responds to olaparib",
+    variables: list[str] | None = None,
+    outcome: str = "objective_response",
+) -> AssociationSpec:
+    return AssociationSpec(
+        id="test_spec",
+        paradigm_class=ParadigmClass.hidden_novel,
+        form=AssociationForm.subgroup_conditional,
+        variables=variables if variables is not None else ["treatment_olaparib", "brca2_mutation"],
+        outcome=outcome,
+        direction=1,
+        effect_size=1.0,
+        natural_language_description=nl,
+    )
 
 
 def test_extract_json_array_handles_plain_array():
@@ -55,7 +78,9 @@ def test_stub_judge_novelty_marks_phrases():
     assert [j.is_novel for j in out] == [True, False, True]
 
 
-def test_stub_judge_matches_uses_association_key():
+def test_stub_judge_matches_uses_spec_block_substring():
+    """The stub keys on substrings of the rendered spec block — for the named
+    variant that block includes the NL description, so 'BRCA2' still works."""
     judge = StubJudge(
         match_phrases={
             "BRCA2": frozenset({"olaparib", "parp"}),
@@ -64,9 +89,71 @@ def test_stub_judge_matches_uses_association_key():
     )
     matches = judge.judge_matches(
         ["olaparib in BRCA2 patients", "Pembrolizumab works", "PARP inhibitor benefit"],
-        association_nl="BRCA2-mutant subgroup responds to olaparib",
+        _spec(nl="BRCA2-mutant subgroup responds to olaparib"),
+        variant="named",
     )
     assert [m.matches for m in matches] == [True, False, True]
+
+
+def test_stub_judge_matches_anonymized_keys_on_feature_tokens():
+    """For anonymized variants the NL description is omitted from the spec
+    block, so the only stable thing to key on is the feature_NNN tokens
+    in spec.variables."""
+    spec = _spec(
+        variables=["feature_073", "feature_201"],
+    )
+    judge = StubJudge(
+        match_phrases={
+            "feature_073": frozenset({"feature_073"}),
+        }
+    )
+    matches = judge.judge_matches(
+        ["interaction between feature_073 and feature_201", "unrelated text"],
+        spec,
+        variant="anonymized",
+    )
+    assert [m.matches for m in matches] == [True, False]
+
+
+def test_stub_judge_matches_anonymized_includes_nl_description():
+    """The NL description is included for BOTH variants so the judge has
+    symmetric information regardless of which name space the agent saw."""
+    spec = _spec(
+        nl="BRCA2-mutant subgroup responds to olaparib",
+        variables=["feature_073", "feature_201"],
+    )
+    judge = StubJudge(
+        match_phrases={
+            "BRCA2": frozenset({"feature_073"}),
+        }
+    )
+    matches = judge.judge_matches(
+        ["mentions feature_073"],
+        spec,
+        variant="anonymized",
+    )
+    assert [m.matches for m in matches] == [True]
+
+
+def test_render_spec_block_bilingual_with_mapping():
+    """When a column_mapping is supplied, both clinical and feature_NNN
+    names appear in the rendered spec block (for both variants)."""
+    from onc_co_scientist.scoring.judge import _render_spec_block
+
+    spec = _spec(
+        variables=["treatment_olaparib", "brca2_mutation"],
+    )
+    mapping = {"treatment_olaparib": "feature_073", "brca2_mutation": "feature_201"}
+
+    named_block = _render_spec_block(spec, "named", mapping)
+    anon_block = _render_spec_block(spec, "anonymized", mapping)
+    for block in (named_block, anon_block):
+        assert "treatment_olaparib" in block
+        assert "feature_073" in block
+        assert "brca2_mutation" in block
+        assert "feature_201" in block
+        # NL description is present in both.
+        assert "BRCA2-mutant subgroup responds to olaparib" in block
 
 
 def test_judge_cache_round_trip(tmp_path: Path):

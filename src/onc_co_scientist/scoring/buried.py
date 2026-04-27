@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 from ..harness.transcript import AnalysisRecord, HypothesisRecord, Transcript
 from ..synthetic.schemas import AssociationSpec, DatasetManifest, ParadigmClass
-from .judge import Judge
+from .judge import Judge, Variant
 
 DEFAULT_SIGNIFICANCE_THRESHOLD = 0.05
 
@@ -138,9 +138,17 @@ def score_buried(
     transcript: Transcript,
     judge: Judge,
     *,
+    variant: Variant = "named",
+    column_mapping: dict[str, str] | None = None,
     significance_threshold: float = DEFAULT_SIGNIFICANCE_THRESHOLD,
 ) -> BuriedScore:
-    """Compute buried-finding discovery score for one (manifest, transcript)."""
+    """Compute buried-finding discovery score for one (manifest, transcript).
+
+    ``variant`` records which column-name space the agent saw; the judge
+    prompt is rendered bilingually when ``column_mapping`` is provided
+    so the judge sees both clinical and ``feature_NNN`` identifiers
+    regardless of variant.
+    """
     if transcript.dataset_id != manifest.dataset_id:
         raise ValueError(
             f"Transcript dataset_id {transcript.dataset_id!r} does not match "
@@ -165,7 +173,9 @@ def score_buried(
             )
             continue
         texts = [h.text for _, h in flat]
-        match_judgments = judge.judge_matches(texts, spec.natural_language_description)
+        match_judgments = judge.judge_matches(
+            texts, spec, variant=variant, column_mapping=column_mapping
+        )
         matched = [
             (it, h)
             for (it, h), m in zip(flat, match_judgments, strict=True)

@@ -41,6 +41,7 @@ from .synthetic.io import (
     ANONYMIZED_SUBDIR,
     MANIFEST_FILENAME,
     discover_bundles,
+    load_column_mapping,
     read_manifest,
 )
 from .synthetic.multi import (
@@ -356,18 +357,36 @@ def _build_judge(
 
 
 def _score_replicate(
-    manifest, transcript: Transcript, judge: Judge
+    manifest,
+    transcript: Transcript,
+    judge: Judge,
+    *,
+    variant: str,
+    column_mapping: dict[str, str] | None = None,
 ) -> ReplicateScore:
-    novelty = score_novelty(transcript, judge)
-    buried = score_buried(manifest, transcript, judge)
+    # Novelty is paradigm-consensus-anchored and therefore meaningless on
+    # anonymized hypotheses (which only mention feature_NNN columns); only
+    # buried matching applies to the anonymized variant.
+    novelty = score_novelty(transcript, judge) if variant == "named" else None
+    buried = score_buried(
+        manifest, transcript, judge, variant=variant, column_mapping=column_mapping
+    )
     return ReplicateScore(
         dataset_id=manifest.dataset_id,
+        variant=variant,
         model_id=transcript.model_id,
         harness_id=transcript.harness_id,
         max_iterations=transcript.max_iterations,
         novelty=novelty,
         buried=buried,
     )
+
+
+def _infer_variant(bundle_dir: Path) -> str:
+    """Variant is named/anonymized based on the bundle directory's name."""
+    if bundle_dir.name == ANONYMIZED_SUBDIR:
+        return "anonymized"
+    return "named"
 
 
 JudgeOption = Annotated[
@@ -461,9 +480,15 @@ def score_run(
     no_judge_cache: NoJudgeCacheOption = False,
     stub_config: StubConfigOption = None,
 ) -> None:
-    """Score a single transcript: novelty % + buried-finding discovery."""
+    """Score a single transcript: novelty % + buried-finding discovery.
+
+    Variant is inferred from the bundle directory's name (``named`` or
+    ``anonymized``); novelty scoring is skipped for the anonymized variant.
+    """
     manifest = read_manifest(dataset)
     transcript = Transcript.model_validate_json(transcript_path.read_text(encoding="utf-8"))
+    variant = _infer_variant(dataset)
+    column_mapping = load_column_mapping(dataset)
     judge = _build_judge(
         judge_backend,
         judge_cli=judge_cli,
@@ -471,7 +496,9 @@ def score_run(
         cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
         stub_config_path=stub_config,
     )
-    replicate = _score_replicate(manifest, transcript, judge)
+    replicate = _score_replicate(
+        manifest, transcript, judge, variant=variant, column_mapping=column_mapping
+    )
     batch = wrap_single(replicate)
     out_path = write_batch_report(batch, out)
     console.print_json(json.dumps(batch.to_dict()))
@@ -501,8 +528,8 @@ def score_batch(
             "populated by `scripts/run_harness.sh`. Per-bundle replicate "
             "transcripts are read from "
             "<tasks-root>/<ct>/<variant>/runs/run_*/transcript.json. "
-            "Anonymized bundles are skipped (the LLM judge can't reason "
-            "about feature_NNN columns).",
+            "Both named and anonymized variants are scored for buried "
+            "discovery; novelty is computed for named only.",
         ),
     ],
     out: Annotated[
@@ -518,15 +545,16 @@ def score_batch(
 ) -> None:
     """Batch-score every replicate transcript across a tasks tree.
 
-    Two metrics per (dataset, replicate):
-      - novelty: % of harness-proposed hypotheses the LLM judge marks as
-        going beyond paradigm consensus.
-      - buried-discovery iteration: earliest iteration the pipeline both
-        proposed and tested a hypothesis matching the manifest's buried
-        association; falls back to max_iterations if never uncovered.
+    Per (dataset, variant, replicate):
+      - novelty (named only): % of harness-proposed hypotheses the LLM
+        judge marks as going beyond paradigm consensus.
+      - buried-discovery iteration (both variants): earliest iteration the
+        pipeline both proposed and tested a hypothesis matching the
+        manifest's buried association; falls back to max_iterations if
+        never uncovered.
 
-    Anonymized bundles (those whose directory is named ``anonymized``) are
-    excluded — the judge can't reason about feature_NNN columns.
+    Both ``named`` and ``anonymized`` bundles are scored; the named-vs-
+    anonymized gap on buried discovery is the primary outcome of the eval.
     """
     bundles = discover_bundles(synth_root)
     if not bundles:
@@ -545,12 +573,8 @@ def score_batch(
 
     bundle_scores = []
     for bundle_dir in bundles:
-        if bundle_dir.name == ANONYMIZED_SUBDIR:
-            console.print(
-                f"[dim]skip (anonymized):[/dim] {bundle_dir.relative_to(synth_root)}"
-            )
-            continue
         rel = bundle_dir.relative_to(synth_root)
+        variant = _infer_variant(bundle_dir)
         runs_dir = tasks_root / rel / "runs"
         transcript_paths = sorted(runs_dir.glob("run_*/transcript.json"))
         if not transcript_paths:
@@ -560,11 +584,18 @@ def score_batch(
             )
             continue
         manifest = read_manifest(bundle_dir)
+        column_mapping = load_column_mapping(bundle_dir)
         replicate_scores = []
         for tp in transcript_paths:
             transcript = Transcript.model_validate_json(tp.read_text(encoding="utf-8"))
             replicate_scores.append(
-                _score_replicate(manifest, transcript, judge)
+                _score_replicate(
+                    manifest,
+                    transcript,
+                    judge,
+                    variant=variant,
+                    column_mapping=column_mapping,
+                )
             )
         bundle_scores.append(aggregate_replicates(replicate_scores))
 

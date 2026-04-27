@@ -16,19 +16,23 @@ from onc_co_scientist.scoring import (
 def _replicate(
     *,
     dataset_id: str = "ds_a",
+    variant: str = "named",
     model_id: str = "model",
     harness_id: str = "harness@1",
     max_iterations: int = 5,
-    frac_novel: float,
+    frac_novel: float | None,
     buried_score: int,
     uncovered: bool,
 ) -> ReplicateScore:
-    novelty = NoveltyScore(
-        n_total=10,
-        n_novel=int(round(frac_novel * 10)),
-        frac_novel=frac_novel,
-        judgments=[],
-    )
+    if frac_novel is None:
+        novelty = None
+    else:
+        novelty = NoveltyScore(
+            n_total=10,
+            n_novel=int(round(frac_novel * 10)),
+            frac_novel=frac_novel,
+            judgments=[],
+        )
     buried = BuriedScore(
         max_iterations=max_iterations,
         per_association=[],
@@ -37,6 +41,7 @@ def _replicate(
     )
     return ReplicateScore(
         dataset_id=dataset_id,
+        variant=variant,
         model_id=model_id,
         harness_id=harness_id,
         max_iterations=max_iterations,
@@ -107,11 +112,46 @@ def test_aggregate_batch_means_of_bundle_means():
     )
     batch = aggregate_batch([bundle_a, bundle_b])
     assert batch.n_bundles == 2
+    assert batch.n_bundles_named == 2
+    assert batch.n_bundles_anonymized == 0
     assert batch.n_replicates_total == 4
     assert batch.frac_novel == 0.7
-    assert batch.buried_score == 3.5
-    # fraction_uncovered: bundle_a 1.0, bundle_b 0.0 → mean 0.5
-    assert batch.fraction_uncovered == 0.5
+    assert batch.buried_score_named == 3.5
+    assert batch.buried_score_anonymized is None
+    # fraction_uncovered_named: bundle_a 1.0, bundle_b 0.0 → mean 0.5
+    assert batch.fraction_uncovered_named == 0.5
+    assert batch.fraction_uncovered_anonymized is None
+
+
+def test_aggregate_batch_named_and_anonymized_split():
+    """Anonymized bundles emit None novelty; their buried score lands in
+    the dedicated _anonymized headline field."""
+    named_a = aggregate_replicates(
+        [_replicate(frac_novel=0.5, buried_score=1, uncovered=True)]
+    )
+    anon_a = aggregate_replicates(
+        [_replicate(variant="anonymized", frac_novel=None, buried_score=4, uncovered=False)]
+    )
+    batch = aggregate_batch([named_a, anon_a])
+    assert batch.n_bundles == 2
+    assert batch.n_bundles_named == 1
+    assert batch.n_bundles_anonymized == 1
+    assert batch.frac_novel == 0.5
+    assert batch.buried_score_named == 1.0
+    assert batch.buried_score_anonymized == 4.0
+    assert batch.fraction_uncovered_named == 1.0
+    assert batch.fraction_uncovered_anonymized == 0.0
+
+
+def test_aggregate_replicates_rejects_mixed_variants():
+    a = _replicate(frac_novel=0.5, buried_score=3, uncovered=True)
+    b = _replicate(variant="anonymized", frac_novel=None, buried_score=4, uncovered=False)
+    try:
+        aggregate_replicates([a, b])
+    except ValueError as exc:
+        assert "variant" in str(exc)
+    else:
+        raise AssertionError("expected ValueError on mixed variants")
 
 
 def test_aggregate_batch_to_dict_round_trips():
@@ -123,3 +163,4 @@ def test_aggregate_batch_to_dict_round_trips():
     assert payload["n_replicates_total"] == 1
     assert payload["frac_novel"] == 0.4
     assert payload["per_bundle"][0]["dataset_id"] == "ds_a"
+    assert payload["per_bundle"][0]["variant"] == "named"

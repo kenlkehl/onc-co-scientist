@@ -54,11 +54,12 @@ def _perfect_transcript_for(manifest, *, hypothesis_text: str, max_iterations: i
     )
 
 
-def _make_replicate(manifest, transcript, judge) -> ReplicateScore:
-    novelty = score_novelty(transcript, judge)
-    buried = score_buried(manifest, transcript, judge)
+def _make_replicate(manifest, transcript, judge, *, variant: str = "named") -> ReplicateScore:
+    novelty = score_novelty(transcript, judge) if variant == "named" else None
+    buried = score_buried(manifest, transcript, judge, variant=variant)
     return ReplicateScore(
         dataset_id=manifest.dataset_id,
+        variant=variant,
         model_id=transcript.model_id,
         harness_id=transcript.harness_id,
         max_iterations=transcript.max_iterations,
@@ -118,11 +119,11 @@ def test_generate_build_score_pipeline(tmp_path):
     assert rep.buried_score == 1
     assert rep.uncovered is True
 
-    payload = json.loads((report_dir / "batch_score.json").read_text())
+    payload = json.loads((report_dir / "batch_score.json").read_text(encoding="utf-8"))
     assert payload["n_bundles"] == 1
     assert payload["frac_novel"] == 1.0
-    assert payload["buried_score"] == 1
-    md = (report_dir / "batch_score.md").read_text()
+    assert payload["buried_score_named"] == 1
+    md = (report_dir / "batch_score.md").read_text(encoding="utf-8")
     assert md.startswith("# Oncology Co-Scientist Benchmark")
 
 

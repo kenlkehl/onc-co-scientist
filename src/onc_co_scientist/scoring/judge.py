@@ -5,6 +5,15 @@ selector apply uniformly to both: ``judge_novelty`` (does each hypothesis
 go beyond paradigm consensus?) and ``judge_matches`` (does each hypothesis
 correspond to a single ground-truth association?).
 
+``judge_matches`` is variant-aware but the *information shown to the
+judge* is symmetric across variants: when a column mapping is
+available the rendered ground-truth block includes both the clinical
+name and the corresponding ``feature_NNN`` identifier for every
+variable and predicate key, and the free-text NL description is shown
+for both variants. The variant only determines which column-name
+space the agent's hypothesis text uses; the judge sees both spaces
+either way.
+
 Default backend is ``ClaudeCliJudge``: subprocess to ``claude
 --dangerously-skip-permissions -p <prompt>`` so the judge runs under the
 same Claude Code auth that's already on the box (no API key plumbing).
@@ -24,7 +33,11 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Protocol
+from typing import Iterable, Literal, Protocol
+
+from ..synthetic.schemas import AssociationForm, AssociationSpec
+
+Variant = Literal["named", "anonymized"]
 
 
 @dataclass
@@ -43,7 +56,12 @@ class Judge(Protocol):
     def judge_novelty(self, hypotheses: list[str]) -> list[NoveltyJudgment]: ...
 
     def judge_matches(
-        self, hypotheses: list[str], association_nl: str
+        self,
+        hypotheses: list[str],
+        spec: AssociationSpec,
+        *,
+        variant: Variant,
+        column_mapping: dict[str, str] | None = None,
     ) -> list[MatchJudgment]: ...
 
 
@@ -71,14 +89,32 @@ the same order:
 _MATCH_PROMPT = """\
 You are matching analyst-proposed hypotheses to a single ground-truth \
 association embedded in a synthetic dataset. For each hypothesis, decide \
-whether it semantically corresponds to the ground-truth association — \
-variables, direction of effect, and any subgroup must align. Paraphrasing, \
-synonym substitution, brand vs generic names, and mechanism-class \
-language are fine.
+whether it would, if confirmed, correspond to the ground-truth association \
+— i.e. whether it identifies (or proposes a method capable of identifying) \
+the same data-generating process.
+
+A hypothesis MATCHES if all the following hold:
+1. It points at the same set of feature/variable column(s) and the same \
+outcome column listed in the spec. Each variable below is shown with \
+both its clinical name and the corresponding anonymized identifier \
+(``feature_NNN``) where applicable; the analyst was given only one of \
+these two name spaces, so a hypothesis that uses either name is referring \
+to the same underlying column. Treat clinical names and ``feature_NNN`` \
+identifiers as fully interchangeable.
+2. It describes (or proposes to investigate) the same relationship. \
+Paraphrasing, synonyms, brand-vs-generic names, and mechanism-class \
+language are fine. The hypothesis does NOT have to specify the exact \
+functional form: a hypothesis that proposes investigating these variables \
+with a method reasonably expected to capture the spec's functional form \
+counts as matching — e.g. a tree ensemble or interaction-aware model for \
+an interaction; subgroup analysis, stratification, or a heterogeneous- \
+treatment-effect model for a subgroup-conditional effect; a regression \
+or test of association for a main effect.
+3. The direction of effect, if specified by the hypothesis, agrees with \
+the ground truth.
 
 Ground-truth association:
-{association_nl}
-
+{spec_block}
 Hypotheses (one per item, indexed in order):
 {numbered}
 
@@ -88,8 +124,93 @@ the same order:
 """
 
 
+_FORM_HUMAN: dict[AssociationForm, str] = {
+    AssociationForm.main_effect: (
+        "main effect — the variable directly predicts the outcome"
+    ),
+    AssociationForm.interaction: (
+        "interaction — two or more variables jointly affect the outcome "
+        "(effects depend on combinations of values, not each variable alone)"
+    ),
+    AssociationForm.subgroup_conditional: (
+        "subgroup-conditional — the relationship is active only within a "
+        "defined subset of patients"
+    ),
+}
+
+
+def _direction_human(direction: int) -> str:
+    if direction > 0:
+        return "positive (increases the outcome)"
+    if direction < 0:
+        return "negative (decreases the outcome)"
+    return "null / no expected directional effect"
+
+
 def _format_numbered(hypotheses: list[str]) -> str:
     return "\n".join(f"{i + 1}. {h}" for i, h in enumerate(hypotheses))
+
+
+def _bilingual_name(
+    col: str,
+    forward: dict[str, str] | None,
+    inverse: dict[str, str] | None,
+) -> str:
+    """Render ``col`` as ``clinical (anonymized: feature_NNN)`` when both
+    sides are available; otherwise return ``col`` verbatim.
+
+    ``forward`` is ``{clinical → feature_NNN}``; ``inverse`` is its reverse.
+    Outcome and id columns are excluded from anonymization (they appear
+    verbatim in both spaces) and so end up in neither map — those return
+    ``col`` unchanged.
+    """
+    if forward is None:
+        return col
+    if col in forward:
+        return f"{col} (anonymized: {forward[col]})"
+    if inverse is not None and col in inverse:
+        return f"{inverse[col]} (anonymized: {col})"
+    return col
+
+
+def _render_spec_block(
+    spec: AssociationSpec,
+    variant: Variant,
+    column_mapping: dict[str, str] | None = None,
+) -> str:
+    """Render the structured ground-truth block of the match prompt.
+
+    Variables and (subgroup) predicate keys are rendered bilingually when
+    ``column_mapping`` is provided (``{clinical → feature_NNN}``) so the
+    judge sees the same information regardless of which variant the agent
+    saw. The free-text NL description is included for both variants.
+    """
+    inverse = (
+        {v: k for k, v in column_mapping.items()}
+        if column_mapping is not None
+        else None
+    )
+
+    lines: list[str] = []
+    lines.append(f"- Outcome column: {spec.outcome}")
+    lines.append("- Variables involved:")
+    for v in spec.variables:
+        lines.append(f"    * {_bilingual_name(v, column_mapping, inverse)}")
+    lines.append(f"- Functional form: {_FORM_HUMAN[spec.form]}")
+    if spec.subgroup is not None:
+        lines.append(
+            f"- Subgroup (relationship active only here): "
+            f"{spec.subgroup.description}"
+        )
+        for k, val in spec.subgroup.predicate.items():
+            lines.append(
+                f"    * Predicate: {_bilingual_name(k, column_mapping, inverse)} = {val}"
+            )
+    lines.append(f"- Direction of effect on outcome: {_direction_human(spec.direction)}")
+    lines.append(
+        f"- Plain-English description: {spec.natural_language_description}"
+    )
+    return "\n".join(lines) + "\n"
 
 
 def _build_novelty_prompt(hypotheses: list[str]) -> str:
@@ -98,9 +219,15 @@ def _build_novelty_prompt(hypotheses: list[str]) -> str:
     )
 
 
-def _build_match_prompt(hypotheses: list[str], association_nl: str) -> str:
+def _build_match_prompt(
+    hypotheses: list[str],
+    spec: AssociationSpec,
+    *,
+    variant: Variant,
+    column_mapping: dict[str, str] | None = None,
+) -> str:
     return _MATCH_PROMPT.format(
-        association_nl=association_nl,
+        spec_block=_render_spec_block(spec, variant, column_mapping),
         numbered=_format_numbered(hypotheses),
         n=len(hypotheses),
     )
@@ -204,11 +331,18 @@ class ClaudeCliJudge:
         return out
 
     def judge_matches(
-        self, hypotheses: list[str], association_nl: str
+        self,
+        hypotheses: list[str],
+        spec: AssociationSpec,
+        *,
+        variant: Variant,
+        column_mapping: dict[str, str] | None = None,
     ) -> list[MatchJudgment]:
         out: list[MatchJudgment] = []
         for chunk in _chunked(hypotheses, self.batch_size):
-            prompt = _build_match_prompt(chunk, association_nl)
+            prompt = _build_match_prompt(
+                chunk, spec, variant=variant, column_mapping=column_mapping
+            )
             payload = self._run_chunk(prompt, expected=len(chunk))
             for entry in payload:
                 out.append(
@@ -255,9 +389,11 @@ class StubJudge:
 
     ``novel_phrases`` — substrings; a hypothesis is novel iff at least one
     matches.
-    ``match_phrases`` — keyed by association_nl substring (an entry that
-    appears within the spec's natural-language description), maps to the
-    set of hypothesis substrings that should match.
+    ``match_phrases`` — keyed by a substring of the rendered ground-truth
+    spec block (e.g. a clinical word from the NL description, or a
+    ``feature_NNN`` token from the variables list), maps to the set of
+    hypothesis substrings that should match. The first key whose substring
+    appears in the rendered block is the one applied.
     """
 
     novel_phrases: frozenset[str] = frozenset()
@@ -277,12 +413,17 @@ class StubJudge:
         ]
 
     def judge_matches(
-        self, hypotheses: list[str], association_nl: str
+        self,
+        hypotheses: list[str],
+        spec: AssociationSpec,
+        *,
+        variant: Variant,
+        column_mapping: dict[str, str] | None = None,
     ) -> list[MatchJudgment]:
-        # Pick the first match-key whose substring appears in the spec NL.
+        haystack = _render_spec_block(spec, variant, column_mapping).lower()
         active: frozenset[str] = frozenset()
         for key, phrases in self.match_phrases.items():
-            if key.lower() in association_nl.lower():
+            if key.lower() in haystack:
                 active = phrases
                 break
         return [

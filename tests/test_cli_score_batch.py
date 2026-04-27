@@ -74,11 +74,11 @@ def _stub_config(path: Path) -> Path:
     return path
 
 
-def test_score_batch_skips_anonymized_bundles_and_writes_report(tmp_path: Path) -> None:
+def test_score_batch_scores_named_and_anonymized_and_writes_report(tmp_path: Path) -> None:
     synth_root, tasks_root = _build_synth_and_tasks(tmp_path)
-    # Drop two replicate transcripts under each bundle (named AND anonymized
-    # — to verify anonymized bundles are filtered out by the CLI, not by the
-    # absence of transcripts).
+    # Drop two replicate transcripts under each bundle (named AND
+    # anonymized) — both variants should now be scored, with novelty
+    # only computed for named.
     for ct in ("crc", "breast"):
         for variant in ("named", "anonymized"):
             manifest = read_manifest(synth_root / ct / variant)
@@ -109,22 +109,37 @@ def test_score_batch_skips_anonymized_bundles_and_writes_report(tmp_path: Path) 
     )
     assert result.exit_code == 0, result.output
 
-    payload = json.loads((out_dir / "batch_score.json").read_text())
-    # 2 cancer types × named only = 2 bundles; anonymized excluded.
-    assert payload["n_bundles"] == 2
-    assert payload["n_replicates_total"] == 4
-    for bundle in payload["per_bundle"]:
+    payload = json.loads((out_dir / "batch_score.json").read_text(encoding="utf-8"))
+    # 2 cancer types × 2 variants = 4 bundles; 2 replicates each.
+    assert payload["n_bundles"] == 4
+    assert payload["n_bundles_named"] == 2
+    assert payload["n_bundles_anonymized"] == 2
+    assert payload["n_replicates_total"] == 8
+
+    by_variant: dict[str, list] = {"named": [], "anonymized": []}
+    for b in payload["per_bundle"]:
+        by_variant[b["variant"]].append(b)
+    assert len(by_variant["named"]) == 2
+    assert len(by_variant["anonymized"]) == 2
+
+    for bundle in by_variant["named"]:
         assert bundle["n_replicates"] == 2
         # The single hypothesis "feature_037 ..." matches our novel phrase.
         assert bundle["frac_novel_mean"] == 1.0
+    for bundle in by_variant["anonymized"]:
+        assert bundle["n_replicates"] == 2
+        # Novelty is not computed for anonymized → mean is None.
+        assert bundle["frac_novel_mean"] is None
 
-    md = (out_dir / "batch_score.md").read_text()
+    md = (out_dir / "batch_score.md").read_text(encoding="utf-8")
     assert "Batch Scoring Report" in md
     assert "Novelty %" in md
-    assert "Buried discovery iteration" in md
+    assert "Buried discovery iteration — named" in md
+    assert "Buried discovery iteration — anonymized" in md
 
-    judgments = (out_dir / "batch_judgments.jsonl").read_text().splitlines()
-    assert len(judgments) == 4  # 2 bundles × 2 reps × 1 hypothesis each
+    # Only named replicates contribute to the judgments JSONL.
+    judgments = (out_dir / "batch_judgments.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(judgments) == 4  # 2 named bundles × 2 reps × 1 hypothesis each
 
 
 def test_score_batch_errors_when_no_transcripts(tmp_path: Path) -> None:
@@ -187,7 +202,8 @@ def test_score_run_writes_single_replicate_report(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.output
 
-    payload = json.loads((out_dir / "batch_score.json").read_text())
+    payload = json.loads((out_dir / "batch_score.json").read_text(encoding="utf-8"))
     assert payload["n_bundles"] == 1
     assert payload["n_replicates_total"] == 1
+    assert payload["per_bundle"][0]["variant"] == "named"
     assert payload["per_bundle"][0]["frac_novel_mean"] == 1.0

@@ -73,6 +73,28 @@ def read_description(bundle_dir: Path | str) -> str:
     return (public_dir(bundle_dir) / DESCRIPTION_FILENAME).read_text(encoding="utf-8")
 
 
+def load_column_mapping(bundle_dir: Path | str) -> dict[str, str] | None:
+    """Locate the ``{clinical_name: feature_NNN}`` mapping for a bundle.
+
+    Looks first in ``bundle_dir/column_mapping.json`` (the anonymized
+    bundle has this written by ``write_bundle_pair``). For a named
+    bundle, falls back to the sibling ``../anonymized/column_mapping.json``
+    so scoring code can render bilingual column names against either
+    variant. Returns ``None`` when no mapping is available — e.g. a
+    custom bundle without an anonymized twin — and callers fall back to
+    single-name rendering.
+    """
+    bd = Path(bundle_dir)
+    direct = bd / COLUMN_MAPPING_FILENAME
+    if direct.is_file():
+        return json.loads(direct.read_text(encoding="utf-8"))
+    if bd.name == NAMED_SUBDIR:
+        sibling = bd.parent / ANONYMIZED_SUBDIR / COLUMN_MAPPING_FILENAME
+        if sibling.is_file():
+            return json.loads(sibling.read_text(encoding="utf-8"))
+    return None
+
+
 def discover_bundles(root: Path | str) -> list[Path]:
     """Recursively find dataset bundle directories under ``root``.
 
