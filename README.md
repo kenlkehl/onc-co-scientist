@@ -143,6 +143,123 @@ ocs score run \
     --judge claude-cli
 ```
 
+## Prototype: CAA paradigm-bias vectors
+
+Aim 2.2 now has a prototype under `ocs caa`. It derives residual-stream
+contrastive activation addition vectors from paired prompts, subtracts the
+oncology-knowledge component from the paradigm-adherence vector, and can run a
+single steered generation with either additive steering or runtime projection
+ablation.
+
+### Environment
+
+The CAA commands need a Transformers/PyTorch environment with enough VRAM for
+the open-weights model. On this workstation, use the existing environment:
+
+```bash
+export PYTHONPATH="$PWD/src"
+export PY=/home/kenneth_kehl/thisenv/bin/python
+```
+
+If starting from a fresh environment instead, install the optional ML stack:
+
+```bash
+uv pip install -e ".[interventions]"
+```
+
+### Download Gemma 4 31B
+
+The public full-precision Hugging Face model ID is hyphenated:
+`google/gemma-4-31B-it`. Download it into the local cache under `~/models`:
+
+```bash
+$PY -c "from huggingface_hub import snapshot_download; print(snapshot_download('google/gemma-4-31B-it', cache_dir='/home/kenneth_kehl/models'))"
+```
+
+The pre-downloaded NVFP4 cache under
+`~/models/models--nvidia--Gemma-4-31B-IT-NVFP4` contains quantized weights but
+is not the full Google bfloat16 snapshot used for activation capture.
+
+### Derive Vectors
+
+Bootstrap a small synthetic pair set. These are smoke-test pairs, not the final
+grant-grade named-vs-anonymized trace corpus:
+
+```bash
+$PY -m onc_co_scientist.cli caa write-pairs \
+    --out ../data/caa/bootstrap_pairs.jsonl \
+    --overwrite
+```
+
+Derive the CAA vectors. For a fast smoke test on a 96 GB GPU, use one middle
+layer. For a broader sweep, replace `--layers 30` with a comma list such as
+`20,30,40,50` or `last:8`.
+
+```bash
+$PY -m onc_co_scientist.cli caa derive \
+    --pairs ../data/caa/bootstrap_pairs.jsonl \
+    --out ../data/caa/gemma4_31b_caa_layer30.npz \
+    --model google/gemma-4-31B-it \
+    --cache-dir /home/kenneth_kehl/models \
+    --layers 30 \
+    --position last \
+    --dtype bfloat16 \
+    --local-files-only
+```
+
+Inspect the artifact:
+
+```bash
+$PY -m onc_co_scientist.cli caa describe \
+    --vector-file ../data/caa/gemma4_31b_caa_layer30.npz
+```
+
+The artifact contains:
+
+- `paradigm_adherence`: positive named-oncology-context minus anonymized/data-first context.
+- `oncology_knowledge`: cancer-relevant abstract context minus cancer-irrelevant biomedical context.
+- `paradigm_orthogonalized`: the component of `paradigm_adherence` orthogonal to `oncology_knowledge`.
+
+### Try Steering
+
+Negative additive scale pushes against the positive paradigm-adherence
+direction:
+
+```bash
+$PY -m onc_co_scientist.cli caa generate \
+    --vector-file ../data/caa/gemma4_31b_caa_layer30.npz \
+    --model google/gemma-4-31B-it \
+    --cache-dir /home/kenneth_kehl/models \
+    --local-files-only \
+    --dtype bfloat16 \
+    --concept paradigm_orthogonalized \
+    --mode add \
+    --scale -0.1 \
+    --max-new-tokens 128 \
+    --out ../data/caa/steered_add.txt \
+    --prompt "Propose oncology hypotheses for a dataset where accepted biomarkers may be misleading. Be open to high-order feature conjunctions."
+```
+
+Runtime projection ablation is a non-destructive analogue of abliteration:
+
+```bash
+$PY -m onc_co_scientist.cli caa generate \
+    --vector-file ../data/caa/gemma4_31b_caa_layer30.npz \
+    --model google/gemma-4-31B-it \
+    --cache-dir /home/kenneth_kehl/models \
+    --local-files-only \
+    --dtype bfloat16 \
+    --concept paradigm_orthogonalized \
+    --mode ablate \
+    --scale 1.0 \
+    --max-new-tokens 128 \
+    --out ../data/caa/steered_ablate.txt \
+    --prompt "Propose oncology hypotheses for a dataset where accepted biomarkers may be misleading. Be open to high-order feature conjunctions."
+```
+
+The current implementation modifies activations at inference time only; it does
+not write abliterated model weights.
+
 ## Layout
 
 Top-level package: `src/onc_co_scientist/`. See docstrings for module-level detail.

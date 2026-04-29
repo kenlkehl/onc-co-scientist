@@ -15,12 +15,20 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
+import numpy as np
 import typer
 import yaml
 from rich.console import Console
 
 from .harness.task_spec import build_task, build_tasks
 from .harness.transcript import Transcript
+from .interventions import (
+    VectorBundle,
+    default_contrast_pairs,
+    metadata_path_for,
+    read_contrast_pairs,
+    write_contrast_pairs,
+)
 from .scoring import (
     ClaudeCliJudge,
     Judge,
@@ -65,6 +73,13 @@ class JudgeBackend(StrEnum):
     claude_cli = "claude-cli"
     stub = "stub"
 
+
+class SteeringMode(StrEnum):
+    """How to apply a CAA vector at generation time."""
+
+    add = "add"
+    ablate = "ablate"
+
 app = typer.Typer(
     help="Oncology Co-Scientist Benchmark CLI.",
     no_args_is_help=True,
@@ -75,9 +90,14 @@ harness_app = typer.Typer(
     help="Harness task bundle builder (Aim 1.2).", no_args_is_help=True
 )
 score_app = typer.Typer(help="Transcript scoring (Aim 1.2).", no_args_is_help=True)
+caa_app = typer.Typer(
+    help="Contrastive activation addition prototype (Aim 2.2).",
+    no_args_is_help=True,
+)
 app.add_typer(synth_app, name="synth")
 app.add_typer(harness_app, name="harness")
 app.add_typer(score_app, name="score")
+app.add_typer(caa_app, name="caa")
 
 console = Console()
 
@@ -612,6 +632,292 @@ def score_batch(
         f"[green]Batch report written to[/green] {out_path} "
         f"({batch.n_bundles} bundle(s), {batch.n_replicates_total} replicate(s))"
     )
+
+
+@caa_app.command("write-pairs")
+def caa_write_pairs(
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            help="JSONL file to write synthetic bootstrap contrast pairs into.",
+        ),
+    ],
+    overwrite: Annotated[
+        bool,
+        typer.Option("--overwrite", help="Replace an existing pairs file."),
+    ] = False,
+) -> None:
+    """Write a small synthetic contrast-pair set for CAA smoke tests.
+
+    The generated pairs are a bootstrap fixture. For the grant-grade run,
+    replace or augment them with named-vs-anonymized agent traces and
+    cancer-vs-non-cancer abstract pairs.
+    """
+    if out.exists() and not overwrite:
+        raise typer.BadParameter(f"{out} already exists; pass --overwrite to replace it.")
+    pairs = default_contrast_pairs()
+    write_contrast_pairs(pairs, out)
+    by_concept: dict[str, int] = {}
+    for pair in pairs:
+        by_concept[pair.concept] = by_concept.get(pair.concept, 0) + 1
+    console.print(
+        f"[green]Wrote[/green] {len(pairs)} contrast pairs to {out} "
+        f"({by_concept})"
+    )
+
+
+@caa_app.command("derive")
+def caa_derive(
+    pairs_path: Annotated[
+        Path,
+        typer.Option(
+            "--pairs",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="JSONL contrast pairs from `ocs caa write-pairs` or trace curation.",
+        ),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Output .npz vector artifact path."),
+    ],
+    model_id: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            help="Transformers model ID or local model path.",
+        ),
+    ] = "google/gemma-4-31B-it",
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--cache-dir",
+            help="Hugging Face cache directory. Use ~/models for the local cache.",
+        ),
+    ] = Path("~/models"),
+    layers: Annotated[
+        str,
+        typer.Option(
+            "--layers",
+            help="Layer selection: all, middle, last:N, or comma list (e.g. 20,30,40,50).",
+        ),
+    ] = "middle",
+    position: Annotated[
+        str,
+        typer.Option(
+            "--position",
+            help="Activation pooling position: last or mean.",
+        ),
+    ] = "last",
+    local_files_only: Annotated[
+        bool,
+        typer.Option(
+            "--local-files-only/--allow-download",
+            help="Use only locally cached model files, or allow Hugging Face downloads.",
+        ),
+    ] = True,
+    dtype: Annotated[
+        str,
+        typer.Option("--dtype", help="Torch dtype: auto, bfloat16, float16, float32."),
+    ] = "auto",
+    device_map: Annotated[
+        str,
+        typer.Option("--device-map", help="Transformers device_map value."),
+    ] = "auto",
+    trust_remote_code: Annotated[
+        bool,
+        typer.Option("--trust-remote-code", help="Allow custom model code from HF."),
+    ] = False,
+    enable_thinking: Annotated[
+        bool,
+        typer.Option(
+            "--enable-thinking/--disable-thinking",
+            help="Pass Gemma thinking-mode preference through the chat template when supported.",
+        ),
+    ] = False,
+) -> None:
+    """Derive paradigm, knowledge, and orthogonalized CAA vectors."""
+    from .interventions.caa import (
+        derive_caa_vectors,
+        infer_num_layers,
+        load_transformers_text_model,
+        parse_layers,
+    )
+
+    if position not in {"last", "mean"}:
+        raise typer.BadParameter("--position must be 'last' or 'mean'.")
+    cache = cache_dir.expanduser() if cache_dir is not None else None
+    pairs = read_contrast_pairs(pairs_path)
+    processor, model = load_transformers_text_model(
+        model_id,
+        cache_dir=cache,
+        local_files_only=local_files_only,
+        dtype=dtype,
+        device_map=device_map,
+        trust_remote_code=trust_remote_code,
+    )
+    selected_layers = parse_layers(layers, n_layers=infer_num_layers(model))
+    bundle = derive_caa_vectors(
+        pairs,
+        processor=processor,
+        model=model,
+        layers=selected_layers,
+        position=position,  # type: ignore[arg-type]
+        enable_thinking=enable_thinking,
+    )
+    bundle.metadata["requested_model"] = model_id
+    bundle.metadata["pairs_path"] = str(pairs_path)
+    bundle.save(out)
+    console.print(
+        f"[green]Wrote[/green] CAA vectors to {out}\n"
+        f"  metadata: {metadata_path_for(out)}\n"
+        f"  concepts: {', '.join(bundle.concepts())}\n"
+        f"  layers:   {selected_layers}"
+    )
+
+
+@caa_app.command("describe")
+def caa_describe(
+    vector_file: Annotated[
+        Path,
+        typer.Option("--vector-file", exists=True, dir_okay=False, readable=True),
+    ],
+) -> None:
+    """Print a compact summary of a vector artifact."""
+    bundle = VectorBundle.load(vector_file)
+    payload = {
+        "vector_file": str(vector_file),
+        "metadata_file": str(metadata_path_for(vector_file)),
+        "concepts": {
+            concept: {
+                "layers": bundle.layers_for(concept),
+                "norms": {
+                    str(layer): float(np.linalg.norm(bundle.vector(concept, layer)))
+                    for layer in bundle.layers_for(concept)
+                },
+            }
+            for concept in bundle.concepts()
+        },
+        "metadata": bundle.metadata,
+    }
+    console.print_json(json.dumps(payload))
+
+
+@caa_app.command("generate")
+def caa_generate(
+    vector_file: Annotated[
+        Path,
+        typer.Option("--vector-file", exists=True, dir_okay=False, readable=True),
+    ],
+    prompt: Annotated[
+        str,
+        typer.Option("--prompt", help="User prompt for steered generation."),
+    ],
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Optional path to write the generated text."),
+    ] = None,
+    system: Annotated[
+        str | None,
+        typer.Option("--system", help="Optional system prompt."),
+    ] = None,
+    concept: Annotated[
+        str,
+        typer.Option("--concept", help="Vector concept to apply."),
+    ] = "paradigm_orthogonalized",
+    mode: Annotated[
+        SteeringMode,
+        typer.Option(
+            "--mode",
+            help="'add' adds scale * vector; 'ablate' projects hidden states off the vector.",
+            case_sensitive=False,
+        ),
+    ] = SteeringMode.add,
+    scale: Annotated[
+        float | None,
+        typer.Option(
+            "--scale",
+            help="Steering strength. Defaults to -1.0 for add and 1.0 for ablate.",
+        ),
+    ] = None,
+    layers: Annotated[
+        str | None,
+        typer.Option(
+            "--layers",
+            help="Optional layer override: all, middle, last:N, or comma list.",
+        ),
+    ] = None,
+    model_id: Annotated[
+        str,
+        typer.Option("--model", help="Transformers model ID or local model path."),
+    ] = "google/gemma-4-31B-it",
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option("--cache-dir", help="Hugging Face cache directory."),
+    ] = Path("~/models"),
+    local_files_only: Annotated[
+        bool,
+        typer.Option("--local-files-only/--allow-download"),
+    ] = True,
+    dtype: Annotated[str, typer.Option("--dtype")] = "auto",
+    device_map: Annotated[str, typer.Option("--device-map")] = "auto",
+    max_new_tokens: Annotated[int, typer.Option("--max-new-tokens", min=1)] = 512,
+    temperature: Annotated[float, typer.Option("--temperature", min=0.0)] = 1.0,
+    top_p: Annotated[float, typer.Option("--top-p", min=0.0, max=1.0)] = 0.95,
+    top_k: Annotated[int, typer.Option("--top-k", min=0)] = 64,
+    trust_remote_code: Annotated[bool, typer.Option("--trust-remote-code")] = False,
+    enable_thinking: Annotated[
+        bool,
+        typer.Option("--enable-thinking/--disable-thinking"),
+    ] = False,
+) -> None:
+    """Run one steered generation with additive CAA or runtime ablation."""
+    from .interventions.caa import (
+        generate_with_vector,
+        infer_num_layers,
+        load_transformers_text_model,
+        parse_layers,
+    )
+
+    cache = cache_dir.expanduser() if cache_dir is not None else None
+    bundle = VectorBundle.load(vector_file)
+    processor, model = load_transformers_text_model(
+        model_id,
+        cache_dir=cache,
+        local_files_only=local_files_only,
+        dtype=dtype,
+        device_map=device_map,
+        trust_remote_code=trust_remote_code,
+    )
+    selected_layers = (
+        parse_layers(layers, n_layers=infer_num_layers(model)) if layers else None
+    )
+    effective_scale = scale
+    if effective_scale is None:
+        effective_scale = -1.0 if mode is SteeringMode.add else 1.0
+    text = generate_with_vector(
+        prompt=prompt,
+        system=system,
+        vector_bundle=bundle,
+        concept=concept,
+        layers=selected_layers,
+        processor=processor,
+        model=model,
+        mode=mode.value,  # type: ignore[arg-type]
+        scale=effective_scale,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        enable_thinking=enable_thinking,
+    )
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        console.print(f"[green]Wrote[/green] steered generation to {out}")
+    console.print(text)
 
 
 if __name__ == "__main__":  # pragma: no cover
