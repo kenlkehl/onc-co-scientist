@@ -4,7 +4,10 @@
 # Skips steps 1 (synth) and 2 (build-task) — those outputs already exist on
 # disk. Cleans up failed run dirs (those without transcript.json, typically
 # left behind by a rate-limit interruption) so replicate numbering stays
-# contiguous, then re-runs step 3 (harness top-up) and step 4 (score).
+# contiguous, then re-runs step 4 (harness top-up) and step 5 (score) from
+# run_all.sh. (run_all.sh itself is also resumable — it runs the same cleanup
+# step before the harness — so this script is a faster path that skips the
+# always-overwriting synth + build-task steps.)
 #
 # Honors the same env-var contract as run_all.sh:
 #   OUT HARNESS JOBS REPLICATES PYTHON_ENV JUDGE
