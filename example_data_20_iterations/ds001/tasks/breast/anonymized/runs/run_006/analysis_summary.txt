@@ -1,0 +1,218 @@
+Analysis Summary — ds001_breast (50,000 patients, outcome pfs_months)
+=======================================================================
+
+Overview
+--------
+The cohort comprises 50,000 patient records from a breast-cancer-flavored
+EHR-derived dataset. Features are de-identified to opaque labels
+(feature_001 ... feature_127); the only outcome is pfs_months
+(progression-free survival in months; range 0–16.7, mean 4.69).
+The dataset has no missing values, ~83 binary features, ~37 continuous
+features, 7 small-cardinality ordinal features, and 2 multi-level
+categorical variables (feature_011 with values white/hispanic/black/asian/other
+and feature_089 with values medicare/private/medicaid/uninsured), which
+strongly resemble race/ethnicity and insurance, respectively.
+
+Across 25 iterations I screened main effects, fit multivariable
+adjusted models, tested pairwise and three-way interactions, and
+explicitly probed sociodemographic disparities in both outcome and
+treatment receipt.
+
+1. Strongest main-effect predictors of pfs_months
+-------------------------------------------------
+A 13-variable OLS reaches R²=0.79; all listed coefficients have p<<1e-30.
+
+  Positive on PFS:
+   - feature_080 (continuous, range 30–90, mean 65; behaves like age in
+     years): β = +0.176 months per year. Strongest single predictor
+     (Pearson r = +0.701). Significant convex (quadratic) component
+     (β(age²) = +6.1e-4, p = 1.3e-59) — older patients have proportionally
+     more PFS gain than a strictly linear model would predict.
+   - feature_042 (binary, prevalence 35%; behaves like a treatment):
+     marginal +1.10 months; adjusted main β = +1.10. Strongly modified
+     by biomarkers (see §3).
+   - feature_111 (binary, prevalence 70%; behaves like a positive
+     prognostic biomarker, e.g. hormone-receptor positive status):
+     adjusted β = +0.53.
+   - feature_019 (continuous, range 1.5–5.5, mean 3.8): adjusted
+     β = +0.476 per unit.
+
+  Negative on PFS:
+   - feature_063 (3-level ordinal 0/1/2; means 5.64 / 4.44 / 3.29
+     months; suggests a stage- or burden-of-disease grade): β = -1.17
+     per level.
+   - feature_056 (binary, 30%): β = -1.55.
+   - feature_048 (binary, 10%): β = -0.98.
+   - feature_015 (binary, 35%): β = -0.58.
+   - feature_040 (binary, 18%): β = -0.47.
+   - feature_067 (continuous, range 0–24.6): β = -0.077 per unit.
+   - feature_101 (continuous, range 1–100, mean 15.5): β = -0.019
+     per unit; behaves as a proliferation/biomarker score.
+
+Most other features (the remaining ~110 columns, including the various
+laboratory values feature_065, feature_006, feature_007, feature_035,
+feature_046, feature_059, feature_087, feature_088, feature_002,
+feature_108, etc.) had no incremental adjusted association with
+pfs_months (all p>0.10 in the joint model). Two features (feature_039
+and feature_034) had highly significant marginal effects that
+disappeared entirely after adjustment, because they are tightly
+collinear with already-included biomarkers (feature_039 vs feature_111:
+r=+0.67; feature_034 mutually exclusive with feature_040).
+
+2. Sociodemographic factors: no detectable disparities
+------------------------------------------------------
+A central question I tested across multiple iterations was whether the
+race-like (feature_011) and insurance-like (feature_089) variables
+predict treatment access or outcome. Findings were uniformly null:
+
+   (a) Marginal pfs_months by race: ANOVA F = 0.85, p = 0.49. Mean
+       PFS by race ranged only 4.68–4.76 months (spread 0.08).
+   (b) Marginal pfs_months by insurance: ANOVA F = 0.31, p = 0.82.
+       Range 4.68–4.73 (spread 0.05).
+   (c) After adjustment for the 13 clinical/biomarker predictors,
+       all race dummies have p > 0.28 and all insurance dummies
+       p > 0.59.
+   (d) Receipt of the treatment-like feature_042 was equal across
+       race (range 0.337–0.351) and insurance (range 0.346–0.350).
+       Adjusted logistic regressions (in feature_111=1 patients,
+       controlling for age, stage, and modifying biomarkers) showed
+       no race or insurance effect on treatment receipt (all p > 0.5).
+   (e) Within the maximally treatment-responsive subgroup
+       (feature_111=1, feature_015=0, feature_040=0), the absolute
+       PFS benefit of feature_042 was 2.87–2.98 months across all
+       five race categories — the largest pairwise gap was 0.11
+       months. Race × treatment interaction terms were not
+       significant (all p > 0.09).
+   (f) Insurance × treatment interactions in the responsive subgroup
+       were also not significant (all p > 0.15).
+   (g) The standard deviations of pfs_months across race categories
+       differ by less than 0.04 months — no detectable variance
+       heterogeneity.
+
+In short, this cohort shows no measurable disparity in either
+treatment access or treatment effectiveness as a function of race or
+insurance, which is surprising relative to most real-world
+oncology data and may reflect either equitable care in the source
+population or, more likely, the design of this synthetic-flavored
+benchmark dataset.
+
+3. The dominant clinical story: predictive biomarkers for feature_042
+---------------------------------------------------------------------
+The richest finding is heterogeneity of feature_042 (a
+treatment-like binary variable) effect across biomarker subgroups.
+The pattern is that of a targeted therapy whose benefit is restricted
+to a single, well-defined "responsive" subgroup.
+
+   - Pairwise interactions (all p ≈ 0):
+       feature_042 × feature_111 → β = +1.56 (synergy)
+       feature_042 × feature_040 → β = -1.34 (loss in feature_040=1)
+       feature_042 × feature_015 → β = -1.67 (loss in feature_015=1)
+       feature_042 × feature_039 → β = +1.03 (mostly via feature_111)
+       feature_042 × feature_101 → β = -0.053 per unit (loss with rising
+            feature_101)
+
+   - Three-way interactions:
+       feature_042 × feature_111 × feature_040: β = -1.91 (p ≈ 0)
+       feature_042 × feature_111 × feature_015: β = -2.40 (p ≈ 0)
+       feature_042 × feature_111 × feature_101: β = -0.075/unit (p ≈ 0)
+
+   - Stratified raw means make the pattern unambiguous:
+       feature_111=0 / feature_042=0: 4.30 mo (n=9,880)
+       feature_111=0 / feature_042=1: 4.29 mo (n=5,234)  — no benefit
+       feature_111=1 / feature_042=0: 4.31 mo (n=22,692)
+       feature_111=1 / feature_042=1: 5.89 mo (n=12,194)  — large benefit
+
+       Within feature_111=1, by feature_015:
+         feature_015=0 / feature_042=1 → 6.68 (untreated 4.30): +2.38 mo
+         feature_015=1 / feature_042=1 → 4.36 (untreated 4.33): no benefit
+
+       Within feature_111=1 / feature_015=0 / feature_040=0 (n=18,681),
+       by quartile of feature_101:
+         Q1 (low):  4.30 → 6.92  (+2.62 mo)
+         Q2:        4.31 → 6.99  (+2.68 mo)
+         Q3:        4.31 → 5.27  (+0.96 mo)
+         Q4 (high): 4.33 → 4.34  (+0.01 mo)
+
+   - Benefit is essentially constant across patient age (feature_080 ×
+     feature_042 interaction p = 0.13) and across feature_063 stage
+     levels (interaction p = 0.26), so older and more-advanced
+     patients gain the same absolute benefit when biomarker-eligible.
+
+   - Adding the four feature_042-interaction terms (feature_042 ×
+     feature_111, ... × feature_101, ... × feature_015, ... ×
+     feature_040) to the 13-variable main-effects model raises R²
+     from 0.792 to 0.889 — almost 10 percentage points of additional
+     variance explained, indicating treatment effect heterogeneity is
+     a major component of pfs_months variance.
+
+4. Hypotheses supported vs refuted
+----------------------------------
+Supported:
+   • feature_080 positively predicts PFS, including a small but real
+     quadratic term.
+   • feature_063 negatively predicts PFS in a near-linear ordinal way.
+   • feature_056, feature_048, feature_015, feature_040, feature_067,
+     feature_101 are negative prognostic factors (independent main
+     effects).
+   • feature_042 is a treatment-like variable whose benefit is
+     restricted to feature_111=1 patients with feature_015=0,
+     feature_040=0, and low feature_101.
+   • feature_019 has an independent positive effect on PFS, attenuated
+     in feature_048=1 patients (interaction β = -0.099, p = 0.005).
+   • The full main-effects + interaction OLS explains ~89% of variance.
+
+Refuted (nominally significant marginal effect that does NOT survive
+adjustment, or hypothesized but null):
+   • feature_039 has no independent effect on PFS after adjusting for
+     feature_111 (collinear).
+   • feature_034 has no independent effect on PFS after adjustment.
+   • Lab-like continuous features (feature_065, feature_006,
+     feature_007, feature_035, feature_046, feature_059, feature_087,
+     feature_088, feature_002, feature_108) show no adjusted effect
+     on PFS.
+   • Race (feature_011) does NOT predict PFS (marginal or adjusted),
+     does NOT predict feature_042 receipt, and does NOT modify
+     feature_042 benefit.
+   • Insurance (feature_089) does NOT predict PFS (marginal or
+     adjusted), does NOT predict feature_042 receipt, and does NOT
+     modify feature_042 benefit.
+   • Age does NOT modify treatment effect.
+   • feature_063 stage does NOT modify treatment effect (treatment is
+     additive across stages).
+   • feature_067 effect on PFS is uniform across feature_111 status.
+
+5. Overall conclusions
+----------------------
+The clinical structure of this cohort is dominated by:
+
+   (i) Strong, monotone main effects of age (feature_080), stage-like
+       ordinal feature_063, and a small set of binary biomarkers that
+       behave like prognostic flags (feature_056, feature_048,
+       feature_015, feature_040, feature_111, feature_042) plus three
+       continuous biomarker scores (feature_067, feature_019,
+       feature_101). Together with their interactions these explain
+       ~89% of pfs_months variance.
+
+   (ii) A clear targeted-therapy pattern: feature_042 confers
+        ~+2.6–2.7 months PFS benefit specifically in patients who are
+        feature_111-positive, feature_015-negative, feature_040-negative,
+        and have low feature_101. This is consistent in shape with
+        biomarker-driven targeted oncology therapy (e.g., a CDK4/6
+        inhibitor in HR+/HER2-/non-visceral/low-proliferation
+        breast cancer), although the de-identification prevents a
+        definitive labeling.
+
+   (iii) An equally clear absence of sociodemographic disparities:
+         neither race nor insurance predicts outcome, treatment
+         receipt, or treatment effect modification at any analytic
+         level. Age, stage distributions, biomarker prevalences, and
+         treatment access are all near-identical across race and
+         insurance categories. In the responsive subgroup the
+         treatment benefit is within ±0.1 months of the same value
+         for every race and every insurance type tested.
+
+The most useful predictive variables for pfs_months in this dataset
+are feature_080, feature_063, the biomarker quintet (feature_111,
+feature_056, feature_048, feature_015, feature_040), the continuous
+biomarkers (feature_067, feature_019, feature_101), and the
+treatment-by-biomarker interactions involving feature_042.

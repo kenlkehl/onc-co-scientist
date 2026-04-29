@@ -1,0 +1,141 @@
+Analysis summary — ds001_nsclc (n=50,000; 17% objective response rate)
+================================================================================
+
+Overview
+--------
+The dataset is a real-world NSCLC cohort with 123 anonymized features and a
+binary `objective_response` outcome. Across 25 iterations I screened all
+features univariately, then drilled into the strongest signals with stratified,
+interaction, and multivariable models. The clearest story to emerge is a
+classic NSCLC immunotherapy biology pattern: a small set of treatment-like
+features synergize with a likely PD-L1 expression measure, on top of several
+strong but generic prognostic factors.
+
+Feature-class identification (inferred from value distributions)
+-----------------------------------------------------------------
+The five named categoricals declare themselves: feature_057 = smoking
+(current/former/never), feature_043 = histology (adenocarcinoma/squamous),
+feature_123 = race, feature_005 = insurance, feature_078 = age in years
+(30-90, mean 65). Among numeric features the most clinically interpretable are
+feature_092 (range 0-0.8, mean 0.31, behaves like PD-L1 expression fraction),
+feature_011 (range 0-28, zero-inflated; behaves like prior-lines-of-therapy or
+pack-years), and the ternary feature_051 (0/1/2; behaves like ECOG performance
+status). Most other binary features are unlabeled but split into clear
+prognostic vs. predictive (treatment-effect-modifying) classes by their
+interaction patterns.
+
+What was supported
+------------------
+1. PROGNOSTIC: feature_051 has a steep, monotonic dose-response (ORR
+   21.1%/15.7%/11.1% at levels 0/1/2; chi-square p=2.9e-93; multivariable
+   adjusted log-OR -0.78 at level 2). Direction and shape match ECOG.
+
+2. PROGNOSTIC: feature_013 (prevalence 65%) reduces ORR by ~5pp at every level
+   of feature_051 (univariate OR 0.74, p=1e-33; adjusted -0.30, p<1e-13). Effect
+   is essentially uniform across PD-L1 bins, smoking strata, and treatment
+   classes — generic negative prognostic.
+
+3. PROGNOSTIC: feature_067 (prevalence 25%) is independent of feature_013
+   (Pearson r=0.003) and adds an additional ~5pp ORR penalty (univariate OR
+   0.78, p=2e-18; adjusted -0.26).
+
+4. PROGNOSTIC: feature_011 has both a zero-vs-nonzero jump (ORR 19.3% if 0,
+   16.0% if >0) and a monotonic decline within nonzero values (Q1 17.8% → Q4
+   13.5%). The per-unit log-OR penalty (-0.039) is identical in patients who
+   received triple-ICI vs. those who did not, so it acts as a baseline modifier
+   rather than a treatment-effect modifier.
+
+5. PREDICTIVE: feature_006, feature_007, and feature_039 are pairwise
+   uncorrelated (|r|<0.005) and each shows a small main-effect ORR boost
+   together with a strong positive interaction with feature_092 (interaction
+   p-values 2e-5 to 8e-8). All three behave like immune-checkpoint inhibitors.
+
+6. PREDICTIVE — strongest single finding: the combination of all three (the
+   "triple ICI", prevalence 6.4%) interacts with PD-L1 with coefficient +2.81
+   (p~1e-37). In the PD-L1 high (>=0.5) subgroup the absolute ORR jumps from
+   16.3% (no triple ICI) to 44.8% (with triple ICI, n=712) — about three-fold
+   the cohort baseline. In the PD-L1 low/negative subgroup the triple ICI is at
+   best neutral (and slightly negative on its own coefficient), confirming that
+   benefit is restricted to PD-L1-expressing tumors.
+
+7. PREDICTIVE: feature_092 (PD-L1) has NO main effect on ORR in patients
+   without any of the three ICI markers (quartile ORRs in n_ici=0:
+   16.3/16.5/16.5/15.2, p=0.59). It is a true predictive biomarker, not a
+   prognostic one — the textbook immunotherapy signature.
+
+8. PREDICTIVE: PD-L1 benefit is attenuated in never-smokers (PD-L1 ×
+   never-smoker interaction coef -0.53, p=0.004). Within-stratum
+   correlations: never -0.026, former +0.023, current +0.015 — matches the
+   well-known clinical observation that never-smokers respond less to
+   PD-(L)1 blockade.
+
+9. PREDICTIVE / HISTOLOGY-SPECIFIC: feature_104 improves ORR only in
+   squamous tumors (squamous: +2.4pp, p=0.005; adenocarcinoma: no effect,
+   p=0.57). Interaction p=0.008. Plausibly a squamous-targeted regimen
+   (EGFR antibody, taxane combination, etc.).
+
+10. PREDICTIVE / RESISTANCE: feature_027 attenuates the benefit of feature_006
+    and feature_039 (interactions -0.27 and -0.21, p<0.005). Plausibly an
+    immune-resistance phenotype.
+
+11. EQUITY / DISPARITY: triple-ICI benefit is consistent across racial groups
+    (5–9pp absolute ORR improvement in white, black, hispanic, asian, "other")
+    and across insurance categories (5–10pp). No evidence in this dataset that
+    these treatments deliver differential benefit by demographics.
+
+12. EFFECT MODIFICATION: triple ICI benefit is preserved (and slightly
+    amplified in absolute terms) at poor performance status — interaction
+    triple_ici × feature_051==2 +0.318, p=0.026. Even PS=2 patients get a
+    meaningful absolute response gain.
+
+What was refuted (or not supported)
+-----------------------------------
+- Smoking marginally: feature_057 is not significantly associated with ORR
+  overall (p=0.27); the smoking signal lives entirely in its interaction with
+  PD-L1 and treatment.
+- Histology marginally: squamous vs. adenocarcinoma do not differ
+  significantly in marginal ORR (p=0.078).
+- Insurance: no marginal ORR difference (p=0.23) and no insurance × triple
+  ICI interaction.
+- Age: no main effect of feature_078 on ORR (p=0.67), no interaction with
+  triple ICI (p=0.78).
+- Sex (feature_086): no main effect (p=0.72), no interaction with
+  triple ICI.
+- Comorbidity-like ordinal feature_064 (0-10): essentially no association
+  with ORR, even within treatment subgroups.
+
+Final multivariable model (n=50,000, AIC=44,355)
+------------------------------------------------
+objective_response ~ feature_013 + feature_067 + triple_ici*feature_092 +
+                     feature_011 + C(feature_051) + C(feature_043) +
+                     ever_smoker + feature_078
+
+Coefficients (log-OR):
+- feature_051==1: -0.37 (p<1e-13)         [ECOG-like]
+- feature_051==2: -0.78 (p<1e-13)         [ECOG-like]
+- feature_013:   -0.31 (p<1e-13)
+- feature_067:   -0.26 (p<1e-13)
+- triple_ici:    -0.56 (p<1e-9)           [main effect negative when PD-L1 low]
+- feature_092:   -0.05 (p=0.39)           [no main effect]
+- triple_ici × feature_092: +2.85 (p<1e-37)
+- feature_011:   -0.040 per unit (p<1e-13)
+- ever_smoker, squamous, age: not significant after adjustment
+
+Overall conclusions
+-------------------
+This NSCLC cohort recapitulates the canonical immunotherapy paradigm:
+(1) a few independent prognostic factors (a likely-ECOG ordinal, two
+binary risk markers, and a likely-prior-therapy continuous marker) drive
+baseline response probability; (2) a small group of immune-checkpoint-like
+treatment indicators have only modest individual main effects but
+synergize strongly with PD-L1 expression; (3) the strongest single
+predictor in the dataset is the joint phenotype of triple-ICI plus
+high PD-L1, which yields a near-three-fold ORR; (4) PD-L1 is purely
+predictive (no prognostic effect in untreated patients) and its benefit
+is attenuated in never-smokers; (5) treatment benefit appears uniform
+across race, insurance, sex, age, and histology — no demographic
+disparity in efficacy was detected, though prevalence of treatment use
+across these groups was not the focus of this analysis. A
+histology-specific signal (feature_104 in squamous) and a candidate
+resistance marker (feature_027 attenuating ICI benefit) round out the
+treatment-relevant findings.

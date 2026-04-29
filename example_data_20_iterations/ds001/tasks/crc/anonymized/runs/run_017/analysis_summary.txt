@@ -1,0 +1,92 @@
+Oncology Dataset Analysis Summary — ds001_crc
+================================================
+
+Cohort: 50,000 patient records, 124 anonymized features (mix of binary/ordinal/continuous), single outcome `pfs_months` (mean 4.31, SD 2.29, range 0–16.25). Race (`feature_064`: white/hispanic/black/asian/other) and insurance (`feature_018`: medicare/private/medicaid/uninsured) are the only labeled demographic categoricals; everything else is opaquely coded.
+
+Analysis spanned 25 iterations: univariate screens, a multivariable OLS, demographic disparity tests, and ten interaction / subgroup probes. Key findings below, organized by topic rather than iteration order.
+
+------------------------------------------------------------
+1. STRONGEST MAIN EFFECTS ON pfs_months
+------------------------------------------------------------
+
+Top continuous predictor: **feature_078** (range 30–90; plausibly an age-like or follow-up-window variable). Univariate Spearman rho = +0.785 (p ≈ 0). Adjusted OLS coefficient = +0.176 months per unit (p ≈ 0). The relationship is convex — adding feature_078² to the model gives a positive quadratic term (+0.00066, p < 1e-100), so pfs_months rises increasingly steeply with higher feature_078.
+
+Top binary predictors (univariate mean differences with p < 1e-300):
+  • **feature_051 = 1**: mean pfs_months 3.70 vs 5.05 in feature_051 = 0 (Δ = −1.35 months). Adjusted coef = −1.36 months. The single most influential binary covariate; behaves like a high-risk treatment-arm or aggressive-disease flag.
+  • **feature_038 = 1**: mean 5.09 vs 4.12 in feature_038 = 0 (Δ = +0.97 months). Adjusted coef = +0.94 months. Behaves like a beneficial / favorable-prognosis indicator.
+
+Top ordinal predictor: **feature_057** (3 levels: 0/1/2). Group means 5.27 → 4.05 → 2.91 months — clear monotone dose-response. Adjusted contrasts: level 1 vs 0 = −1.20 months; level 2 vs 0 = −2.34 months (each p ≈ 0). Behaves like a stage- or performance-status-like variable.
+
+Other independently significant predictors (all in adjusted OLS):
+  • feature_099 (count-like, 0–24): adj coef = −0.076 per unit (p ≈ 0). Negative direction, consistent with disease-burden marker.
+  • feature_092 (range 1.5–5.5): adj coef = +0.47 per unit (p ≈ 0). Positive direction, consistent with a nutritional / general-health index (e.g., albumin-like).
+  • feature_013 = 1: adj coef = −0.35 months (p ≈ 0).
+  • feature_043 = 1: adj coef = −0.29 months (p < 1e-278).
+  • log(1+feature_009): adj coef = −0.15 per log unit (p < 1e-293). The wide-range (0.02–777) lab-value pattern matches a tumor-marker-like covariate.
+  • feature_109 = 1: adj coef = −0.35 months (p < 1e-77).
+
+A 11-variable OLS with these covariates explains R² ≈ 0.86 of the variance in pfs_months — most of the signal in the data is concentrated in this small set.
+
+Refuted predictors:
+  • feature_067 (univariate p = 2e-4) is fully attenuated by adjustment (adj p = 0.32). Univariate signal was confounded.
+  • The ordinal features feature_025, feature_075, feature_026, feature_071, feature_096, and feature_033 are all null both univariate and after clinical adjustment — these are non-informative for pfs_months.
+  • Other high-prevalence binaries probed in iteration 10 (feature_106, feature_005, feature_088, feature_122, feature_007, feature_008, feature_066) all have adjusted |coefficients| < 0.02 months — none qualifies as a hidden predictor.
+
+------------------------------------------------------------
+2. INTERACTIONS AND SUBGROUP HETEROGENEITY
+------------------------------------------------------------
+
+Significant effect-modification:
+  • **feature_078 × feature_051**: interaction coefficient = −0.0067 per unit (p = 1.4e-14). The harm of feature_051 grows with higher feature_078 — across the 30–90 feature_078 range this implies an additional ≈ −0.4 month gradient on top of the −1.36 main effect. Stratified analysis (iteration 22) shows the feature_051 effect is uniformly negative across age tertiles (low: −1.30, mid: −1.39, high: −1.39 months), with only modest tertile-level heterogeneity.
+  • **feature_057 × feature_051**: interaction coefficient = +0.046 (p = 2.8e-4); the joint Wald test on the two-dummy interaction in iteration 25 gives F = 7.27, p = 7.0e-4. The harmful feature_051 effect is partially blunted at higher feature_057 strata (the absolute decrement shrinks because pfs_months is already low). The feature_051=1 effect persists in the worst-prognosis feature_057 = 2 subgroup at coef = −1.31 months (n = 7,437).
+  • **feature_057 × feature_038**: interaction coefficient = −0.060 (p = 1.0e-3). The beneficial feature_038 effect shrinks at higher feature_057.
+  • **feature_057 × log(1+feature_009)**: interaction coefficient = +0.020 (p = 1.3e-3). The negative log(feature_009) effect is partially blunted at higher feature_057.
+
+Borderline / non-significant interactions:
+  • feature_057 × feature_043 (p = 0.028, marginal).
+  • feature_092 × feature_057 (p = 0.10) — joint Wald in the comprehensive iteration-25 model also non-significant (p = 0.12).
+
+Refuted interactions:
+  • feature_051 × feature_038 (p = 0.17): joint cell means are consistent with additive main effects.
+  • feature_051 × feature_109 (p = 0.83) and feature_051 × feature_067 (p = 0.17): no biomarker × treatment-style modification.
+  • feature_092 × feature_051 (p = 0.69).
+  • feature_099 × feature_057 (p = 0.30).
+  • feature_078 × feature_038, feature_013, feature_043: all non-significant.
+
+------------------------------------------------------------
+3. DEMOGRAPHIC DISPARITY TESTS (race, insurance)
+------------------------------------------------------------
+
+Unadjusted comparisons:
+  • One-way ANOVA across race (feature_064) levels: F = 0.87, p = 0.48. Group means span 4.27–4.41 months.
+  • One-way ANOVA across insurance (feature_018) levels: F = 1.48, p = 0.22. Group means span 4.25–4.33 months.
+  • Pairwise t-tests vs white reference: asian Δ = −0.010 (p = 0.82); black Δ = −0.042 (p = 0.19); hispanic Δ = −0.001 (p = 0.97); other Δ = +0.091 (p = 0.22). No race-based gap detectable.
+
+Adjusted comparisons (clinical covariates added):
+  • Joint Wald for race: F = 0.50, p = 0.74. Individual race coefficients all |coef| ≤ 0.025 months.
+  • Joint Wald for insurance: F = 0.72, p = 0.54. Individual coefficients all |coef| ≤ 0.028 months.
+
+Race × treatment interaction:
+  • Joint feature_064 × feature_051 Wald: F = 0.43, p = 0.79. The harmful feature_051 effect is uniform across race strata.
+  • Joint feature_018 × feature_051 Wald: F = 2.14, p = 0.093 (borderline). Individual contrasts hint that the feature_051 detriment may be slightly smaller in medicare/private vs medicaid, but the overall test is not significant.
+
+Race within insurance subgroups (iteration 24):
+  • Black–white pfs_months differences within each insurance category: private = −0.048 (p = 0.34); medicare = −0.052 (p = 0.30); medicaid = −0.001 (p = 0.99); uninsured = −0.031 (p = 0.84). All non-significant; no racial gap emerges in any insurance stratum.
+
+Conclusion: in this cohort, after controlling for the clinical-feature signal, race and insurance are not associated with pfs_months — neither as main effects nor as effect-modifiers of the dominant feature_051 risk variable.
+
+------------------------------------------------------------
+4. OVERALL SYNTHESIS
+------------------------------------------------------------
+
+The pfs_months outcome is dominated by a relatively small set of clinical-style features:
+(1) a strong continuous covariate **feature_078** (with a convex main effect),
+(2) a likely-stage ordinal **feature_057** with monotone dose-response,
+(3) a high-risk binary **feature_051** (≈ −1.36 months) and a favorable binary **feature_038** (≈ +0.94 months) that act largely additively,
+(4) supporting markers feature_092 (favorable, lab-like), feature_099 (unfavorable, count-like), log feature_009 (unfavorable, tumor-marker-like), feature_013, feature_043, and feature_109 (each unfavorable).
+
+Together these eleven predictors explain ≈ 86% of pfs_months variance. The most clinically interpretable interactions are:
+  • feature_078 × feature_051 (harm of the high-risk binary grows mildly with the age-like covariate);
+  • feature_057 × {feature_051, feature_038, log feature_009} (effects all attenuate at higher disease severity, consistent with floor-effect pharmacodynamics).
+
+Demographic features (race feature_064, insurance feature_018) show no main-effect, adjusted-effect, or treatment-modifying association with pfs_months — neither marginally, after clinical adjustment, nor within stratified subgroup tests. In this dataset, observed clinical and laboratory features fully account for outcome differences, with no residual disparity attributable to race or insurance status.

@@ -1,0 +1,179 @@
+ANALYSIS SUMMARY — ds001_prostate
+==================================
+Cohort: 50,000 prostate cancer patients (all male, sex_female=0). Outcome: pfs_months
+(mean 3.74 mo, sd 2.02, range 0.00–14.60). Six treatments and ~120 patient features
+including biomarkers, labs, comorbidities, prior therapies, demographics, SNPs, and
+metastasis sites. Treatment assignment was essentially balanced across baseline
+characteristics (Iteration 16) — only 3/60 baseline-by-treatment comparisons reached
+p<0.05, all with trivial effect sizes — so adjusted/unadjusted treatment comparisons
+return very similar estimates.
+
+The work proceeded across 25 iterations: starting with main-effect screens of each
+treatment, then biomarker × treatment interactions, then prognostic main effects,
+then increasingly targeted multivariable and three-way interaction tests.
+
+----------------------------------------------------------------------
+KEY FINDING #1 — BRCA2 × olaparib synthetic lethality (HIGHLY ROBUST)
+----------------------------------------------------------------------
+The only treatment with a statistically significant *unstratified* PFS effect was
+treatment_olaparib (mean 3.83 vs 3.74 mo; p=0.003), and the entire signal lives in
+the brca2_mutation=1 subgroup:
+
+  - BRCA2+ on olaparib: 5.22 mo (n=529)
+  - BRCA2+ off olaparib: 3.67 mo (n=4,467)
+  - Difference: +1.55 mo, p=4e-27
+  - BRCA2- on olaparib: 3.67 mo (n=4,569)
+  - BRCA2- off olaparib: 3.74 mo (n=40,435)
+  - Difference: -0.07 mo, p=0.019 (small negative — possibly toxicity)
+
+The treatment_olaparib × brca2_mutation interaction term has coefficient +1.62
+(p ≈ 4e-61) in unadjusted OLS and remains +1.43 (p<<1e-300) after adjusting for
+age, ECOG, albumin, log(PSA), log(LDH), visceral_mets, and weight loss
+(Iterations 2, 12). This is the textbook PARP-inhibitor synthetic-lethality pattern
+and is the dominant predictive signal in the dataset.
+
+----------------------------------------------------------------------
+KEY FINDING #2 — Visceral metastases ABOLISH the BRCA2-olaparib benefit
+                 (Iteration 17, three-way interaction)
+----------------------------------------------------------------------
+Stratifying the BRCA2+ subgroup further by visceral_mets reveals a striking
+disease-extent modifier:
+
+  - BRCA2+ / no visceral mets / olaparib: +1.92 mo (p=2e-31, n=432)
+  - BRCA2+ / visceral mets / olaparib:    -0.13 mo (p=0.58, n=97)
+
+The full three-way interaction term treatment_olaparib × brca2_mutation
+× visceral_mets has coefficient -2.09 (p=9.4e-17) unadjusted and -1.73
+(p<<1e-300) in the final multivariable model (Iteration 18, R²=0.976). In other
+words, the entire BRCA2-olaparib benefit is concentrated in patients without
+visceral disease; visceral metastases neutralize the response. This is a
+clinically actionable subgroup-of-subgroup finding that would not be visible
+from main-effect or even two-way analyses alone.
+
+----------------------------------------------------------------------
+KEY FINDING #3 — Strong (and synthetic-looking) age effect
+----------------------------------------------------------------------
+A surprising and large positive association of age_years with pfs_months:
+slope +0.174 mo per year of age (Pearson r=0.856, p≈0). Age alone explains
+73% of PFS variance. This direction is opposite the clinical prior (where
+older men typically have shorter survival) and is independent of every other
+prognostic covariate (age has near-zero correlation with albumin, PSA, LDH,
+ECOG, mcrpc, visceral_mets — Iteration 14). The most plausible interpretation
+is that age was hard-coded as a strong positive driver in the data-generating
+process. Whatever its origin, it dominates the model and must be retained as
+an adjustor in any treatment effect estimate.
+
+----------------------------------------------------------------------
+SUPPORTED PROGNOSTIC MAIN EFFECTS
+----------------------------------------------------------------------
+After iteration-3 and iteration-4 univariate screens, the following independent
+prognostic predictors were confirmed (signs and magnitudes from the final
+multivariable model, Iteration 25):
+
+  age_years            +0.174 mo / yr     (p≈0)   — see Finding #3
+  ecog_ps              -1.151 mo / unit   (p≈0)
+  albumin_g_dl         +0.478 mo / g/dL   (p≈0)
+  log(PSA + 1)         -0.383 mo / log    (p≈0)
+  log(LDH)             -0.097 mo / log    (p=2e-128)
+  weight_loss_pct_6mo  -0.077 mo / %      (p≈0)
+
+These six covariates together explain ~97% of PFS variance. After their inclusion,
+mcrpc, visceral_mets, log(ALP), and hemoglobin all collapse to near-zero
+coefficients (p>0.3) — their univariate associations are fully mediated by these
+six. Adding the BRCA2 × olaparib × visceral_mets terms raises R² from 0.969 to
+0.976; adding the other five treatment main effects adds essentially nothing.
+
+----------------------------------------------------------------------
+REFUTED OR NULL HYPOTHESES
+----------------------------------------------------------------------
+The following clinically motivated hypotheses were tested and *refuted*
+(no detectable effect at conventional or multiple-comparison-corrected
+thresholds):
+
+  - treatment_pembrolizumab × msi_high: interaction p=0.15 unadjusted, p=0.996
+    after covariate adjustment. No measurable pembrolizumab benefit even in
+    MSI-H patients (point estimate -0.27 mo, p=0.24). Iteration 2, 10, 19, 25.
+
+  - treatment_lu177_psma × psma_high: interaction p=0.74. No Lu-177-PSMA
+    benefit even in the indicated PSMA-high / bone-metastases subgroup
+    (diff +0.024 mo, p=0.75). Iteration 2, 10, 20.
+
+  - AR-V7 resistance to enzalutamide / abiraterone: enz × AR-V7 p=0.96,
+    abi × AR-V7 p=0.33. The canonical AR-V7-mediated resistance signal is
+    absent. Iteration 6, 21.
+
+  - PTEN-loss modifier of androgen-axis therapy: enz × pten p=0.40,
+    abi × pten p=0.25. No PI3K/AR-crosstalk signal. Iteration 6, 21.
+
+  - Comorbidity main effects: all 15 binary comorbidities p>0.06; smallest is
+    depression_anxiety_diagnosis (diff -0.045 mo, p=0.061). None survive
+    multiple-comparison correction. Iteration 7.
+
+  - Symptom-burden main effects (fatigue/pain/dyspnea/appetite): all p>0.65.
+    Iteration 4.
+
+  - Inflammation markers (NLR, CRP): both p>0.5. Iteration 4.
+
+  - Pharmacogenomic SNPs: 25 main-effect tests — smallest p=0.014 (rs4986893),
+    Bonferroni threshold 0.002. No SNP main effect. Iteration 8.
+
+  - SNP × treatment interactions: 150 tests — smallest p=8.3e-4
+    (olaparib × rs1799983), Bonferroni threshold 3.3e-4. No credible
+    pharmacogenomic predictor. Iteration 9.
+
+  - Rare molecular alterations (HER2, MET ex14, RET/ROS1/BRAF/NTRK/NRG1
+    fusions, FGFR, CDKN2A, TP53, KEAP1, PIK3CA, PTEN): all 13 main-effect
+    p>0.10. Iteration 13.
+
+  - Prior therapy variables (chemo/radiation/surgery/immuno/targeted):
+    all 5 p>0.11. Iteration 13.
+
+  - Race/ethnicity and insurance type: ANOVA p=0.69 and p=0.79; adjusted
+    coefficients all within ±0.003 mo of reference. No racial or insurance
+    disparity in PFS, and treatment-receipt rates differ by ≤2.6 percentage
+    points across all SDoH categories — no detectable access disparity.
+    Iteration 5, 22.
+
+  - Three-way interactions for non-olaparib treatments × biomarkers ×
+    metastasis modifiers: scanned 120 combinations, smallest p=0.013, none
+    survive Bonferroni. The olaparib × BRCA2 × visceral_mets interaction is
+    the only credible 3-way signal in the dataset. Iteration 24.
+
+  - Vital signs and additional labs (BP, HR, SpO2, TSH, electrolytes, glucose,
+    creatinine, BUN, bilirubin, transaminases, INR, CA-125, CEA): smallest
+    p=0.032 (glucose, bilirubin) — does not survive Bonferroni. No additional
+    prognostic signal beyond the established markers. Iteration 15.
+
+----------------------------------------------------------------------
+OVERALL CONCLUSIONS
+----------------------------------------------------------------------
+1. The single clinically actionable predictive signal in this 50K-patient
+   prostate cancer cohort is the BRCA2 × olaparib synthetic-lethality effect,
+   modified by visceral metastases: in BRCA2+ patients without visceral mets,
+   olaparib produces ~+1.9 month PFS gain; in BRCA2+ patients with visceral
+   mets, it produces no benefit; in BRCA2- patients, it produces small (and
+   statistically detectable) net harm.
+
+2. The other five treatments (enzalutamide, abiraterone, docetaxel,
+   Lu-177-PSMA, pembrolizumab) show no measurable PFS benefit, either
+   overall or in any biomarker-defined subgroup tested (including the
+   canonical MSI-H/pembro and PSMA-high/Lu-177 indications). In a cohort
+   where treatment assignment is balanced, this is interpretable as a true
+   absence of average effect rather than confounding.
+
+3. PFS variance is overwhelmingly driven by six baseline patient
+   characteristics (age, ECOG, albumin, log(PSA), log(LDH), weight loss),
+   which together explain ~97% of variance — leaving only ~0.7 percentage
+   points of additional R² for the BRCA2-olaparib axis and essentially
+   none for any other treatment.
+
+4. The age effect (+0.174 mo/yr, r=0.856) is implausibly strong relative
+   to the real-world prior and likely reflects the data-generating process
+   of this synthetic cohort. Any downstream analyst should be aware of this.
+
+5. No measurable PFS disparity by race/ethnicity or insurance status, and
+   no measurable disparity in treatment receipt by SDoH variables.
+
+6. None of the 25 candidate pharmacogenomic SNPs — neither alone nor in
+   interaction with any of the six treatments — shows a Bonferroni-survivable
+   association with PFS in this cohort.

@@ -1,0 +1,149 @@
+Analysis summary — ds001_aml (n=50,000 patients; outcome: objective_response, baseline rate 16.9%)
+===================================================================================================
+
+Overview
+--------
+The cohort contains 125 features (mostly de-identified to opaque labels), of which 80 are
+binary indicators, 7 are low-level ordinal counts, 36 are continuous, and 2 are explicit
+categorical demographics: feature_005 (race: white/hispanic/black/asian/other) and
+feature_087 (insurance: medicare/private/medicaid/uninsured). The outcome
+objective_response is binary; 8,452 / 50,000 (16.9%) of patients responded.
+
+Across 25 propose-test iterations I scanned all 80 binary features, all 36 continuous and
+7 ordinal features, examined demographic disparities (race, insurance, sex-like binary
+candidates), built a multivariable logistic-regression model, and probed both
+treatment-effect-heterogeneity-style interactions (feature_035 × age, feature_035 × race,
+feature_057 × race, feature_057 × feature_035, age × race) and effect-modifier subgroup
+analyses (feature_057-stratified Black-vs-White disparity). Below I summarize what was
+supported, what was refuted, and the overall message.
+
+Strong main-effect predictors of objective_response (all directions on the rate scale)
+--------------------------------------------------------------------------------------
+The signal in this dataset is concentrated in a small handful of features. After
+multiple-testing correction (BH FDR q<0.05 across 123 univariate tests), only 7 features
+survive — the same 7 that survive Bonferroni at p<4.07e-04:
+
+  • feature_057 (ordinal 0/1/2; plausibly performance status):
+      response 21.3% at level 0, 15.5% at level 1, 11.2% at level 2; logit
+      β=−0.384, p=1.8e-97. Strongest single predictor in the dataset.
+      Stratified slopes are similar across racial groups (β between −0.38 and −0.44),
+      and the slope is essentially identical inside feature_035=0 vs feature_035=1
+      strata (interaction p=0.67). This is a robust, dose-dependent negative predictor.
+
+  • feature_006 (continuous, range 20-100, plausibly hematologic/percent value):
+      logit β=−0.0057/unit, p≈10^-20 unadjusted; quartile-stratified response rates fall
+      monotonically Q1=19.0% → Q2=17.5% → Q3=16.5% → Q4=14.7% (linear-trend p=6.2e-3).
+
+  • feature_011 (continuous, mean 3.9, max 23.6, plausibly an integer-like lab):
+      logit β=−0.040/unit, p=7.4e-35; responders mean 3.38 vs non-responders 3.95.
+
+  • feature_063 (continuous, p=2.9e-7) — negative direction, mean 5.7 vs 6.2.
+
+  • feature_099 (continuous, mean 3.8, range 1.7-5.5):
+      POSITIVE predictor, logit β=+0.115/unit, p=1.4e-6 (OR 1.12 per unit).
+      Direction was correctly anticipated.
+
+  • feature_092 (right-skewed, max 500, mean 20):
+      negative predictor; better-fit on log scale (ΔAIC=15.2 in favor of log1p
+      transform; log-scale β=−0.079, p=4.4e-9). Consistent with a biomarker like LDH.
+
+  • feature_035 (binary, prevalence 7.2%):
+      response 22.1% if =1 vs 16.5% if =0; chi2 p=3.5e-18, OR≈1.44. The ONLY binary
+      feature that survived correction. Its effect was unchanged after adjustment for
+      age, top continuous predictors, race, and insurance (adjusted β=+0.362,
+      p=1.3e-17, OR=1.44 — essentially identical to the unadjusted estimate),
+      indicating it is independent of measured confounders.
+
+Hypotheses that were REFUTED by the data
+----------------------------------------
+  • Age (feature_078): I hypothesized higher age → lower response. Univariate logit
+      β=+0.0004/year with p=0.72 — there is essentially NO main effect of age on
+      objective_response in this cohort. Age × race and age-stratified analyses also
+      show no consistent age slope (joint Wald p=0.34). This was a clearly false
+      prior shaped by general AML intuition.
+
+  • feature_018 (ordinal 0-10, plausibly comorbidity/line count): I expected a
+      negative slope. Actual β=+0.0042 (p=0.34); a categorical encoding does not fit
+      better than linear (LR p=0.75). No detectable signal.
+
+  • Insurance disparity (feature_087): unadjusted comparisons show NO significant
+      Medicaid-vs-Private (Δ=+0.002, p=0.69), Uninsured-vs-Private (Δ=−0.0004, p=0.99),
+      or Medicare-vs-Private (Δ=+0.005, p=0.16) gaps. The biomarker-adjusted joint
+      Wald test on the three insurance dummies is also non-significant (p=0.47).
+      My pre-specified directional hypotheses (Medicaid worse, Uninsured worse) are
+      not supported.
+
+  • Sex-like binary candidates (feature_002 prev 47%, feature_122 prev 45%) show no
+      association with response (p=0.37 and p=0.70). Either neither is sex, or sex is
+      not associated with objective_response in this cohort.
+
+  • Treatment-effect heterogeneity for feature_035: NO significant interactions with
+      age (p=0.92), race (joint Wald p=0.73), or feature_057 (p=0.67). The
+      feature_035 benefit (~+5 percentage points absolute) is remarkably uniform
+      across age tertiles, racial groups, and severity strata.
+
+  • Combined Black/Medicaid vs White/Private gap is not significant (Δ=−0.012,
+      p=0.40), suggesting the dual disadvantage is no larger than the simple race
+      disadvantage on its own.
+
+Demographic disparity: race (the most salient finding)
+------------------------------------------------------
+Unadjusted response rates by race were: white 17.28%, hispanic 16.70%, asian 16.33%,
+black 15.74%, other 14.72% (overall chi2 p=9.6e-3). The Black-vs-White pairwise
+difference is −1.54 percentage points (chi2 p=4.0e-3). Hispanic-vs-White (−0.59 pp,
+p=0.23) and Asian-vs-White (−0.95 pp, p=0.20) gaps did not reach significance.
+
+After adjustment for age, feature_006/011/057/018/099/063/092/035 (the top biomarkers)
+and insurance, the Black-vs-White gap PERSISTED: race_black β=−0.109 (OR 0.896),
+p=5.1e-3. The joint Wald test on all four race dummies (vs white) was also
+significant (chi2=13.27, df=4, p=0.010). Hispanic and Asian coefficients were
+small and non-significant after adjustment (p=0.30 and p=0.13).
+
+Mediation question — does the racial gap reflect baseline disease severity?
+Comparing Black vs White means of feature_018 and feature_057 (the severity-like
+ordinal variables): both differences are tiny and non-significant
+(feature_018 Δ=−0.028, p=0.47; feature_057 Δ=−0.0004, p=0.98). So the surviving
+disparity is NOT explained by differential baseline severity in the variables we
+measured.
+
+Stratifying the Black-vs-White rate diff by feature_057 (the strongest predictor) shows
+the sign is consistent across all three strata:
+    feature_057=0: black 20.46%, white 21.74%, diff −1.29 pp (p=0.20, n=13,464)
+    feature_057=1: black 14.28%, white 15.81%, diff −1.54 pp (p=0.036, n=19,226)
+    feature_057=2: black  9.54%, white 11.70%, diff −2.16 pp (p=0.073, n=5,697)
+The gap is consistent in direction; statistical power is limited within each
+stratum. No reversal of direction in any subgroup.
+
+Discrimination of the joint model
+---------------------------------
+A logistic-regression model combining the seven significant biomarkers + race +
+insurance achieved AUC = 0.597 on the training data, modestly above the best single
+predictor (feature_057, equivalent AUC ≈ 0.566 after sign-correction; pseudo-R^2 of
+the multivariable model = 0.019). Predictive performance is modest in absolute
+terms — the dataset's signal-to-noise ratio is low and outcome is largely stochastic
+given measured features.
+
+Conclusions
+-----------
+1. Seven features (six biomarkers + one binary indicator) are robustly associated
+   with objective_response after multiple-testing correction. feature_057 dominates
+   univariately; feature_035 contributes a positive, additive effect that is
+   independent of all measured covariates.
+2. The dataset shows essentially no main effect of age, no insurance disparity, and
+   no detectable sex-like binary signal.
+3. The most consequential finding from a fairness/bias standpoint is a Black-vs-White
+   response-rate gap of ~1.5 percentage points that PERSISTS after adjustment for the
+   strongest measured biomarkers and insurance (adjusted OR 0.896, p=0.005). This
+   gap is consistent in direction across feature_057 severity strata and is not
+   mediated by feature_018 or feature_057 baseline differences (which are
+   themselves null between Black and White patients). The Hispanic and Asian
+   gaps did not survive adjustment.
+4. No treatment-effect-modifier-style interactions were detected: the benefit of
+   feature_035 and the harm of feature_057 are uniform across age, race, and
+   biomarker strata. This null result is itself informative — there is no evidence
+   that subgroup-specific decision rules would improve over a one-size-fits-all
+   approach using these markers.
+5. Multiple pre-specified directional hypotheses were refuted (age effect, insurance
+   gap, feature_018 direction). A useful reminder that prior intuition about
+   oncology cohorts does not always carry over to a specific de-identified
+   commercial-EHR cohort with arbitrary feature semantics.

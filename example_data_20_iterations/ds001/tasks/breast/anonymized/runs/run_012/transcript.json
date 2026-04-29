@@ -1,0 +1,604 @@
+{
+  "dataset_id": "ds001_breast",
+  "model_id": "claude-opus-4-7",
+  "harness_id": "claude-code-interactive@manual",
+  "max_iterations": 25,
+  "iterations": [
+    {
+      "index": 1,
+      "proposed_hypotheses": [
+        {
+          "id": "h1",
+          "text": "The outcome pfs_months in this 50,000-patient breast cohort has a non-degenerate distribution suitable for regression modeling (positive mean, substantial variance, and not all rows zero or identical).",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h1"],
+          "code": "df = pd.read_parquet('dataset.parquet'); df['pfs_months'].describe()",
+          "result_summary": "pfs_months: n=50000, mean=4.69, sd=2.50, min=0.00, median=4.54, max=16.66. Distribution is right-skewed but well-spread; outcome is suitable for downstream regression. No missing values.",
+          "p_value": null,
+          "effect_estimate": 4.69,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "proposed_hypotheses": [
+        {
+          "id": "h2",
+          "text": "A univariate screen of all 127 candidate features (objects, binary, ordinal, continuous) vs. pfs_months will reveal a small handful of features with very strong (p<<0.001) marginal associations and many null features, indicating sparse signal structure.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h2"],
+          "code": "for c in feat_cols: appropriate t-test, ANOVA, or Pearson r vs. pfs_months.",
+          "result_summary": "Of 127 features tested, 14 reach p<0.001 and 23 reach p<0.05. The strongest signals are feature_080 (Pearson r=+0.70, p~0), feature_042 (binary, +1.10 month, p~0), feature_063 (ordinal 0/1/2, r=-0.32, p~0), feature_056 (binary, -1.54 month, p~0), and feature_048 (binary, -1.05 month, p=1.5e-178). Most features are clearly null. Signal is concentrated in roughly 10-12 features.",
+          "p_value": 1e-300,
+          "effect_estimate": 14,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "proposed_hypotheses": [
+        {
+          "id": "h3",
+          "text": "feature_080 (continuous, range 30-90, mean 65 — distribution consistent with patient age in years) has a positive monotonic association with pfs_months: each 1-unit increase in feature_080 is associated with a higher pfs_months.",
+          "kind": "novel"
+        },
+        {
+          "id": "h3b",
+          "text": "The feature_080 - pfs_months relationship is approximately linear across the observed range (no strong nonlinearity).",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h3"],
+          "code": "sm.OLS(df['pfs_months'], sm.add_constant(df[['feature_080']])).fit()",
+          "result_summary": "Univariate slope = +0.176 months per unit of feature_080 (SE 0.0008, t=343, p~0). R^2 = 0.49 from this single feature. Mean pfs in lowest decile (30-36) is 0.41 months; mean in highest decile (84-90) is 8.81 months. Direction is clearly positive.",
+          "p_value": 0.0,
+          "effect_estimate": 0.176,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h3b"],
+          "code": "sm.OLS(pfs_months, [feature_080, feature_080**2]).fit()",
+          "result_summary": "Quadratic term is statistically significant (p=6e-25) but adds essentially no explanatory power (R^2 0.492 -> 0.493). Across binned deciles, mean pfs increases by ~1.05 months per 6-unit bin, consistent with linearity.",
+          "p_value": 6e-25,
+          "effect_estimate": 0.001,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "proposed_hypotheses": [
+        {
+          "id": "h4",
+          "text": "feature_063 (ordinal 0/1/2; distribution 35%/50%/15%) shows a stepwise negative association with pfs_months — consistent with a stage-like variable where each level increase corresponds to shorter PFS.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h4"],
+          "code": "df.groupby('feature_063')['pfs_months'].agg(['mean','std','count']); ANOVA + linear contrast.",
+          "result_summary": "feature_063=0: mean PFS 5.64 (n=17592). feature_063=1: 4.44 (n=24971). feature_063=2: 3.29 (n=7437). Step decrement of ~1.2 months per level. Linear-in-level slope = -1.17 months per level (multivariable adjusted), p~0.",
+          "p_value": 0.0,
+          "effect_estimate": -1.17,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "proposed_hypotheses": [
+        {
+          "id": "h5",
+          "text": "feature_056 (binary, prevalence 30%) is a strong negative prognostic marker: patients with feature_056=1 have shorter pfs_months than those with feature_056=0, independent of other features.",
+          "kind": "novel"
+        },
+        {
+          "id": "h6",
+          "text": "feature_048 (binary, prevalence 10%) is also a negative prognostic marker, with effect smaller in magnitude than feature_056 but still highly significant.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h5"],
+          "code": "stats.ttest_ind(df.loc[df['feature_056']==1,'pfs_months'], df.loc[df['feature_056']==0,'pfs_months'])",
+          "result_summary": "Mean pfs_months: 3.62 if feature_056=1 (n=14969) vs. 5.15 if feature_056=0 (n=35031). Difference = -1.54 months. Welch t-test p~0. Adjusted coefficient in a 14-feature OLS model: -1.55 (essentially unchanged), confirming an independent prognostic effect.",
+          "p_value": 0.0,
+          "effect_estimate": -1.54,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h6"],
+          "code": "stats.ttest_ind on feature_048",
+          "result_summary": "Mean pfs_months: 3.75 if feature_048=1 (n=5090) vs. 4.80 if feature_048=0 (n=44910). Difference = -1.05 months. Welch t-test p=1.5e-178. Adjusted coefficient in multivariable model: -0.98 (small attenuation, still highly significant).",
+          "p_value": 1.5e-178,
+          "effect_estimate": -1.05,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "proposed_hypotheses": [
+        {
+          "id": "h7",
+          "text": "When the top 14 univariate hits are entered jointly into a single OLS model, several will retain large independent effects (feature_080, feature_063, feature_056, feature_048, feature_042, feature_111, feature_015, feature_040, feature_019, feature_067, feature_101, feature_053), and the model will explain a large share of variance (R^2 > 0.5).",
+          "kind": "novel"
+        },
+        {
+          "id": "h8",
+          "text": "feature_039 and feature_034 will lose significance after adjustment (i.e., they are confounded by other features rather than independent predictors).",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h7", "h8"],
+          "code": "sm.OLS(pfs_months ~ feature_080 + feature_042 + feature_063 + feature_056 + feature_048 + feature_067 + feature_015 + feature_111 + feature_019 + feature_101 + feature_040 + feature_039 + feature_034 + feature_053).fit()",
+          "result_summary": "Adjusted R^2 = 0.792. Independent contributors at p<0.001: feature_080 (+0.176/unit), feature_042 (+1.10), feature_063 (-1.17/level), feature_056 (-1.55), feature_048 (-0.98), feature_067 (-0.077/unit), feature_015 (-0.58), feature_111 (+0.53), feature_019 (+0.48/unit), feature_101 (-0.019/unit), feature_040 (-0.47), feature_053 (-5e-4/unit). feature_039 (p=0.33) and feature_034 (p=0.88) lose significance after adjustment, consistent with confounding (feature_039 is correlated 0.67 with feature_111; feature_034 is mutually exclusive with feature_040).",
+          "p_value": 0.0,
+          "effect_estimate": 0.792,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "proposed_hypotheses": [
+        {
+          "id": "h9",
+          "text": "Mean pfs_months differs across the five categories of feature_011 (race/ethnicity: white, hispanic, black, asian, other), suggesting a survival disparity.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h9"],
+          "code": "stats.f_oneway across feature_011 groups, then OLS pfs_months ~ C(feature_011).",
+          "result_summary": "Mean pfs_months by feature_011: white 4.68 (n=32498), hispanic 4.71 (n=7631), black 4.72 (n=5889), asian 4.74 (n=2970), other 4.76 (n=1012). One-way ANOVA F=0.85, p=0.49. No detectable disparity in PFS by race/ethnicity in the unadjusted comparison; differences across groups are within 0.08 months and statistically null.",
+          "p_value": 0.494,
+          "effect_estimate": 0.08,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "proposed_hypotheses": [
+        {
+          "id": "h10",
+          "text": "Mean pfs_months differs across the four categories of feature_089 (insurance: medicare, private, medicaid, uninsured), with worse outcomes for medicaid/uninsured patients consistent with an access-related disparity.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h10"],
+          "code": "stats.f_oneway across feature_089 groups.",
+          "result_summary": "Mean pfs_months by feature_089: medicare 4.69 (n=20953), private 4.68 (n=20090), medicaid 4.71 (n=6911), uninsured 4.73 (n=2046). One-way ANOVA F=0.31, p=0.82. No insurance-related disparity in PFS; differences are within 0.05 months. The hypothesized direction (medicaid/uninsured worse) is not supported.",
+          "p_value": 0.818,
+          "effect_estimate": 0.05,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "proposed_hypotheses": [
+        {
+          "id": "h11",
+          "text": "feature_042 (binary, prevalence 35%) marks a treatment that on average extends pfs_months by ~1.1 months across the cohort.",
+          "kind": "novel"
+        },
+        {
+          "id": "h12",
+          "text": "Because feature_042's univariate effect is large (+1.1 months) but its multivariable effect is similarly large (no confounding) AND its prevalence is balanced across race and insurance, this looks like a discrete intervention rather than a confounded prognostic marker.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h11"],
+          "code": "stats.ttest_ind(df.loc[feature_042==1,'pfs_months'], df.loc[feature_042==0,'pfs_months'])",
+          "result_summary": "Mean pfs_months: 5.39 if feature_042=1 (n=17428, 34.9%) vs. 4.30 if feature_042=0 (n=32572). Marginal benefit = +1.10 months, p~0. Multivariable-adjusted effect = +1.10 (unchanged), confirming no confounding by other top features.",
+          "p_value": 0.0,
+          "effect_estimate": 1.10,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h12"],
+          "code": "stats.chi2_contingency on pd.crosstab(feature_011/feature_089, feature_042).",
+          "result_summary": "feature_042 prevalence by race: white 0.348, black 0.351, hispanic 0.351, asian 0.345, other 0.337 (chi-square p=0.87). By insurance: medicare 0.350, private 0.348, medicaid 0.349, uninsured 0.346 (chi-square p=0.97). Treatment receipt is uniform across race and insurance; the average +1.10 month effect is not driven by differential allocation.",
+          "p_value": 0.87,
+          "effect_estimate": 0.014,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "proposed_hypotheses": [
+        {
+          "id": "h13",
+          "text": "The benefit of feature_042 differs by feature_111 status: patients with feature_111=1 derive a much larger pfs_months benefit from feature_042 than patients with feature_111=0.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h13"],
+          "code": "smf.ols('pfs_months ~ feature_042 * feature_111', data=df).fit()",
+          "result_summary": "Within feature_111=0 (n=15114): feature_042 effect = -0.02 month (p=0.63, null). Within feature_111=1 (n=34886): feature_042 effect = +1.58 month (p~0). Interaction coefficient = +1.59, p=9.3e-229. feature_111 is a strong predictive marker for benefit from feature_042.",
+          "p_value": 9.3e-229,
+          "effect_estimate": 1.59,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "proposed_hypotheses": [
+        {
+          "id": "h14",
+          "text": "feature_015 (binary, prevalence 35%) modifies feature_042's effect: feature_042 provides benefit only when feature_015=0; in feature_015=1 patients, feature_042 has no effect (resistance marker).",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h14"],
+          "code": "stratified t-tests of feature_042 within feature_015 strata; smf.ols('pfs_months ~ feature_042 * feature_015').",
+          "result_summary": "Within feature_015=0 (n=32635): feature_042 effect = +1.66 months (p~0). Within feature_015=1 (n=17365): feature_042 effect = +0.04 months (p=0.29, null). Interaction coefficient = -1.62, p=4.0e-255. feature_015 abolishes feature_042's benefit; consistent with a resistance biomarker.",
+          "p_value": 4.0e-255,
+          "effect_estimate": -1.62,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "proposed_hypotheses": [
+        {
+          "id": "h15",
+          "text": "feature_040 (binary, prevalence 18%) is a second resistance marker: feature_042 provides benefit only when feature_040=0.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h15"],
+          "code": "stratified t-tests; smf.ols('pfs_months ~ feature_042 * feature_040').",
+          "result_summary": "Within feature_040=0 (n=40940): feature_042 effect = +1.35 months (p~0). Within feature_040=1 (n=9060): feature_042 effect = -0.01 months (p=0.77, null). Interaction coefficient = -1.36, p=2.2e-118. feature_040 also abolishes feature_042's benefit.",
+          "p_value": 2.2e-118,
+          "effect_estimate": -1.36,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 13,
+      "proposed_hypotheses": [
+        {
+          "id": "h16",
+          "text": "The full predictive signature for feature_042 benefit is the joint condition feature_111=1 AND feature_015=0 AND feature_040=0; outside this combination, feature_042 has essentially zero effect on pfs_months.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h16"],
+          "code": "stratified t-tests across all 8 cells of feature_111 x feature_015 x feature_040; full 4-way OLS interaction model.",
+          "result_summary": "In the responder cell (feature_111=1, feature_015=0, feature_040=0; n=18681): feature_042 effect = +2.91 months (p~0). In all 7 other cells the effect ranges from -0.12 to +0.09 months and none reach p<0.05. In the 4-way OLS, the only large positive interaction is feature_042:feature_111 (+2.92, p~0), which is exactly cancelled when either feature_015 or feature_040 is also positive (3-way interactions of -2.90 each, both p<1e-100). The 4-way interaction term (+2.97) closes the algebra so off-target cells net to zero.",
+          "p_value": 0.0,
+          "effect_estimate": 2.91,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 14,
+      "proposed_hypotheses": [
+        {
+          "id": "h17",
+          "text": "feature_111 is a PURE PREDICTIVE marker for feature_042: in the absence of treatment (feature_042=0), feature_111 has no association with pfs_months.",
+          "kind": "novel"
+        },
+        {
+          "id": "h18",
+          "text": "feature_015 is also a PURE PREDICTIVE marker (no main prognostic effect among untreated).",
+          "kind": "novel"
+        },
+        {
+          "id": "h19",
+          "text": "feature_040 is also a PURE PREDICTIVE marker (no main prognostic effect among untreated).",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h17"],
+          "code": "Within df[feature_042==0]: stats.ttest_ind on feature_111.",
+          "result_summary": "In untreated patients (n=32572): mean pfs_months = 4.31 if feature_111=1 vs 4.30 if feature_111=0; difference +0.01 months, p=0.68. feature_111 has zero prognostic effect in the untreated, confirming it is purely predictive.",
+          "p_value": 0.68,
+          "effect_estimate": 0.01,
+          "significant": false
+        },
+        {
+          "hypothesis_ids": ["h18"],
+          "code": "Within df[feature_042==0]: stats.ttest_ind on feature_015.",
+          "result_summary": "In untreated patients: mean pfs = 4.32 if feature_015=1 vs 4.31 if feature_015=0; diff +0.01 months, p=0.73. feature_015's marginal univariate effect (-0.56 month overall) is entirely driven by abolishing benefit in treated patients; no prognostic effect.",
+          "p_value": 0.73,
+          "effect_estimate": 0.01,
+          "significant": false
+        },
+        {
+          "hypothesis_ids": ["h19"],
+          "code": "Within df[feature_042==0]: stats.ttest_ind on feature_040.",
+          "result_summary": "In untreated patients: mean pfs = 4.32 if feature_040=1 vs 4.31 if feature_040=0; diff +0.02 months, p=0.64. feature_040 also has no main prognostic effect; its overall negative univariate effect is entirely a treatment-interaction artifact.",
+          "p_value": 0.64,
+          "effect_estimate": 0.02,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 15,
+      "proposed_hypotheses": [
+        {
+          "id": "h20",
+          "text": "feature_056 is a PURE PROGNOSTIC marker (no treatment-effect modification): its negative effect on pfs_months is similar in feature_042-treated and untreated patients.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h20"],
+          "code": "smf.ols('pfs_months ~ feature_042 * feature_056', data=df).fit()",
+          "result_summary": "feature_056 main effect: -1.54 month (p~0). feature_042:feature_056 interaction = +0.06 (p=0.10, null). The prognostic decrement from feature_056 is uniform across treated and untreated.",
+          "p_value": 0.10,
+          "effect_estimate": 0.06,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 16,
+      "proposed_hypotheses": [
+        {
+          "id": "h21",
+          "text": "The slope of feature_080 (continuous) on pfs_months is attenuated in higher feature_063 (stage) levels — i.e., the feature_080 advantage is partially blunted in stage 2.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h21"],
+          "code": "smf.ols('pfs_months ~ feature_080 * C(feature_063)', data=df).fit()",
+          "result_summary": "feature_080 base slope (feature_063=0): +0.180/unit. Interaction with feature_063=1: -0.003/unit (p=0.07, borderline). Interaction with feature_063=2: -0.013/unit (p=4e-9, significant). Stage-2 patients gain about 7% less per feature_080 unit, but the slope is still strongly positive.",
+          "p_value": 4e-9,
+          "effect_estimate": -0.013,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 17,
+      "proposed_hypotheses": [
+        {
+          "id": "h22",
+          "text": "The feature_080 slope on pfs_months is also attenuated in patients with feature_056=1 (the strong negative prognostic marker), suggesting feature_056 patients gain less from increasing feature_080.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h22"],
+          "code": "smf.ols('pfs_months ~ feature_080 * feature_056', data=df).fit()",
+          "result_summary": "feature_080 main slope: +0.181. feature_080:feature_056 interaction = -0.011, p=3.1e-12. Patients with feature_056=1 show a meaningfully smaller pfs gain per feature_080 unit (~6% reduction).",
+          "p_value": 3.1e-12,
+          "effect_estimate": -0.011,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 18,
+      "proposed_hypotheses": [
+        {
+          "id": "h23",
+          "text": "feature_111 and feature_039 are partially redundant markers — they are highly correlated (~0.67) and feature_039 loses independent significance after adjusting for feature_111.",
+          "kind": "novel"
+        },
+        {
+          "id": "h24",
+          "text": "feature_034 and feature_040 represent mutually exclusive states (no patient has both = 1), behaving like categorical alternatives rather than independent risk factors.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h23"],
+          "code": "pd.crosstab(feature_111, feature_039); multivariable model.",
+          "result_summary": "Crosstab feature_111 x feature_039: among feature_111=0 (n=15114), 84.9% are feature_039=0; among feature_111=1 (n=34886), 85.1% are feature_039=1. Pearson r = +0.67. In the multivariable model that includes feature_111, feature_039 has p=0.33 (null), consistent with redundancy.",
+          "p_value": 0.33,
+          "effect_estimate": 0.014,
+          "significant": false
+        },
+        {
+          "hypothesis_ids": ["h24"],
+          "code": "pd.crosstab(feature_034, feature_040)",
+          "result_summary": "Crosstab feature_034 x feature_040: (0,0)=22397; (0,1)=9060; (1,0)=18543; (1,1)=0. The (1,1) cell is empty; feature_034=1 forbids feature_040=1. They behave like alternative categorical states (e.g., two distinct subtype labels). feature_034 loses independent significance after adjustment for feature_040 in the multivariable model (p=0.88).",
+          "p_value": 0.88,
+          "effect_estimate": 0.0,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 19,
+      "proposed_hypotheses": [
+        {
+          "id": "h25",
+          "text": "Within the responder subgroup (feature_111=1, feature_015=0, feature_040=0), the pfs_months benefit from feature_042 differs by feature_011 (race/ethnicity) — a potential disparity in treatment efficacy.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h25"],
+          "code": "smf.ols('pfs_months ~ feature_042 * C(feature_011)', data=responder_subgroup).fit()",
+          "result_summary": "Treatment benefit (feature_042=1 vs 0) in the responder subgroup, by race: white +2.89 (n=12203), black +2.90 (n=2223), hispanic +2.96 (n=2796), asian +2.98 (n=1107), other +2.87 (n=352). All p<1e-15. Race x treatment interaction terms all have p>0.6 (range 0.61-0.91). No treatment-efficacy disparity by race.",
+          "p_value": 0.61,
+          "effect_estimate": 0.09,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 20,
+      "proposed_hypotheses": [
+        {
+          "id": "h26",
+          "text": "Within the responder subgroup, the pfs_months benefit from feature_042 differs by feature_089 (insurance), with smaller benefit for medicaid/uninsured patients.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h26"],
+          "code": "smf.ols('pfs_months ~ feature_042 * C(feature_089)', data=responder_subgroup).fit()",
+          "result_summary": "Treatment benefit by insurance, in responders: medicaid +3.02 (n=2603), private +2.93 (n=7504), medicare +2.87 (n=7804), uninsured +2.77 (n=770). All p<1e-30. Insurance x treatment interaction p=0.21-0.47, none significant. The hypothesized worse benefit for medicaid/uninsured is not supported; differences are within 0.25 months and noise.",
+          "p_value": 0.21,
+          "effect_estimate": 0.25,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 21,
+      "proposed_hypotheses": [
+        {
+          "id": "h27",
+          "text": "Even within the responder subgroup, the rate of receiving feature_042 differs by feature_011 (race) — i.e., disparities in access among biomarker-eligible patients.",
+          "kind": "novel"
+        },
+        {
+          "id": "h28",
+          "text": "The rate of receiving feature_042 within the responder subgroup differs by feature_089 (insurance), with lower rates for medicaid/uninsured.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h27"],
+          "code": "stats.chi2_contingency(pd.crosstab(feature_011, feature_042)) within responder subgroup.",
+          "result_summary": "feature_042 receipt rate in responders, by race: white 0.353, hispanic 0.357, black 0.343, asian 0.346, other 0.361. chi-square p=0.85. No race-based access disparity even in the biomarker-eligible group.",
+          "p_value": 0.85,
+          "effect_estimate": 0.018,
+          "significant": false
+        },
+        {
+          "hypothesis_ids": ["h28"],
+          "code": "stats.chi2_contingency by insurance in responders.",
+          "result_summary": "feature_042 receipt rate in responders, by insurance: uninsured 0.378, medicare 0.356, private 0.347, medicaid 0.343. chi-square p=0.21. The point estimates do NOT support the hypothesized direction — uninsured patients actually have the highest receipt rate, though differences are within sampling noise.",
+          "p_value": 0.21,
+          "effect_estimate": 0.035,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 22,
+      "proposed_hypotheses": [
+        {
+          "id": "h29",
+          "text": "The continuous lab-like features feature_067, feature_019, feature_101, and feature_053 each have small but statistically robust independent effects on pfs_months after adjusting for the major prognostic and predictive markers.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h29"],
+          "code": "Multivariable OLS with all features included; report adjusted coefficients and p-values.",
+          "result_summary": "Adjusted coefficients in the 14-feature model: feature_067 -0.077/unit (p=4e-148, range 0-25), feature_019 +0.476/unit (p~0, range 1.5-5.5), feature_101 -0.019/unit (p~0, range 1-100), feature_053 -0.0005/unit (p=2e-16, range 48-830). All four are independent contributors with directional effects consistent with their univariate signs. Effect magnitudes are modest individually but cumulatively meaningful.",
+          "p_value": 4e-148,
+          "effect_estimate": -0.077,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 23,
+      "proposed_hypotheses": [
+        {
+          "id": "h30",
+          "text": "After adjusting for the 11-feature 'core' multivariable model (feature_080, feature_042, feature_063, feature_056, feature_048, feature_067, feature_015, feature_111, feature_019, feature_101, feature_040), no other binary feature in the dataset retains a clinically meaningful (>=0.2 month) independent effect at p<0.001.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h30"],
+          "code": "For each remaining binary feature c: smf.ols('pfs_months ~ <core> + c').fit() and inspect coef and p-value.",
+          "result_summary": "Best remaining candidates after the core 11 are: feature_126 (coef=-0.18, p=0.009; prevalence 0.6%), feature_037 (-0.026, p=0.013), feature_093 (-0.090, p=0.016), feature_017 (-0.068, p=0.034). None reach p<0.001, and only feature_126 has |coef|>0.1; its low prevalence and nominal p suggest noise. The signal in this dataset is captured by the 11-feature core; the remaining 116 features contribute negligible independent information.",
+          "p_value": 0.009,
+          "effect_estimate": -0.18,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 24,
+      "proposed_hypotheses": [
+        {
+          "id": "h31",
+          "text": "Within the responder subgroup (feature_111=1, feature_015=0, feature_040=0), the +2.9-month feature_042 benefit is uniform across feature_080 (no age modification) and uniform across feature_063 (no stage modification).",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h31"],
+          "code": "smf.ols('pfs_months ~ feature_042 * feature_080', data=responder_subgroup); smf.ols('pfs_months ~ feature_042 * C(feature_063)', data=responder_subgroup).",
+          "result_summary": "feature_042:feature_080 interaction in responders: coef=-0.002/unit, p=0.47 (null). feature_042:feature_063=1 interaction: coef=+0.004, p=0.96. feature_042:feature_063=2 interaction: coef=+0.05, p=0.66. The treatment benefit is constant in absolute months across age and stage in the responder subgroup; in particular it is preserved in stage-2 patients, where baseline PFS is shortest.",
+          "p_value": 0.47,
+          "effect_estimate": -0.002,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 25,
+      "proposed_hypotheses": [
+        {
+          "id": "h32",
+          "text": "A final synthesis model containing the 11-feature core PLUS the three 3-way feature_042:feature_111:feature_015:feature_040 interaction terms achieves R^2 substantially higher than the additive 11-feature model, demonstrating that capturing the predictive structure (not just main effects) is essential for explaining pfs_months.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h32"],
+          "code": "Compare R^2 of additive 11-feature OLS vs. OLS that adds feature_042:feature_111:feature_015:feature_040 four-way interaction expansion.",
+          "result_summary": "Additive 11-feature model: R^2 = 0.792. Adding the full feature_042 x feature_111 x feature_015 x feature_040 interaction expansion: R^2 = 0.836 (Delta R^2 ~ +0.04, F-test p~0). Capturing the joint predictive structure of feature_042 explains a meaningful additional ~4% of pfs_months variance beyond main effects. Combined with feature_080 (which alone explains ~49% of variance), feature_063 stage, and the prognostic markers feature_056 and feature_048, the model gives a clean picture: feature_080 is the dominant prognostic axis, feature_063/feature_056/feature_048 are independent prognostic markers, and feature_042 is a precision treatment whose ~3-month benefit is restricted to the feature_111+/feature_015-/feature_040- subgroup (~37% of patients).",
+          "p_value": 0.0,
+          "effect_estimate": 0.044,
+          "significant": true
+        }
+      ]
+    }
+  ]
+}

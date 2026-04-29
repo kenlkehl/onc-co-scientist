@@ -1,0 +1,260 @@
+Oncology Dataset Analysis — `ds001_breast` (n = 50,000)
+========================================================
+
+Outcome: pfs_months (mean 4.69, SD 2.50, range 0–16.7).
+
+Across 15 iterations of the propose–test–refine loop, I scanned 82 binary
+features, 37 continuous features, two free-text categorical columns
+(feature_011 = race, feature_089 = insurance), and seven multi-level integer
+features for univariate associations with progression-free survival, then
+drilled into a small set of strong main effects to characterise treatment
+synergy, biomarker-driven resistance, and possible demographic disparities.
+The narrative below walks through the hypotheses I explored and the
+statistical evidence accumulated for each.
+
+
+1. Main-effect landscape (iterations 1–3)
+-----------------------------------------
+
+Univariate Welch t-tests on every binary feature flagged a small set of
+columns whose mean PFS differs strikingly between 0 and 1 levels:
+
+  feature_056 = 1 → −1.54 mo   (prevalence 0.30, p < 1e-300, adverse)
+  feature_042 = 1 → +1.10 mo   (prevalence 0.35, p < 1e-300, beneficial)
+  feature_048 = 1 → −1.05 mo   (prevalence 0.10, p = 1.5e-178, adverse)
+  feature_111 = 1 → +0.57 mo   (prevalence 0.70, p = 3.7e-143, beneficial)
+  feature_015 = 1 → −0.56 mo   (prevalence 0.35, p = 6.1e-144, adverse)
+  feature_040 = 1 → −0.46 mo   (prevalence 0.18, p = 6.1e-70,  adverse)
+  feature_039 = 1 → +0.36 mo   (prevalence 0.64, p = 5.8e-59,  beneficial)
+  feature_034 = 1 → +0.11 mo   (prevalence 0.37, p = 1.0e-6,   modest)
+
+All other 74 binary features had |Δ| < 0.15 mo.
+
+Pearson correlations on the continuous features highlighted four large
+signals:
+
+  feature_080 (mean 65, SD 10, range 30–90):  r = +0.702 (slope +0.176/unit)
+  feature_067 (continuous):                    r = −0.116 (slope −0.075/unit)
+  feature_101 (mean 15.5):                     r = −0.091 (slope −0.019/unit)
+  feature_019 (mean 3.8, SD 0.5):              r = +0.100 (slope +0.499/unit)
+
+feature_080's r = 0.70 is unusually strong and dominates univariate variance
+in PFS; its mean and shape are consistent with patient age but with the
+opposite of the typical adverse age-on-PFS direction (older = better here).
+
+The 3-level ordinal feature_063 was strongly prognostic: mean PFS fell
+monotonically (5.64 → 4.44 → 3.29) across levels 0, 1, 2 (r = −0.32, slope
+−1.18/unit), behaviour consistent with a stage- or grade-like variable.
+The other multi-level integer columns (feature_021, _024, _016, _127, _001,
+_073) had |r| ≤ 0.005 and were uninformative.
+
+Race (feature_011) and insurance (feature_089) showed no main-effect
+association with PFS (one-way ANOVA p = 0.49 and p = 0.82 respectively),
+and their pairwise differences from the white / privately-insured reference
+were all under 0.10 mo.
+
+A 13-covariate multivariable OLS reproduced the picture cleanly
+(R² = 0.79). Two univariate signals — feature_039 and feature_034 — fell
+to non-significance after adjustment, indicating their solo associations
+were confounded by other variables.
+
+
+2. Treatment synergy: feature_042 × feature_111 (iterations 5–6)
+----------------------------------------------------------------
+
+The most striking finding is a pure pharmacological synergy. In a model
+with feature_042 * feature_111 (adjusted for feature_080 and feature_063),
+both main effects collapse to ≈0 and the interaction term is +1.58 mo
+(p < 1e-300). Cell means make this explicit:
+
+  feature_042 = 0, feature_111 = 0:  mean PFS 4.30   (n = 9 880)
+  feature_042 = 0, feature_111 = 1:  mean PFS 4.31   (n = 22 692)
+  feature_042 = 1, feature_111 = 0:  mean PFS 4.29   (n = 5 234)
+  feature_042 = 1, feature_111 = 1:  mean PFS 5.89   (n = 12 194)
+
+Either feature alone confers no measurable benefit; the combination yields
+~+1.6 mo on average. The two indicators are independently distributed
+(2×2 chi-square p = 0.49), so the synergy reflects biology, not a
+treatment-pattern artefact. Behaviourally this resembles a combination
+regimen in which neither drug is effective in monotherapy.
+
+
+3. Biomarker-driven resistance: feature_015 and feature_040 (iter. 7–11)
+------------------------------------------------------------------------
+
+The +1.6 mo combination effect is not uniform. A scan of three-way
+interactions identified feature_015 and feature_040 as resistance markers
+that fully abolish it.
+
+Three-way coefficients (adjusted for feature_080 and feature_063):
+
+  feature_042 : feature_111 : feature_015 = −2.36   (p < 1e-300)
+  feature_042 : feature_111 : feature_040 = −1.89   (p < 1e-300)
+
+Stratified mean PFS within the (feature_042 = 1, feature_111 = 1) cell:
+
+  feature_015 = 0, feature_040 = 0:  7.21 mo (vs no-combo 4.30, +2.91)
+  feature_015 = 0, feature_040 = 1:  4.31 mo (vs 4.31, +0.00)
+  feature_015 = 1, feature_040 = 0:  4.36 mo (vs 4.32, +0.04)
+  feature_015 = 1, feature_040 = 1:  4.40 mo (vs 4.30, +0.10)
+
+The benefit is restricted to the doubly-negative subgroup (n = 26 760,
+~54 % of the cohort). Either marker alone is sufficient to extinguish the
+combination effect, and double-positive patients are not worse than
+single-positive ones — consistent with the two markers acting as
+alternative resistance mechanisms (a logical-OR model rather than additive
+or epistatic resistance).
+
+A scan of every other binary feature for the same modifying role found
+nothing comparable: feature_034 (interaction +0.53, p = 8e-67) was the
+third-largest hit but disappeared (−0.06, p = 0.40) when stratifying on
+feature_015 and feature_040, indicating its apparent modification was
+confounding rather than independent biology. No other feature had an
+interaction term larger than 0.30 mo. feature_039, despite a univariate
+signal, is a near-proxy for feature_111 (85 % concordance, phi = 0.67) and
+contributes no independent effect once feature_111 is conditioned on.
+
+A complementary hit appeared on the continuous side: within the
+sensitive subgroup, the combination intercept benefit is +5.07 mo at
+feature_101 = 0, but each unit of feature_101 attenuates the benefit by
+−0.138 mo (p < 1e-300). feature_101 thus behaves as a continuous resistance
+gradient on top of the binary feature_015 / feature_040 layer.
+
+
+4. Demographic disparities (iterations 6, 12, 13)
+-------------------------------------------------
+
+I tested for both classic forms of disparity — differential treatment
+receipt and differential treatment efficacy.
+
+(a) Treatment receipt:
+   feature_042 receipt by race: chi-square p = 0.870; by insurance
+     p = 0.969. Logistic regression on feature_042 with feature_011,
+     feature_089, feature_080, feature_063 and resistance/prognostic
+     covariates: no covariate was significant (all p > 0.14). Receipt of
+     feature_042 is effectively random with respect to all observed
+     features.
+   feature_111 receipt by race: p = 0.644; by insurance p = 0.529. Same
+     null result in the multivariable logistic. feature_111 receipt is
+     also effectively random.
+
+(b) Disease severity:
+   feature_063 (the prognostic ordinal) distribution by race: chi-square
+     p = 0.892; by insurance p = 0.690. No racial or insurance disparity
+     in disease severity at presentation.
+
+(c) Treatment efficacy:
+   Within the molecular-sensitive subgroup (feature_015 = 0 AND
+   feature_040 = 0), the combination benefit is essentially identical in
+   every demographic stratum:
+     white +2.89, black +2.95, hispanic +2.93, asian +3.03, other +2.91
+     private +2.94, medicare +2.87, medicaid +3.00, uninsured +2.77
+     young (lowest feature_080 tertile) +2.95, mid +2.83, old +2.96
+   Pairwise differences are within sampling error (≤ 0.25 mo) and the
+   _combo × feature_080 interaction in the sensitive subgroup is
+   essentially zero (β = +0.0004, p = 0.87).
+
+In short: this cohort exhibits no detectable race- or insurance-based
+disparities at any of the points where they could plausibly arise —
+disease severity, treatment receipt, or treatment efficacy.
+
+
+5. Final omnibus model (iteration 10)
+-------------------------------------
+
+A single model carrying the eight stable main effects plus both 3-way
+treatment-by-resistance terms,
+
+  pfs_months ~ feature_080 + feature_063 + feature_067 + feature_101
+             + feature_019 + feature_056 + feature_048 + feature_034
+             + feature_042 * feature_111 * feature_015
+             + feature_042 * feature_111 * feature_040 ,
+
+achieves R² = 0.865 on the full cohort. Coefficients of interest:
+
+  feature_080:                      +0.176 mo / unit  (p < 1e-300)
+  feature_063:                      −1.173 mo / unit  (p < 1e-300)
+  feature_067:                      −0.077 mo / unit  (p < 1e-300)
+  feature_101:                      −0.019 mo / unit  (p < 1e-300)
+  feature_019:                      +0.481 mo / unit  (p < 1e-300)
+  feature_056:                      −1.551 mo         (p < 1e-300)
+  feature_048:                      −0.974 mo         (p < 1e-300)
+  feature_034:                      −0.006 mo         (p = 0.50, NS)
+  feature_042 : feature_111:                                   +2.74 mo (p < 1e-300)
+  feature_042 : feature_111 : feature_015:                    −2.40 mo (p < 1e-300)
+  feature_042 : feature_111 : feature_040:                    −1.89 mo (p < 1e-300)
+
+
+6. Hypotheses supported, refuted, and refined
+---------------------------------------------
+
+Supported (with strong evidence):
+  • feature_042 main effect on PFS is positive, and feature_111's is
+    positive — but only as a combination; neither is beneficial in
+    monotherapy (h1_2, h5_1, h6_2).
+  • feature_056, feature_048, feature_015, feature_040 are adverse main
+    effects on PFS (h1_3, h4_1).
+  • feature_080 (positive), feature_019 (positive), feature_067
+    (negative), feature_101 (negative) are continuous prognostic
+    biomarkers (h2_1–h2_4).
+  • feature_063 is a strong, monotone, ordinal prognostic factor
+    (h3_3).
+  • feature_015 and feature_040 are resistance markers that fully
+    abolish the feature_042 × feature_111 combination benefit; they act
+    as alternative mechanisms (h5_2, h5_3, h7_1, h8_1, h11_1).
+  • feature_101 is a continuous resistance gradient on top of the
+    binary resistance markers (h9_3, h15_1).
+  • The combination benefit, restricted to molecularly-sensitive
+    patients, is uniform across race, insurance, and age (h13_1–h13_3).
+
+Refuted (with strong evidence):
+  • Race (feature_011) main effect on PFS (h3_1, p = 0.49).
+  • Insurance (feature_089) main effect on PFS (h3_2, p = 0.82).
+  • Demographic disparity in disease severity (h12_3) or treatment
+    receipt (h6_3, h6_4, h12_1, h12_2).
+  • feature_034 as an independent sensitiser of the combo benefit
+    (h9_2 → h10_1).
+  • Independent contribution of feature_039 once feature_111 is
+    modelled (h14_1).
+  • feature_019 × combo interaction (h15_2, p = 0.052; effect is
+    additive, not modifying).
+
+Refined:
+  • The prognostic structure of the cohort is dominated by a small set
+    of features: a continuous age-like variable feature_080, an
+    ordinal severity feature_063, two adverse binary markers
+    feature_056 and feature_048, and four continuous biomarkers
+    (feature_019, feature_067, feature_101, with feature_080 already
+    listed). A combination of two indicators (feature_042 +
+    feature_111) provides a +2.7 mo PFS gain that is conditional on the
+    absence of either of two binary resistance markers (feature_015,
+    feature_040) and is further attenuated continuously by feature_101.
+  • All other 70+ binary features and most other continuous features
+    are essentially uninformative for PFS in this cohort.
+
+
+7. Overall conclusions
+----------------------
+
+This dataset shows a clean precision-oncology signal: a beneficial
+combination treatment (feature_042 + feature_111) that is biologically
+synergistic — neither agent works alone — and whose efficacy is
+gated by molecular biomarker status (feature_015 / feature_040 and a
+graded effect of feature_101). Approximately 54 % of patients lack
+both binary resistance markers and are the subgroup in whom the
+combination produces ~+2.9 months of PFS over baseline.
+
+Beyond that, the cohort is notable for what it does not show:
+
+  • No differences in PFS, in disease severity, or in receipt of
+    either combination component across feature_011 (race) groups
+    or feature_089 (insurance) groups.
+  • No demographic modifier of treatment efficacy.
+  • No additional binary feature carries an independent main effect
+    or interaction beyond the small set above.
+
+Taken together, the results point to a homogeneous prognostic and
+predictive structure dominated by a handful of clinical/biomarker
+variables and a single biomarker-gated combination treatment, with no
+evidence in this dataset of demographic disparities at any of the
+classical points of intervention.

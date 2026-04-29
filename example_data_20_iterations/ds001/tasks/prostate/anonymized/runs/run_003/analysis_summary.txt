@@ -1,0 +1,175 @@
+Analysis Summary — ds001_prostate (50,000 patients, 122 candidate features, outcome = pfs_months)
+================================================================================================
+
+OVERALL STRUCTURE
+-----------------
+The cohort comprises 50,000 patient records with one continuous outcome (pfs_months,
+range 0.0 - 14.6, mean 3.74). Features are de-identified to 121 numeric labels plus
+two categorical labels (feature_018 = self-reported race with 5 levels;
+feature_045 = insurance type with 4 levels). Across 15 iterations of hypothesis
+generation and statistical testing, I screened 122 candidate features individually
+against the outcome, then progressively narrowed to a small set of dominant
+predictors and tested treatment-biomarker, treatment-stage, and treatment-demographic
+interactions.
+
+DOMINANT PROGNOSTIC STRUCTURE
+-----------------------------
+A six-variable OLS model already explains 94.6% of variance in pfs_months
+(R² = 0.9461). The full 120+ feature model adds only 0.002 in R², so the
+prognostic signal is concentrated in a handful of features:
+
+  - feature_078 (continuous, range 30-90, plausibly an age-like variable):
+    Univariate Pearson r = +0.856 (p ≈ 0). Adjusted coefficient = +0.174 mo per unit.
+    A quadratic term is highly significant (p ≈ 0), revealing an accelerating
+    positive relationship: mean pfs_months rises monotonically from 0.85 in the
+    lowest age decile to 6.86 in the highest. The strength of this association
+    is unusual for an age variable; it may reflect time-on-study or a
+    construction artifact of this synthetic-feeling dataset, but I have only the
+    feature_078 column and no metadata to be sure.
+
+  - feature_057 (3-level ordinal, values 0/1/2; plausibly a stage or risk strata):
+    Strong monotone negative relationship — mean pfs_months 4.68 → 3.49 → 2.38
+    moving from level 0 → 1 → 2 (Spearman ρ = -0.386, p ≈ 0). Adjusted coefficients
+    are -1.18 mo (level 1) and -2.29 mo (level 2) relative to level 0.
+
+  - feature_013 (continuous, 0.12-3622, right-skewed; plausibly PSA):
+    Negative association as expected (r = -0.153 univariate, adjusted coefficient
+    -0.0027 mo/unit, p ≈ 0). The width of the per-patient range produces large
+    cumulative effects at the high end.
+
+  - feature_009 (continuous, 1.5-5.5, 0.1 increments): Positive association
+    (r = +0.123 univariate; adjusted coef +0.479 mo per unit, p ≈ 0). Could be
+    albumin or another lab biomarker.
+
+  - feature_006 (continuous, 0-24.6): Negative association (adjusted coef -0.077,
+    p ≈ 0).
+
+  - feature_051 (binary, prevalence 55%): Behaves like the dataset's principal
+    treatment marker. Patients with feature_051 = 1 have mean pfs_months 3.51 vs
+    4.03 in feature_051 = 0 — a -0.52 mo unadjusted difference (p = 1.6e-181) and
+    -0.38 mo adjusted (p ≈ 0).
+
+  - feature_109 and feature_039 (binary, ~10% prevalence each): Each
+    independently associated with longer pfs_months by ~+0.15 mo
+    (p < 1e-100 each).
+
+  - feature_092 (continuous, 48-830): Tiny per-unit effect (-0.000528 mo/unit) but
+    statistically robust (p = 4.3e-82) given large sd.
+
+Most of the remaining ~110 features (including the five 0–4-coded ordinal features
+feature_016/071/096/033/064, the 11-level feature_026, the Gleason-like
+feature_067, and most of the 77 binary features) showed essentially no
+prognostic signal in adjusted analysis (68 of 155 model parameters had p > 0.5).
+feature_007 is a constant column (all zeros) and provides no information.
+
+TREATMENT-BIOMARKER INTERACTIONS
+--------------------------------
+1. feature_051 × feature_013 (treatment × PSA-like): The detrimental association of
+   feature_051 with pfs_months is concentrated in patients with high feature_013.
+   Stratified by feature_013 quartile, the adjusted feature_051 coefficient is
+   -0.04 mo in Q1–Q3 (mean f013 = 3.6, 10.5, 26.1) but -0.149 mo in Q4 (mean
+   f013 = 130.5) — a roughly 3-fold larger detriment in patients with the highest
+   feature_013 values. Formal interaction term feature_013:feature_051 = +0.0153
+   (p ≈ 0), reflecting that each unit increase of feature_013 partially offsets
+   the per-unit hazard once feature_051 = 1.
+
+2. feature_051 × feature_057 (treatment × stage): Negative association is
+   consistent across all three feature_057 strata (Δ ≈ -0.55, -0.51, -0.47 mo
+   respectively in unadjusted strata). Formal interaction terms are small
+   (+0.026 and +0.056) but statistically significant — modest attenuation of the
+   feature_051 detriment at higher stage levels.
+
+3. feature_051 × feature_078 (treatment × age-like): The detrimental association
+   becomes more negative as feature_078 increases (interaction coef = -0.0043,
+   p ≈ 0). Adding a quadratic age × treatment term shows the relationship is
+   slightly U-shaped.
+
+4. No other clinically meaningful interactions: feature_051 × feature_109,
+   feature_051 × feature_039, feature_051 × race, and feature_051 × insurance
+   were all statistically null.
+
+DEMOGRAPHIC DISPARITIES
+-----------------------
+This was a deliberate focus given the ample sample size. The findings were
+consistently null:
+
+  - Outcome by race: ANOVA across asian/black/hispanic/white/other gives mean
+    pfs_months 3.797, 3.741, 3.737, 3.749, 3.741 — span of 0.06 mo, all
+    pairwise ns. After adjustment for the dominant prognostic features, all four
+    race coefficients remain ns (p ≥ 0.54).
+
+  - Outcome by insurance: medicare 3.754, private 3.736, medicaid 3.741,
+    uninsured 3.726 — span 0.03 mo, all ns adjusted (p > 0.16).
+
+  - Treatment receipt by race: feature_051 prevalence ranges 0.544-0.554 across
+    races; chi-square p = 0.82.
+
+  - Treatment receipt by insurance: prevalence 0.546-0.562; chi-square p = 0.37.
+
+  - Treatment receipt is, however, predicted by feature_013 (PSA-like) — log-odds
+    coefficient +0.061 (p ≈ 0) — confirming feature_051 receipt tracks disease
+    severity (not demographics).
+
+  - Biomarkers by race: feature_013, feature_009, feature_006, feature_092,
+    feature_038, feature_054, feature_062, feature_120, feature_118, feature_056
+    all have ANOVA p > 0.3 across racial groups.
+
+  - feature_057 distribution by race: chi-square p = 0.84; identical
+    proportions across races.
+
+  - Race × stage interaction on outcome: all 8 interaction coefficients ns.
+
+  - Treatment × race, treatment × insurance interactions on outcome: all ns.
+
+The total absence of demographic gradients across 50,000 patients is striking —
+in real-world prostate cancer cohorts, racial differences in PSA, stage at
+presentation, treatment receipt, and outcomes are typically detectable at this
+sample size. The cohort appears to be balanced or constructed in a way that
+removes such disparities.
+
+REFUTED HYPOTHESES
+------------------
+- Hypothesis that feature_067 (likely Gleason 6-10) is monotonically associated
+  with pfs_months: REFUTED. Mean pfs_months by Gleason is essentially flat
+  (3.71-3.76 across 6-10), and adjusted effects are tiny (< 0.03 mo).
+
+- Hypothesis that the five 0–4 ordinal features are each prognostic: REFUTED.
+  None shows a meaningful monotonic gradient.
+
+- Hypothesis that race or insurance type causes disparities in outcome,
+  treatment receipt, biomarkers, or stage distribution: REFUTED for every test
+  conducted (~15 separate analyses).
+
+SUPPORTED HYPOTHESES
+--------------------
+- feature_078, feature_057, feature_013, feature_006, feature_009, feature_051,
+  feature_109, feature_039, feature_092 are independent predictors of pfs_months
+  in the directions described above.
+
+- feature_051 × feature_013 interaction (treatment effect modified by PSA-like
+  biomarker): SUPPORTED.
+
+- feature_051 × feature_078 interaction: SUPPORTED.
+
+- Quadratic age effect: SUPPORTED.
+
+- Demographic balance / absence of disparities: SUPPORTED for every axis tested.
+
+OVERALL CONCLUSIONS
+-------------------
+1. PFS in this cohort is overwhelmingly determined by a single feature_078
+   (age-like, r = 0.86) plus a 3-level stage-like variable (feature_057) and a
+   PSA-like biomarker (feature_013). One binary feature (feature_051) behaves as
+   a treatment marker with a small but consistent detrimental association.
+2. Treatment-biomarker heterogeneity is concentrated in feature_051 ×
+   feature_013: feature_051 is associated with substantially worse pfs_months in
+   patients with high feature_013 — a clinically suggestive pattern that, in a
+   real dataset, would prompt investigation of treatment selection or
+   confounding by indication.
+3. No racial or insurance disparities are detectable on any axis (outcome,
+   treatment receipt, biomarkers, stage). This contrasts with real-world
+   prostate cancer cohorts and likely reflects the constructed nature of this
+   anonymized dataset.
+4. Of 122 candidate features, only ~9 carry meaningful prognostic information
+   for pfs_months; the remainder are statistically null even with N = 50,000
+   power. feature_007 is a constant column.

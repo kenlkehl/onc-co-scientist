@@ -1,0 +1,161 @@
+Analysis summary - ds001_prostate (50,000 patients, outcome pfs_months)
+========================================================================
+
+Cohort and approach
+-------------------
+The dataset contains 50,000 de-identified prostate-cancer-style patient records
+with 122 anonymized features and one outcome (pfs_months, "progression-free
+survival" in months). Features come in three flavors: 77 binary (encoded 0/1),
+9 ordinal/count integers, 34 continuous floats, plus two object-typed
+demographic variables (feature_018: race - white, black, hispanic, asian,
+other; feature_045: insurance - medicare, private, medicaid, uninsured).
+
+I ran 25 iterations of propose-test-refine, starting with univariate
+associations of the strongest candidate features, building a multivariable
+adjusted model, and then probing demographic main effects, demographic x
+clinical interactions, and biomarker x biomarker synergies.
+
+Variables that look clinical
+----------------------------
+Inspection of distributions made several features clinically interpretable:
+* feature_078: continuous 30-90, median 65 -> patient age in years
+* feature_057: 3-level ordinal 0/1/2 -> stage / disease extent
+* feature_067: ordinal 6-10 -> Gleason sum
+* feature_013: right-skewed 0.12-3622, median 15.86 -> serum PSA (ng/mL)
+* feature_006: continuous 0-24, ~25% zeros -> tumor-burden / symptom score
+* feature_009: continuous 1.5-5.5, median 3.8 -> protective lab (e.g. albumin)
+
+Main-effect findings (iterations 1-7)
+-------------------------------------
+* feature_078 (age): r = +0.856 with pfs_months. Mean PFS rises from 0.01 mo
+  in ages 30-36 to 7.82 mo in ages 84-90. Adjusted slope = +0.174 mo per year
+  of age. Dominant predictor. Supported.
+* feature_057 (stage): r = -0.388. Mean PFS = 4.68/3.49/2.38 mo for levels
+  0/1/2. Adjusted contrasts -1.18 mo (stage 1) and -2.29 mo (stage 2) vs
+  stage 0. Supported.
+* feature_013 (PSA): r = -0.153 raw; on log1p scale adjusted slope = -0.383
+  mo per log unit. Supported.
+* feature_006: r = -0.143. Adjusted slope = -0.077 mo per unit. Supported.
+* feature_009: r = +0.123. Adjusted slope = +0.479 mo per unit. Supported.
+* feature_067 (Gleason): r = -0.003, p = 0.49. Mean PFS is essentially flat
+  across Gleason 6/7/8/9/10. Surprisingly NOT a meaningful predictor in this
+  cohort. Refuted.
+* feature_051 (binary, prev 0.55): univariate mean diff = -0.52 mo, p = 1.6e-181.
+  Strong univariate negative association. Supported.
+
+Mediation: feature_051 vs PSA (iteration 8)
+-------------------------------------------
+The strong univariate effect of feature_051 disappears after adjustment for
+log feature_013 (adjusted coef = +0.0007 mo, p = 0.86). Patients with
+feature_051 = 1 have a much higher mean log PSA (3.55 vs 2.17), so feature_051
+is best read as a marker of high PSA rather than an independent prognostic
+covariate. Refined hypothesis supported.
+
+Demographic main effects (iterations 9-12)
+------------------------------------------
+* Race (feature_018) main effect on raw PFS: ANOVA F = 0.564, p = 0.689.
+  Largest pairwise gap (asian 3.797 vs hispanic 3.737) is 0.06 mo. Refuted.
+* Insurance (feature_045) main effect: ANOVA F = 0.344, p = 0.794. Uninsured
+  vs medicare gap = 0.028 mo. Refuted.
+* Adjusted (multivariable OLS controlling for clinical covariates): all four
+  race contrasts and all three insurance contrasts have |coef| < 0.003 mo
+  with p > 0.6. Adjusted refutation.
+
+Variance explained (iteration 13)
+---------------------------------
+A 7-feature parsimonious model {age, stage, Gleason, log-PSA, feature_006,
+feature_009, feature_051} achieves R^2 = 0.969 - 97% of pfs_months variance
+is captured by clinical features alone. This synthetic cohort has an
+extraordinarily deterministic outcome model.
+
+Race within advanced stage (iteration 14)
+-----------------------------------------
+Even restricted to feature_057 = 2 (n = 7,437 advanced-stage patients),
+ANOVA across racial groups gives F = 0.895, p = 0.466. Disparities are not
+hidden in the highest-risk subgroup either. Refuted.
+
+Synergistic biomarker pair feature_109 x feature_039 (iterations 15-17)
+-----------------------------------------------------------------------
+Each marker alone has only a tiny univariate positive association
+(feature_109 +0.10 mo, p = 0.002; feature_039 +0.094 mo, p = 0.003), and
+both lose their main effect almost entirely (|coef| < 0.001) when an
+interaction term is added. The interaction term feature_109 x feature_039,
+however, has coefficient +1.434 mo (95% CI 1.40-1.47, p effectively 0):
+
+  feature_109  feature_039   mean PFS (raw)      n
+       0           0            3.74           40,435
+       0           1            3.67            4,569
+       1           0            3.67            4,467
+       1           1            5.22              529
+
+Including this interaction raises model R^2 from 0.969 to 0.974. The
+biomarker pair behaves like a "predictive companion-marker" - benefit accrues
+only when BOTH are positive (~2% of patients).
+
+feature_051 x stage interaction (iteration 18)
+----------------------------------------------
+Stratified t-tests show feature_051's univariate negative association is
+similar in size across stages (-0.56 / -0.51 / -0.47 mo for stages 0/1/2),
+slightly LARGER in early stage. The original hypothesis (largest gap at
+advanced stage) is refuted.
+
+Combo effect across demographics (iterations 19-21)
+---------------------------------------------------
+Within-race within-insurance estimates of the (109=1 & 039=1) vs others
+PFS difference are all in the +1.0 to +2.8 mo range:
+* asian +1.44, black +1.75, hispanic +0.99, white +1.53, other +2.81 mo
+* medicare +1.41, private +1.52, medicaid +1.78, uninsured (n too small)
+
+Prevalences of feature_109 and feature_039 are balanced across race
+(chi-square p = 0.43 and p = 0.26, respectively) and insurance (p = 0.40 and
+p = 0.63). Combo prevalence is 0.8-1.1% in every demographic stratum. This
+"predictive marker" treatment-equivalent has no demographic disparity in
+prevalence or effect.
+
+feature_051 x demographics and Gleason interactions (iterations 22-24)
+----------------------------------------------------------------------
+Race x feature_051: all four interaction coefficients |<= 0.023|, p >= 0.14.
+Insurance x feature_051: all three interaction coefficients |<= 0.011|,
+p >= 0.27. Gleason x feature_051: all four interactions |<= 0.016|,
+p >= 0.35. No subgroup heterogeneity. Refuted.
+
+Final nested model F-test (iteration 25)
+----------------------------------------
+Base model: pfs_months ~ feature_078 + C(feature_057) + C(feature_067)
+            + log_psa + feature_006 + feature_009 + feature_051
+            + feature_109*feature_039
+Full model: base + C(feature_018) + C(feature_045)
+
+R^2 base = 0.974451, R^2 full = 0.974451 (RSS drop 0.031 over 7 added df).
+Joint F-test for race + insurance: F = 0.042, p = 0.99991. Refuted -
+demographics carry zero residual signal.
+
+Overall conclusions
+-------------------
+1. pfs_months in this cohort is essentially a deterministic function of
+   clinical / biomarker variables: age (feature_078), stage (feature_057),
+   log-PSA (feature_013), tumor-burden (feature_006), a protective lab
+   (feature_009), and the synergistic pair (feature_109 x feature_039).
+   These together explain ~97.4% of variance.
+2. The Gleason-like ordinal feature_067 is NOT prognostic in this cohort
+   (raw r = -0.003, p = 0.49) - a clinical surprise.
+3. feature_051 is a marker of high PSA, not an independent driver of PFS.
+   Its univariate effect (-0.52 mo) is fully mediated by log feature_013.
+4. The biomarker pair feature_109 + feature_039 displays a strong
+   multiplicative (synergistic) interaction: each alone is essentially null;
+   together they add ~1.4 mo of PFS in the ~2% of patients who carry both.
+5. There is NO demographic disparity in this cohort, by any metric tested:
+   - No raw race or insurance main effect on pfs_months
+   - No adjusted race or insurance effect after controlling for clinical
+     covariates (joint F-test p ~ 1.0)
+   - No racial / insurance disparity in marker (109, 039, combo) prevalence
+   - No race x treatment-marker interaction
+   - No insurance x treatment-marker interaction
+   - No racial heterogeneity even within the worst-prognosis stage 2
+     subgroup
+   The benefit of the synergistic feature_109*feature_039 marker is in the
+   same 1-2 month range across all racial and insurance subgroups.
+
+In a real-world dataset this pattern - 97% R^2 from clinical variables and
+an exact null on demographics - would suggest a synthetic / simulated
+data-generating process designed to be fair and clinically interpretable.

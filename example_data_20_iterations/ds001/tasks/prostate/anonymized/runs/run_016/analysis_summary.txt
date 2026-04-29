@@ -1,0 +1,179 @@
+Analysis summary - dataset ds001_prostate (50,000 patients, 122 features, outcome pfs_months)
+===============================================================================================
+
+Approach
+--------
+Across 15 iterations I moved from broad univariate scans to a parsimonious multivariable
+model, then targeted interaction tests against the dominant predictor and the protected-
+attribute features (race-like feature_018; insurance-like feature_045). Methods: Spearman
+correlations, Welch t-tests, one-way ANOVA, chi-square tests, OLS regression with main,
+quadratic and interaction terms, joint F-tests, and stratified subgroup slopes. With
+n=50,000 the analyses were extremely well-powered, so where I report null results I do so
+with confidence that any clinically meaningful effect would have been detected.
+
+Outcome
+-------
+pfs_months: mean 3.74 (SD 2.02), range 0-14.6, roughly bell-shaped with a slight right tail.
+No missing data anywhere.
+
+1. Univariate continuous-feature scan (iteration 1-2)
+-----------------------------------------------------
+Of 35 continuous features, four had |Spearman rho| > 0.10 with pfs_months:
+  - feature_078 (range 30-90, median 65): rho = +0.853, p ~ 0; linear slope +0.174
+    months PFS per unit. By far the dominant signal in the cohort.
+  - feature_013 (range 0.1-3622, highly right-skewed): rho = -0.223, p ~ 0; the log
+    transform performs much better in linear models. Direction: HIGHER feature_013
+    -> SHORTER PFS.
+  - feature_006 (range 0-25): rho = -0.134, slope -0.075/unit. Higher -> shorter PFS.
+  - feature_009 (range 1.5-5.5): rho = +0.118, slope +0.495/unit. Higher -> longer PFS.
+The remaining 31 continuous features had |rho| < 0.02 with pfs_months.
+
+2. Univariate binary-feature scan (iteration 3)
+-----------------------------------------------
+Of 77 binary features tested, only feature_051 was strongly associated with pfs_months
+on its own: mean PFS 3.51 with feature_051=1 vs 4.03 with feature_051=0 (Welch t=-28.9,
+p=2e-181, difference -0.52 months). Four others reached nominal p<0.05 (feature_109,
+feature_039, feature_105, feature_043) but none came near Bonferroni significance
+(threshold p<6.5e-4).
+
+3. Race and insurance - marginal effects (iteration 4)
+------------------------------------------------------
+ANOVA of pfs_months across the five race-like categories of feature_018 yielded F=0.564,
+p=0.689; group means ranged from 3.737 (hispanic) to 3.797 (asian). Pairwise Welch
+t-tests vs white reference were all non-significant (smallest p=0.14 for asian).
+
+ANOVA across the four insurance-like categories of feature_045 yielded F=0.344, p=0.794.
+Means ranged from 3.726 (uninsured) to 3.754 (medicare). Pairwise comparisons vs private
+reference: medicare diff +0.018 (p=0.36), medicaid diff +0.005 (p=0.87), uninsured diff
+-0.010 (p=0.83).
+
+The two specific equity hypotheses - that black patients have shorter PFS than white,
+and that medicaid/uninsured patients have shorter PFS than privately insured patients -
+were both refuted (point estimates within rounding of zero).
+
+4. Multivariable adjustment and confounding (iteration 5)
+---------------------------------------------------------
+A 9-covariate OLS model (top continuous + top binary + race + insurance dummies) achieved
+R^2 = 0.822. Key findings:
+  - feature_078 dominates (t=453, beta=+0.174 per unit, p~0).
+  - log feature_013 (t=-101, -0.382 per log-unit), feature_006 (t=-78), feature_009
+    (t=+62) all remain highly significant.
+  - The strong univariate feature_051 effect (-0.52 months) collapses to +0.001
+    (p=0.92): feature_051 is fully confounded by the four core continuous predictors.
+  - All four race coefficients have p >= 0.37 and |coef| <= 0.018; all three insurance
+    coefficients have p >= 0.29 and |coef| <= 0.009.
+
+5. Full multivariable model with all 122 features (iteration 6)
+---------------------------------------------------------------
+Including every feature simultaneously raised R^2 only marginally to 0.8226 (vs 0.822
+for the 9-covariate model). Nine features pass Bonferroni:
+  feature_078 (+0.174, p~0), log feature_013 (-0.191, p~0), feature_006 (-0.077, p~0),
+  feature_009 (+0.477, p~0), feature_092 (-5.5e-4, p=7e-31), feature_109 (+0.137,
+  p=7e-27), feature_039 (+0.130, p=6e-25), feature_027 (+0.036, p=5e-6), feature_043
+  (-0.042, p=1e-5).
+Remaining 113 features collectively contribute < 0.4 percentage points of R^2.
+
+6. Demographic balance and effect modification (iterations 7-9)
+---------------------------------------------------------------
+Predictor balance: all eight key predictors (feature_078, log feature_013, feature_006,
+feature_009, feature_092, feature_109, feature_039, feature_051) are balanced across
+both feature_018 and feature_045 (every ANOVA / chi-square p >= 0.18).
+
+Effect modification by race / insurance:
+  - feature_078 x race: joint F=0.39, p=0.82. Race-stratified Spearman rho with PFS
+    is essentially identical (0.847-0.858) and slopes are 0.171-0.175 per unit.
+  - feature_078 x insurance: joint F=0.30, p=0.82.
+  - For each of log feature_013, feature_006, feature_009, feature_109, feature_039:
+    the joint F-test of interactions with race fails to reject (smallest p=0.23) and
+    with insurance fails to reject (smallest p=0.34).
+  - Residual analysis: fitting the multivariable model WITHOUT race/insurance and then
+    asking whether residuals differ by demographic group, ANOVA across race p=0.853 and
+    across insurance p=0.730. Demographic groups are not systematically over- or
+    under-predicted.
+
+7. Predictor-by-predictor interactions and non-linearities (iterations 10-11)
+-----------------------------------------------------------------------------
+Three feature_078 interactions are strongly significant in the multivariable context:
+  - feature_078 x log feature_013: coef -0.00354 per unit (p=9e-30). The negative
+    effect of higher feature_013 is amplified at higher feature_078: log_feature_013
+    slope goes from approximately -0.30 at feature_078=30 to approximately -0.51 at
+    feature_078=90.
+  - feature_078 x feature_006: coef -0.000651 per unit (p=6e-11). Negative feature_006
+    effect amplifies at higher feature_078.
+  - feature_078 x feature_009: coef +0.00403 per unit (p=1e-7). Positive feature_009
+    effect amplifies at higher feature_078.
+
+Non-linear shapes:
+  - feature_078^2 coef +7.8e-4 (p=4e-172): concave-up; per-unit slope rises from
+    ~0.12 at feature_078=30 to ~0.21 at feature_078=90.
+  - feature_092^2 coef -2.4e-6 (p=1e-11): concave-down (inverse-U); approximate vertex
+    near feature_092 ~ 168.
+
+8. Stratified mean PFS by feature_078 quintile (iteration 12)
+-------------------------------------------------------------
+  Q1 [30.0-56.5]:  mean PFS 1.35 (n=10,006)
+  Q2 [56.5-62.4]:  mean PFS 2.75 (n=10,029)
+  Q3 [62.4-67.6]:  mean PFS 3.72 (n=10,101)
+  Q4 [67.6-73.5]:  mean PFS 4.70 (n=10,009)
+  Q5 [73.5-90.0]:  mean PFS 6.24 (n=9,855)
+A 4.9-month spread across quintiles, almost monotone.
+
+9. Binary-by-feature_078 interaction scan (iteration 13)
+--------------------------------------------------------
+Of 77 binary features tested for interaction with feature_078 in pairwise models, only
+feature_051 survives Bonferroni (interaction coef -0.00469, p=3e-7) - a small relative
+effect (~3% of the main feature_078 slope) but statistically robust. No other binary
+feature modifies feature_078's effect at Bonferroni-corrected levels.
+
+10. Final parsimonious model (iteration 14)
+-------------------------------------------
+A 14-term model (feature_078, feature_078^2, log feature_013, feature_006, feature_009,
+feature_092, feature_092^2, feature_109, feature_039, feature_027, feature_043,
+feature_078:log_feature_013, feature_078:feature_006, feature_078:feature_009) achieves
+R^2 = 0.8258 / Adj R^2 = 0.8258, slightly outperforming the all-features OLS (0.8226).
+All 14 terms have p < 1e-4. This is essentially the best-explainable signal in the cohort.
+
+Hypotheses supported, refuted, and refined
+------------------------------------------
+SUPPORTED:
+  - feature_078 is the dominant predictor of pfs_months (large positive linear effect
+    with mild concave-up curvature).
+  - log feature_013 negatively predicts pfs_months.
+  - feature_006 negatively predicts pfs_months; feature_009 positively predicts it.
+  - feature_092 has an inverse-U relationship with pfs_months.
+  - feature_109 (+0.14 months), feature_039 (+0.13 months), and feature_027 (+0.04
+    months) are independently protective; feature_043 (-0.04 months) is independently
+    deleterious.
+  - feature_078 interacts with log feature_013, feature_006, and feature_009 (all in
+    the direction of amplifying their effects at higher feature_078).
+  - feature_051 has a univariate effect that is fully confounded by the four core
+    continuous predictors.
+
+REFUTED:
+  - The hypothesis that race (feature_018) is associated with pfs_months at any level -
+    marginal main effect, adjusted main effect, residual mean, or interaction with any
+    other predictor.
+  - The hypothesis that insurance (feature_045) is associated with pfs_months at any
+    level - marginal, adjusted, residual, or interaction.
+  - The specific health-disparities priors that black-vs-white patients or
+    medicaid/uninsured-vs-private patients would have shorter PFS.
+
+Overall conclusions
+-------------------
+This cohort behaves like an essentially demographics-neutral cohort: the strongest
+predictor (feature_078) explains by itself ~73% of the variance in pfs_months and a
+small set of nine additional features captures the remainder. Race and insurance are
+not associated with pfs_months marginally, are not associated after adjustment, do not
+modify the effect of any clinical predictor, and the model's residual error is balanced
+across both. The dataset shows neither confounding by demographics (the eight key
+predictors are balanced across race and insurance) nor effect modification by them.
+
+The clinically interpretable signal: pfs_months scales strongly and approximately
+linearly (with mild concave-up curvature) with feature_078; is shortened by higher
+feature_013 (after log transform), higher feature_006, and higher or lower feature_092
+(inverse-U around ~168); and is lengthened by higher feature_009 and the protective
+binary markers feature_109, feature_039, and feature_027. The interactions imply that
+the harmful effects of feature_013 and feature_006 are larger in patients with higher
+feature_078, while the benefit from feature_009 is also larger there - i.e., higher-
+feature_078 patients are more responsive (positively or negatively) to other clinical
+inputs.

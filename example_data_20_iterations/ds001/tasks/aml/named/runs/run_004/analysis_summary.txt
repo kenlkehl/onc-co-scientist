@@ -1,0 +1,199 @@
+Oncology dataset analysis — ds001_aml
+=====================================
+
+Cohort: 50,000 adults treated for acute myeloid leukemia (AML), drawn from a
+commercial EHR aggregator. Single binary outcome of interest: objective_response
+(observed ORR ~16.9%). Each row is one patient and there are no missing values.
+
+Across 25 iterations of propose-test-refine, three classes of hypothesis were
+explored: (1) main effects of disease, host, and treatment features on
+objective_response; (2) treatment-by-biomarker interactions, since AML therapy
+is increasingly genotype-matched; and (3) sociodemographic disparities. The
+following synthesis walks through what was supported, what was refuted, and
+the multivariable picture.
+
+
+1. Disease burden and host fitness drove most of the variance in response
+-------------------------------------------------------------------------
+The single strongest predictor was ECOG performance status. ORR fell
+monotonically across ECOG strata: 21% (ECOG 0) -> 15% (ECOG 1) -> 11% (ECOG 2)
+(Kendall tau -0.0905, p = 2.1e-99 in iteration 1, gradient preserved within
+every age band examined in iteration 24).
+
+Other clinical/laboratory features tracking disease burden or host
+deterioration also showed robust, directional effects:
+
+* weight_loss_pct_6mo: responders averaged 0.57 percentage points less
+  weight loss (p = 7.2e-39, iteration 1).
+* blast_pct_marrow: responders had 2.08 pp lower marrow blasts (p = 9.5e-20);
+  patients with blast >=70% had ORR 14.9% vs 17.8% otherwise (iterations 2 & 21).
+* wbc_k_per_ul: lower in responders by 1.33 K/uL (p = 1.3e-5); WBC > 50
+  K/uL identified a 14.7%-ORR subgroup vs 17.1% otherwise.
+* albumin_g_dl positive (p = 1.3e-6); crp_mg_l negative (p = 4.4e-7); a
+  combined Glasgow-style inflammation index (low alb + high CRP) showed a
+  monotonic stepwise drop in ORR: 17.7% -> 15.8% -> 13.4% across index 0/1/2
+  (iteration 3).
+* A composite poor-prognosis indicator (ECOG >=2 OR (low albumin AND high
+  CRP)) identified a high-risk phenotype with ORR ~12-13% vs ~18% in patients
+  with neither (iteration 22).
+
+Notably, age, sex, and number of comorbidities were NOT independently predictive
+in this dataset. ORR was flat across age bands (16.7-17.2% from <60 to 80+
+years), sex (17.1% F vs 16.8% M, p = 0.33), and comorbidity count (no monotonic
+gradient, Kendall tau -0.003, p = 0.43) (iterations 15 & 16). Only atrial
+fibrillation among individual comorbidities reached significance (ORR 15.6% vs
+17.0%, p = 0.025; multivariable-adjusted p = 0.05).
+
+
+2. Mutation main effects: IDH1 stood out
+----------------------------------------
+Among molecular features:
+
+* IDH1 mutation: STRONG positive main effect — IDH1+ ORR 22.1% vs 16.5%
+  (+5.6 pp, p = 3.5e-18). This persisted in the multivariable model
+  (log-odds +0.36, p < 1e-15).
+* IDH2, NPM1, TP53, FLT3-ITD, complex karyotype all showed null or weak
+  univariate effects on ORR. NPM1 trended favorable (+0.6 pp, p = 0.11)
+  but did not reach significance. TP53 was effectively null overall in
+  this cohort (p = 0.66) — surprising given its usual poor-prognosis
+  signal, suggesting the response phenotype here is influenced by therapy
+  selection or a less mutation-driven outcome definition.
+
+3. Treatment main effects were small
+------------------------------------
+Treatment receipt by itself produced only modest signals:
+
+* treatment_venetoclax_azacitidine: small but significant +0.7 pp on ORR
+  (17.3% vs 16.6%, p = 0.032; multivariable log-odds +0.059, p = 0.016).
+* treatment_7plus3, treatment_midostaurin, treatment_gilteritinib,
+  treatment_ivosidenib, treatment_enasidenib: no significant main effect
+  on ORR.
+
+This pattern is consistent with the idea that targeted-therapy benefit is
+not uniform across the population and is more naturally captured as
+treatment-biomarker interactions.
+
+
+4. Treatment-biomarker interactions: a mixed and instructive picture
+--------------------------------------------------------------------
+Hypothesis-driven interaction tests yielded the most clinically interesting
+findings:
+
+Strongly POSITIVE (hypothesis supported):
+* venetoclax+azacitidine x IDH1 mutation — interaction log-odds +0.730,
+  p = 7.7e-18. IDH1+ patients given ven+aza had ORR 29.8% vs 17.1% in
+  IDH1+ patients NOT given ven+aza (a +12.6 pp absolute increase) while
+  IDH1- patients showed no benefit. The benefit was preserved across
+  fitness strata (32.7% vs 17.7% in unfit; 27.8% vs 16.7% in fit;
+  iteration 19).
+* venetoclax+azacitidine x NPM1 — +0.261, p = 6.6e-7 (NPM1+ ven+aza+
+  19.3% vs NPM1+ ven+aza- 16.0%).
+* venetoclax+azacitidine x unfit_for_intensive — +0.104, p = 0.036
+  (consistent with the clinical role of ven+aza as an unfit-patient regimen).
+
+Strongly NEGATIVE:
+* treatment_7plus3 x complex_karyotype — interaction log-odds -0.213,
+  p = 0.0016. Complex karyotype patients had ORR 15.5% on 7+3 vs 17.9%
+  off 7+3, while non-complex patients fared slightly better on 7+3. This
+  matches the known poor prognosis of complex karyotype with intensive
+  chemotherapy.
+
+NULL or paradoxical:
+* treatment_midostaurin x FLT3-ITD: interaction -0.105, p = 0.22 (no
+  positive matching benefit detected).
+* treatment_gilteritinib x FLT3-ITD: +0.034, p = 0.69 (null).
+* treatment_enasidenib x IDH2: -0.124, p = 0.45 (null/negative direction).
+* treatment_ivosidenib x IDH1: -0.364, p = 0.027 — paradoxically NEGATIVE.
+  Among IDH1+ patients, those receiving ivosidenib had ORR 17.5% vs 22.6%
+  in IDH1+ patients not receiving ivosidenib. This almost certainly
+  reflects channeling: in real-world data sicker / later-line IDH1+
+  patients receive ivosidenib, while fitter newly-diagnosed IDH1+
+  patients receive other regimens (often ven+aza, where benefit is
+  retained per finding #4 above).
+* treatment_venetoclax_azacitidine x TP53: -0.087, p = 0.28 (no
+  significant interaction; TP53 did not modify ven+aza response in
+  this cohort).
+
+These results suggest that ven+aza (especially in IDH1+ patients) is the
+dominant biomarker-matched treatment effect detectable in this cohort, and
+that single-agent FLT3 and IDH inhibitor matching is not visible at the
+ORR endpoint here — likely a combination of small targeted-therapy sample
+sizes (n = 3,900-7,500), real-world treatment-selection bias, and possibly
+modest overall ORR differences for these agents.
+
+
+5. Sociodemographic disparities
+-------------------------------
+* race_ethnicity (iteration 12): chi-square p = 0.0096. ORR White 17.3%,
+  Hispanic 16.7%, Asian 16.3%, Black 15.7%, Other 14.7%. After multivariable
+  adjustment for age, sex, ECOG, blasts, WBC, albumin, CRP, weight loss,
+  and IDH1, the disparities for Black (log-odds -0.110, p = 0.005) and
+  Other (-0.195, p = 0.031) remained significant; Hispanic and Asian
+  effects did not.
+* These disparities were NOT mediated by differential treatment receipt:
+  rates of ven+aza (39-42%), 7+3 (44-46%), midostaurin (14-15%),
+  gilteritinib (14-16%), ivosidenib (~7.6-8%), and enasidenib (~7.3-8.4%)
+  were essentially balanced across racial/ethnic groups (iteration 13).
+  This points to either residual unmeasured biology (or unmeasured social
+  determinants) or the imperfect adequacy of the captured covariate set
+  to fully account for the disparity.
+* insurance_type (iteration 14): no detectable effect (medicaid+uninsured
+  16.81% vs private+medicare 16.92%, p = 0.81).
+* rural_residence: no effect (16.91% rural vs 16.90% urban, p = 1.00).
+
+
+6. Pharmacogenomic SNPs
+-----------------------
+Of 25 candidate SNPs tested univariately (iteration 23), only snp_rs1050828
+(a G6PD variant) reached p < 0.05 (carriers ORR 18.5% vs 16.8%, p = 0.006,
++1.7 pp absolute). A few others trended (rs2032582 p = 0.05; rs1799853
+p = 0.057; rs3813867 p = 0.064) but none survived as clearly above
+multiple-testing noise. Overall, the candidate-SNP panel was a weak source
+of predictive signal in this cohort.
+
+
+7. Patient-reported symptoms
+----------------------------
+appetite_loss_grade was weakly associated with lower ORR (Kendall tau
+-0.0097, p = 0.020). Fatigue and pain scores showed essentially flat
+relationships with ORR (and trended slightly opposite to expectation;
+both p > 0.3). The dominant performance-status signal is captured in
+ECOG, not in patient-reported symptom grades, in this dataset.
+
+
+Multivariable summary (iteration 20)
+------------------------------------
+After mutual adjustment, independent predictors of objective_response
+(p < 0.05) were:
+
+  ecog_ps                            -0.384  (p < 1e-50)
+  blast_pct_marrow                   -0.006  (p < 1e-19)
+  weight_loss_pct_6mo                -0.040  (p < 1e-30)
+  wbc_k_per_ul                       -0.0022 (p = 1.1e-5)
+  albumin_g_dl                       +0.118  (p = 9e-7)
+  crp_mg_l                           -0.0072 (p < 1e-5)
+  idh1_mutation                      +0.361  (p < 1e-15)
+  treatment_venetoclax_azacitidine   +0.059  (p = 0.016)
+
+Not independently significant after adjustment: age, sex, secondary AML,
+unfit_for_intensive, complex karyotype, NPM1, FLT3-ITD, TP53, treatment_7plus3,
+treatment_midostaurin, treatment_gilteritinib, treatment_ivosidenib,
+treatment_enasidenib.
+
+
+Bottom line
+-----------
+In this 50,000-patient AML cohort, the dominant signals on objective
+response were classical clinical/biological prognostic features — ECOG,
+weight loss, marrow blast %, WBC, albumin, CRP — together with a strong
+favorable IDH1 mutation main effect and one treatment-biomarker pairing,
+venetoclax+azacitidine in IDH1+ patients (with a smaller benefit in NPM1+
+and unfit patients). Other targeted-therapy/biomarker matchings (FLT3
+inhibitors x FLT3-ITD; IDH inhibitors x IDH1/IDH2) did not show the
+expected positive interactions, with ivosidenib x IDH1 paradoxically
+negative — most plausibly reflecting confounding by selection in
+real-world treatment assignment. A statistically and clinically
+meaningful disparity for Black and "Other" race patients persisted
+after multivariable adjustment and was not explained by differences in
+treatment receipt, suggesting unmeasured biological or social
+determinants warrant further investigation.

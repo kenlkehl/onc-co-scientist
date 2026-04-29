@@ -1,0 +1,123 @@
+ds001_crc — Analysis Summary
+================================
+
+Cohort: 50,000 patients with one continuous outcome (`pfs_months`, mean 4.31, median 4.21, max 16.25). 122 features, all opaquely labeled. Two clear demographic-style categoricals are visible: `feature_064` (race; white/black/hispanic/asian/other) and `feature_018` (insurance; private/medicare/medicaid/uninsured). 35 continuous features, 80 binary indicators, and 7 multi-level integer features fill out the rest. No missingness.
+
+Twenty-five iterations of propose → analyze → refine were run; the iteration cap was 25 and was reached. Below is the synthesis.
+
+
+1. Strong main-effect predictors of pfs_months
+-----------------------------------------------
+
+A universal univariate screen (Iter 1) identified eleven features with strong PFS associations; the rest of the 122 features were either null or trivially small.
+
+(i) `feature_078` (continuous, range 30-90, mean 65, plausibly age in years). Pearson r = +0.766 with PFS, simple-OLS slope +0.176 mo per unit, R^2 = 0.587 by itself (Iter 2). PFS by quartile: 2.09 / 3.71 / 4.90 / 6.59 mo — strict monotonic, near-linear. The relationship is HIGHER `feature_078` → LONGER PFS — note that this is the OPPOSITE of the conventional clinical expectation if `feature_078` were age in metastatic colorectal cancer; nonetheless, the direction is unambiguous and very large in this dataset.
+
+(ii) `feature_057` (3-level integer, levels 0/1/2 with counts 17,592 / 24,971 / 7,437). Mean PFS by level 5.27 / 4.05 / 2.91 (Iter 3). Linear-trend slope = -1.19 mo per level, p<<1e-300. Strict monotonic ordinal effect; behaves like a stage/severity indicator.
+
+(iii) Six binary main effects (Iter 4). On the +1 vs 0 PFS-difference scale:
+   - `feature_051` (prev 55%): -1.35 mo (p≈0). Largest single-binary effect; behaves like a poor-prognostic biomarker.
+   - `feature_038` (prev 20%): +0.97 mo (p=1.7e-216). Largest beneficial binary; behaves like a treatment.
+   - `feature_013` (prev 42%): -0.33 mo (p=2e-58).
+   - `feature_043` (prev 35%): -0.31 mo (p=1e-49).
+   - `feature_109` (prev 4.5%): -0.23 mo (p=3e-7).
+   - `feature_067` (prev 3%): +0.22 mo (p=7e-4).
+
+(iv) Three continuous biomarker-like predictors (Iter 5).
+   - `feature_092` (range 1.5-5.5; possibly albumin-like). Univariate r = +0.10 but jumps to a partial slope of +0.45 mo per unit after age adjustment (p=2e-264); age was a negative confounder.
+   - `feature_099` (range 0-25, right-skewed, median 3). Adjusted slope -0.075 mo per raw unit (p<1e-300). Log transform tightens the linearity (slope -0.295 per log-unit, Iter 16).
+   - `feature_009` (right-skewed, range 0.02-778). Adjusted slope -0.0047 mo per raw unit (p=2e-30); log slope -0.148 per log-unit (Iter 16).
+
+
+2. Multivariable model and relative importance
+------------------------------------------------
+
+A linear model with the eleven main predictors (`feature_078`, C(feature_057), `feature_051`, `feature_038`, `feature_013`, `feature_043`, `feature_109`, `feature_067`, `feature_099`, `feature_092`, `feature_009`) explains R^2 = 0.858 of variance in PFS (Iter 7). All retain large, highly significant independent contributions except `feature_067`, which was fully attenuated to p=0.37. Adding five further continuous candidates (`feature_006` etc., Iter 19) lifted R^2 by only 0.0002, confirming that the eleven-feature core captures essentially all the predictable variance.
+
+Standardized (per-SD) coefficients (Iter 19): `feature_078` is the dominant contributor at +1.75 mo per SD (≈1 SD = 10 yrs), exceeding `feature_057` level 2 (-2.33 mo) and `feature_051` (-1.36 mo). The remaining standardized coefficients are smaller but still material (`feature_038` +0.94, `feature_109` -0.36, `feature_013` -0.35, `feature_099_z` -0.29, `feature_043` -0.29, `feature_092_z` +0.24, `feature_009_z` -0.08).
+
+
+3. Interactions
+---------------
+
+Beyond main effects, several interactions of treatment-like `feature_038` were tested (Iter 10).
+   - `feature_038 × feature_013`: coef = -1.64 mo, p<1e-300. STRONG: feature_038 confers a ~+1.5-1.8 mo gain in feature_013=0 patients but the benefit is essentially abolished in feature_013=1.
+   - `feature_038 × feature_043`: coef = -1.45 mo, p<1e-300. Same pattern (benefit largely abolished in feature_043=1).
+   - `feature_038 × feature_067`: coef = +0.89 mo, p=1.1e-31. Positive synergy — when feature_067=1, the feature_038 PFS gain is roughly doubled.
+   - `feature_038 × feature_051`: coef = +0.029, p=0.19. NS. Effects are simply additive despite both having very large main effects.
+   - `feature_038 × feature_057`: stratum-specific feature_038 gains are 0.92 / 0.99 / 0.90 mo across feature_057 levels 0/1/2 — essentially flat (Iter 11). No interaction with stage.
+   - `feature_038 × feature_078` (age): interaction coef = +0.0003 mo per yr, p=0.80 (Iter 12). NS.
+   - Three-way `feature_038 × feature_057 × feature_078`: coef = +0.0026, p=0.37 (Iter 21). NS.
+
+So the picture for feature_038 is: a uniform ~+1 mo PFS benefit additive in `feature_057` and `feature_051` and across age; selectively LOST in feature_013=1 or feature_043=1 patients; and AMPLIFIED in feature_067=1 patients.
+
+
+4. Race and insurance disparities — comprehensively absent
+-----------------------------------------------------------
+
+This was probed across multiple iterations (Iters 6, 13, 17, 18, 25):
+
+- Unadjusted PFS by race (Iter 6): white 4.32, asian 4.31, black 4.27, hispanic 4.31, other 4.41. ANOVA p=0.479. Spread ≈0.13 mo — within noise.
+- Unadjusted PFS by insurance (Iter 6): private 4.33, medicare 4.31, medicaid 4.28, uninsured 4.25. ANOVA p=0.219.
+- After clinically rich adjustment (Iter 13): joint F-test for race contrasts p=0.69, joint F-test for insurance contrasts p=0.33; all individual contrasts within ±0.04 mo of the reference.
+- Treatment receipt rate (Iter 25): `feature_038` receipt by race ranges 0.192-0.211 (white 0.200, asian 0.211, black 0.201, hispanic 0.198, other 0.192). By insurance: 0.190-0.202. Spread ≤2 percentage points; no statistically meaningful gradient.
+- Prevalence of the poor-prognostic `feature_051` is also flat across race (0.55-0.56) and insurance (0.54-0.56) groups (Iter 25).
+- Race × treatment interaction (Iter 17): joint p=0.076, NS. Insurance × treatment (Iter 18): joint p=0.130, NS.
+
+In short: this dataset shows NO evidence of differential outcomes, differential treatment receipt, differential prognostic-marker prevalence, or differential treatment effectiveness across race or insurance groups.
+
+
+5. Extreme-PFS analyses
+-----------------------
+
+PFS = 0 (immediate progression) occurs in 1,403 / 50,000 = 2.81% (Iter 15). Logistic regression: feature_057[T.2] log-OR +9.14 (p=4e-200) and feature_057[T.1] +4.52 (p=3e-94) — extreme increases. feature_051 log-OR +5.38 (p=1e-163). feature_038 log-OR -0.88 (p=6e-10). feature_078 log-OR per yr -0.673 (p=4e-286) — older age strongly protects.
+
+Long PFS > 10 mo (1.53% of cohort, Iter 20): feature_038 log-OR +4.63 (OR ≈ 103, p=7e-236) — by far the dominant predictor. feature_013 log-OR -3.39 (OR ≈ 0.034) and feature_043 log-OR -3.36 (OR ≈ 0.035) are massive negative predictors (consistent with the negative interaction with feature_038 seen in Iter 10). feature_078 log-OR per yr +0.20 (p<1e-200).
+
+
+6. What was NOT a predictor
+---------------------------
+
+- Race (`feature_064`) and insurance (`feature_018`): null in all probes (Iters 6, 13, 17, 18, 25).
+- Five of the six other ordinal multi-level features had ANOVA p>0.05 and total ranges of <0.15 mo (Iter 14). Only `feature_025` reached marginal p=0.047 with a 0.13-mo range — not clinically meaningful.
+- `feature_071` (11 levels): r=-0.003, p=0.55, total range 0.21 mo (Iter 23). Not a useful predictor.
+- The four near-50%-prevalence binaries (`feature_088`, `_005`, `_012`, `_106`) were all null on PFS (Iter 22), consistent with neutral demographic markers.
+- No mutually exclusive treatment-regimen structure was detectable among mid-prevalence binaries (Iter 8): no pair had Pearson r < -0.1, so the dataset does not appear to encode regimens as one-of-many flags.
+- `feature_057` was almost completely uncorrelated with every other feature in the dataset (max |r| < 0.02 outside its derived indicator and PFS-derived flags, Iter 24). It functions as an independent prognostic axis rather than a syndromic summary of observed labs/biomarkers.
+
+
+7. Hypotheses supported vs refuted
+-----------------------------------
+
+Supported:
+- Strong main effects of feature_078, feature_057, feature_051, feature_038, feature_013, feature_043, feature_109, feature_067 (Iter 1, 2, 3, 4).
+- Continuous predictors feature_099, feature_092, feature_009 retain (and in feature_092's case strengthen) their associations after age adjustment (Iter 5); log transforms improve the right-skewed continuous associations (Iter 16).
+- Multivariable model achieves R^2 ≈ 0.86 with these eleven predictors, and feature_078 is the largest standardized contributor (Iter 7, 19).
+- feature_038 × feature_013 negative interaction; feature_038 × feature_043 negative interaction; feature_038 × feature_067 positive synergy (Iter 10).
+- feature_038 benefit is uniform across feature_057 strata and across age (Iter 11, 12).
+- feature_038 protects against PFS=0 and is the dominant predictor of long PFS; feature_057, feature_051, feature_013, feature_043 strongly affect both extremes (Iter 15, 20).
+- The four near-50%-prevalence binaries are PFS-null (Iter 22).
+
+Refuted:
+- Race-based PFS disparity (Iter 6, 13).
+- Insurance-based PFS disparity (Iter 6, 13).
+- Race × treatment interaction (Iter 17).
+- Insurance × treatment interaction (Iter 18).
+- Mutually exclusive treatment-regimen structure (Iter 8).
+- Differential prevalence of feature_038 or feature_051 across feature_057 strata (Iter 9), or across race/insurance groups (Iter 25).
+- Three-way feature_038 × feature_057 × age interaction (Iter 21).
+- feature_071 monotonic association with PFS (Iter 23).
+- Feature_057 as a syndromic summary of other observed features (Iter 24): it is essentially uncorrelated with everything except PFS.
+
+
+8. Overall conclusions
+-----------------------
+
+PFS in this cohort is driven almost entirely by an eleven-feature core: an age-like continuous variable (`feature_078`), a 3-level ordinal severity axis (`feature_057`), a poor-prognostic binary (`feature_051`), a beneficial treatment-like binary (`feature_038`), two further weakly-negative binaries (`feature_013`, `feature_043`), one rare-positive (`feature_067`), one rare-negative (`feature_109`), and three biomarker-like continuous variables (`feature_092` favorable, `feature_099` and `feature_009` unfavorable). Together they explain ~86% of the variance in `pfs_months`.
+
+The clinical-decision-relevant interaction structure for the apparent treatment (`feature_038`) is:
+  • Benefit is additive with `feature_057` severity, `feature_051`, and age — a uniform ~+1 mo gain.
+  • Benefit is LOST in patients with `feature_013`=1 or `feature_043`=1 (negative interaction, ~equal-and-opposite to the main effect).
+  • Benefit is AMPLIFIED in patients with `feature_067`=1.
+
+Demographics — race (`feature_064`) and insurance (`feature_018`) — show no association with `pfs_months` in any analysis (unadjusted, adjusted, or as effect-modifiers of treatment), and treatment receipt and poor-prognostic-marker prevalence are flat across these strata. There is no evidence in this dataset of disparities in outcomes, treatment allocation, or treatment effectiveness.

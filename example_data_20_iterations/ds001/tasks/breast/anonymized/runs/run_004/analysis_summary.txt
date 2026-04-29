@@ -1,0 +1,168 @@
+Analysis summary — ds001_breast (50000 patients, outcome pfs_months)
+================================================================
+
+Approach
+--------
+We used a 25-iteration propose-test-refine loop over the de-identified
+ds001_breast dataset. Iteration 1 was a univariate screen of all 127
+features against pfs_months. Iterations 2-14 confirmed and quantified
+the strongest main effects in a multivariable OLS framework. Iterations
+15-21 probed pairwise interactions and age subgroup effects. Iterations
+22-25 examined demographic disparities (race feature_011, insurance
+feature_089) and synthesized the final adjusted picture. We never
+opened files outside the bundle directory.
+
+
+Key findings
+------------
+
+1. Eleven features dominate pfs_months and together explain 79% of
+   variance (R^2 = 0.7919) in a single linear model with no
+   interactions:
+
+       Variable       Adjusted effect on pfs_months    Direction
+       --------       -----------------------------    ---------
+       feature_080    +0.176 mo per year               older = longer pfs
+       feature_063 1  -1.189 mo vs level 0             ordinal "stage-like"
+       feature_063 2  -2.335 mo vs level 0             ordinal "stage-like"
+       feature_056    -1.549 mo                        binary, prevalence 30%
+       feature_042    +1.102 mo                        binary, prevalence 35%
+       feature_048    -0.984 mo                        binary, prevalence 10%
+       feature_067    -0.077 mo per unit               continuous (right-skew)
+       feature_015    -0.582 mo                        binary, prevalence 35%
+       feature_111    +0.531 mo                        binary, prevalence 70%
+       feature_019    +0.476 mo per unit               continuous (1.5-5.5)
+       feature_101    -0.0189 mo per unit              continuous (1-100)
+       feature_040    -0.471 mo                        binary, prevalence 18%
+
+   All coefficients had p<1e-30 in the joint model.
+
+2. feature_039 and feature_034, although univariately significant,
+   collapsed to non-significance once the other top features were
+   present (feature_039 p=0.32, feature_034 p=0.87 adjusted), implying
+   confounding through correlation with the dominant features.
+   feature_039 nevertheless turned out to carry a strong INTERACTION
+   signal (see point 5).
+
+3. feature_063 behaves like a 3-level ordinal stage variable
+   (counts 17592 / 24971 / 7437 across levels 0/1/2) with a strict
+   monotone decrement of pfs_months: 5.64 / 4.44 / 3.29 months mean.
+
+4. The largest single predictor is feature_080. With range 30-90 and
+   adjusted slope +0.176 mo/yr, it is almost certainly age in years.
+   The positive direction (older = longer pfs) is unusual but is a
+   property of the cohort, holds after adjustment, and is amplified
+   by interactions with feature_056 (-0.011 mo per yr-extra in
+   feature_056=1 patients, p=1e-19) and feature_048 (-0.008 mo/yr
+   in feature_048=1 patients, p=2e-5). In other words, age confers a
+   pfs benefit overall, but less so when adverse markers are present.
+
+5. feature_042 behaves like a TARGETED therapy whose benefit depends
+   strongly on biomarker context:
+
+       Modifier of feature_042 effect    Interaction term    p-value
+       ----------------------------     -----------------   -------
+       feature_111 = 1 (sensitivity)    +1.559 mo           <1e-300
+       feature_039 = 1 (sensitivity)    +1.029 mo           <1e-300
+       feature_015 = 1 (resistance)     -1.665 mo           <1e-300
+       feature_040 = 1 (resistance)     -1.337 mo           <1e-113
+       feature_063 (stage)               none significant   p>=0.19
+       feature_056 (adverse)             none significant   p=0.51
+
+   Stratified means make this concrete:
+
+       feature_111 = 0:  feature_042 effect = -0.02 mo (p=0.63)
+       feature_111 = 1:  feature_042 effect = +1.58 mo (p<1e-300)
+
+       feature_015 = 0:  feature_042 effect = +1.66 mo (p<1e-300)
+       feature_015 = 1:  feature_042 effect = +0.04 mo (p=0.65)
+
+       feature_040 = 0:  feature_042 effect = +1.35 mo (p<1e-300)
+       feature_040 = 1:  feature_042 effect = -0.01 mo (p=0.78)
+
+       feature_039 = 0:  feature_042 effect = +0.40 mo (p<1e-30)
+       feature_039 = 1:  feature_042 effect = +1.49 mo (p<1e-300)
+
+   Conclusion: the benefit of feature_042 is essentially confined to
+   patients who are feature_111+ AND feature_015– AND feature_040–.
+   feature_039 acts as an additional sensitivity marker that
+   roughly doubles the magnitude of benefit when present. This is the
+   signature pattern of a targeted therapy with one or more
+   sensitivity markers and one or more independent resistance
+   mechanisms.
+
+6. Demographic disparities — both UNADJUSTED and ADJUSTED — are
+   absent in this cohort.
+
+       feature_011 (race) unadjusted ANOVA: F=0.85, p=0.49
+       feature_011 (race) adjusted contrasts (white=ref):
+         asian   +0.021  p=0.37
+         black   -0.002  p=0.90
+         hispanic +0.008 p=0.60
+         other   +0.022  p=0.57
+       feature_089 (insurance) unadjusted ANOVA: F=0.31, p=0.82
+       feature_089 (insurance) adjusted contrasts (private=ref):
+         medicaid  +0.011  p=0.52
+         medicare  +0.005  p=0.66
+         uninsured +0.011  p=0.69
+
+   Adding race + insurance to the comprehensive clinical model did
+   not change R^2 (0.7919 -> 0.7919). The span of group means is
+   0.08 months across race and 0.05 months across insurance — well
+   within sampling noise for n=50000.
+
+7. The benefit of feature_042 is also delivered uniformly across
+   demographic subgroups. Every feature_042 × race interaction
+   (white reference) had p>=0.25, every feature_042 × insurance
+   interaction (private reference) had p>=0.13, and the within-white
+   and within-private feature_042 effects (+1.089 and +1.074 mo) are
+   indistinguishable from the overall +1.10 mo effect. There is no
+   evidence in this cohort of differential treatment benefit by race
+   or payor.
+
+
+Hypotheses supported
+--------------------
+- H1 (univariate screen finds strong signals): supported.
+- H2 (joint model retains key features and drops feature_039 / 034 /
+  race / insurance): supported.
+- H3-H13 (each top feature is independently associated with pfs_months
+  in the predicted direction): all supported.
+- H14 (feature_039 and feature_034 lose significance after
+  adjustment): supported.
+- H15 (feature_042 × feature_111 positive interaction): strongly
+  supported.
+- H16 (no feature_042 × feature_056 interaction): supported.
+- H17 (no feature_042 × feature_063 interaction): supported.
+- H18 (feature_042 × feature_015 negative interaction): strongly
+  supported.
+- H19 (feature_042 × feature_040 negative interaction): strongly
+  supported.
+- H20 (feature_042 × feature_039 positive interaction): strongly
+  supported.
+- H21 (age × adverse-feature negative interactions): supported for
+  feature_056 and feature_048; null for feature_111 and only
+  borderline for feature_042.
+- H22 (no race effect): supported.
+- H23 (no insurance effect): supported.
+- H24 (uniform feature_042 benefit across demographics): supported.
+- H25 (R^2 ~0.79, no demographic residual): supported.
+
+Hypotheses refuted
+------------------
+None of the proposed hypotheses were refuted; several were null
+findings that were correctly anticipated (H16, H17, H22, H23, H24).
+The only mild surprise was that feature_039 — non-significant as a
+main effect — carried a very strong feature_042-interaction signal.
+
+
+Overall conclusion
+------------------
+Progression-free survival in ds001_breast is governed by a small
+number of clinical/biomarker variables. The dominant treatment-like
+feature (feature_042) confers ~+1.1 months of pfs on average but its
+effect is biomarker-driven: positive in feature_111+ and feature_039+
+patients, abolished in feature_015+ or feature_040+ patients. There
+is no detectable racial or insurance-based disparity, either in the
+prognostic features themselves or in the magnitude of feature_042
+benefit.
