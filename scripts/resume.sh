@@ -14,6 +14,8 @@
 
 set -euo pipefail
 
+trap 'status=$?; echo; echo "exited with status $status"; read -p "press enter to close..."' EXIT
+
 OUT="${OUT:-../data/ds001}"
 HARNESS="${HARNESS:-claude}"
 JOBS="${JOBS:-4}"
