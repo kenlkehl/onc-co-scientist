@@ -11,6 +11,7 @@ from .buried import BuriedDiscovery, BuriedScore, MatchJudgmentRecord, score_bur
 from .judge import (
     AnthropicVertexJudge,
     ClaudeCliJudge,
+    CodexCliJudge,
     Judge,
     JudgeCache,
     MatchJudgment,
@@ -32,6 +33,7 @@ __all__ = [
     "BuriedDiscovery",
     "BuriedScore",
     "ClaudeCliJudge",
+    "CodexCliJudge",
     "Judge",
     "JudgeCache",
     "MatchJudgment",

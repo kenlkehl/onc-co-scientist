@@ -32,6 +32,7 @@ from .interventions import (
 from .scoring import (
     AnthropicVertexJudge,
     ClaudeCliJudge,
+    CodexCliJudge,
     Judge,
     JudgeCache,
     ReplicateScore,
@@ -72,6 +73,7 @@ class JudgeBackend(StrEnum):
     """LLM backend powering novelty + match judgments."""
 
     claude_cli = "claude-cli"
+    codex_cli = "codex-cli"
     anthropic_vertex = "anthropic-vertex"
     stub = "stub"
 
@@ -354,7 +356,7 @@ def _build_judge(
     backend: JudgeBackend,
     *,
     judge_cli: str,
-    judge_model: str,
+    judge_model: str | None,
     batch_size: int,
     cache_dir: Path | None,
     stub_config_path: Path | None,
@@ -372,14 +374,26 @@ def _build_judge(
             novel_phrases=novel_phrases, match_phrases=match_phrases
         )
     cache = JudgeCache(cache_dir=cache_dir)
+    if backend is JudgeBackend.codex_cli:
+        return CodexCliJudge(
+            cli="codex" if judge_cli == "auto" else judge_cli,
+            model_id=judge_model,
+            batch_size=batch_size,
+            cache=cache,
+        )
     if backend is JudgeBackend.anthropic_vertex:
+        if judge_model is None:
+            return AnthropicVertexJudge(
+                batch_size=batch_size,
+                cache=cache,
+            )
         return AnthropicVertexJudge(
             model_id=judge_model,
             batch_size=batch_size,
             cache=cache,
         )
     return ClaudeCliJudge(
-        cli=judge_cli,
+        cli="claude" if judge_cli == "auto" else judge_cli,
         batch_size=batch_size,
         cache=cache,
     )
@@ -425,7 +439,8 @@ JudgeOption = Annotated[
         help="LLM backend for novelty + match judgments. 'claude-cli' shells "
         "out to `claude --dangerously-skip-permissions -p` (uses existing "
         "Claude Code auth on the host; note: the CLI's pre-screen classifier "
-        "may refuse oncology hypothesis prompts). 'anthropic-vertex' calls "
+        "may refuse oncology hypothesis prompts). 'codex-cli' shells out to "
+        "`codex exec` (uses existing Codex CLI auth). 'anthropic-vertex' calls "
         "the Anthropic SDK directly via AnthropicVertex (requires "
         "CLOUD_ML_REGION + ANTHROPIC_VERTEX_PROJECT_ID + ADC). 'stub' is a "
         "deterministic test-only backend driven by --stub-config.",
@@ -436,15 +451,16 @@ JudgeCliOption = Annotated[
     str,
     typer.Option(
         "--judge-cli",
-        help="Path to the claude binary (only used when --judge=claude-cli).",
+        help="Judge CLI binary. Use 'auto' for claude with --judge=claude-cli "
+        "and codex with --judge=codex-cli.",
     ),
 ]
 JudgeModelOption = Annotated[
-    str,
+    str | None,
     typer.Option(
         "--judge-model",
-        help="Model id for --judge=anthropic-vertex (e.g. 'claude-sonnet-4-6', "
-        "'claude-opus-4-7'). Ignored by other backends.",
+        help="Optional model id for --judge=anthropic-vertex or --judge=codex-cli. "
+        "Omit to use the backend default.",
     ),
 ]
 JudgeBatchSizeOption = Annotated[
@@ -514,8 +530,8 @@ def score_run(
         Path, typer.Option("--out", help="Directory for the scoring report.")
     ],
     judge_backend: JudgeOption = JudgeBackend.claude_cli,
-    judge_cli: JudgeCliOption = "claude",
-    judge_model: JudgeModelOption = "claude-sonnet-4-6",
+    judge_cli: JudgeCliOption = "auto",
+    judge_model: JudgeModelOption = None,
     judge_batch_size: JudgeBatchSizeOption = 10,
     cache_dir: CacheDirOption = None,
     no_judge_cache: NoJudgeCacheOption = False,
@@ -579,8 +595,8 @@ def score_batch(
         typer.Option("--out", help="Directory for the batch scoring report."),
     ],
     judge_backend: JudgeOption = JudgeBackend.claude_cli,
-    judge_cli: JudgeCliOption = "claude",
-    judge_model: JudgeModelOption = "claude-sonnet-4-6",
+    judge_cli: JudgeCliOption = "auto",
+    judge_model: JudgeModelOption = None,
     judge_batch_size: JudgeBatchSizeOption = 10,
     cache_dir: CacheDirOption = None,
     no_judge_cache: NoJudgeCacheOption = False,

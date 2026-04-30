@@ -81,7 +81,15 @@ def _write_fake_harness(
             #!/usr/bin/env bash
             set -e
             __COUNTER_BLOCK__
-            echo '{"dataset_id":"x","model_id":"fake","harness_id":"fake@1","max_iterations":1,"iterations":[]}' > transcript.json
+            cat > transcript.json <<'JSON'
+            {
+              "dataset_id": "x",
+              "model_id": "fake",
+              "harness_id": "fake@1",
+              "max_iterations": 1,
+              "iterations": []
+            }
+            JSON
             {
               echo "ran in $(pwd)"
               for arg in "$@"; do
@@ -258,10 +266,19 @@ def test_run_harness_ollama_wrapped_inserts_double_dash(tmp_path: Path) -> None:
               esac
             done
             if [[ $saw_launch_claude -eq 1 && $saw_double_dash -eq 1 && $saw_p_flag -eq 1 ]]; then
-              echo '{{"dataset_id":"x","model_id":"fake","harness_id":"ollama-claude@1","max_iterations":1,"iterations":[]}}' > transcript.json
+              cat > transcript.json <<'JSON'
+            {{
+              "dataset_id": "x",
+              "model_id": "fake",
+              "harness_id": "ollama-claude@1",
+              "max_iterations": 1,
+              "iterations": []
+            }}
+            JSON
               echo "ollama-launched fake harness ran in $(pwd)" > analysis_summary.txt
             else
-              echo "contract violation: launch=$saw_launch_claude dd=$saw_double_dash p=$saw_p_flag" >&2
+              echo "contract violation: launch=$saw_launch_claude \
+                dd=$saw_double_dash p=$saw_p_flag" >&2
               exit 17
             fi
             """
@@ -285,6 +302,81 @@ def test_run_harness_ollama_wrapped_inserts_double_dash(tmp_path: Path) -> None:
     # And the recorded argv shows `--` was inserted before `-p`.
     log = argv_log.read_text()
     assert "launch" in log and "claude" in log and "--" in log and "-p" in log
+
+
+def test_run_harness_codex_profile_invokes_exec_with_workspace_write(
+    tmp_path: Path,
+) -> None:
+    tasks_root = _build_two_cancer_tasks(tmp_path)
+    bin_dir = tmp_path / "bin"
+    argv_log = tmp_path / "codex_argv.log"
+    fake_codex = bin_dir / "codex"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    fake_codex.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env bash
+            set -e
+            printf '%s\\0' "$@" >> "{argv_log}"
+            printf '\\n' >> "{argv_log}"
+
+            saw_exec=0
+            saw_sandbox=0
+            saw_workspace_write=0
+            saw_approval=0
+            saw_never=0
+            saw_skip_git=0
+            for arg in "$@"; do
+              case "$arg" in
+                exec) saw_exec=1 ;;
+                --sandbox) saw_sandbox=1 ;;
+                workspace-write) saw_workspace_write=1 ;;
+                --ask-for-approval) saw_approval=1 ;;
+                never) saw_never=1 ;;
+                --skip-git-repo-check) saw_skip_git=1 ;;
+              esac
+            done
+            if [[ $saw_exec -eq 1 && $saw_sandbox -eq 1 \
+              && $saw_workspace_write -eq 1 && $saw_approval -eq 1 \
+              && $saw_never -eq 1 && $saw_skip_git -eq 1 ]]; then
+              cat > transcript.json <<'JSON'
+            {{
+              "dataset_id": "x",
+              "model_id": "fake",
+              "harness_id": "codex-cli@1",
+              "max_iterations": 1,
+              "iterations": []
+            }}
+            JSON
+              echo "codex fake harness ran in $(pwd)" > analysis_summary.txt
+            else
+              echo "contract violation: exec=$saw_exec sandbox=$saw_sandbox \
+                workspace=$saw_workspace_write approval=$saw_approval \
+                never=$saw_never skip_git=$saw_skip_git" >&2
+              exit 18
+            fi
+            """
+        )
+    )
+    fake_codex.chmod(0o755)
+
+    result = _run_script(
+        "codex",
+        str(tasks_root),
+        env_extra={"PATH": _path_with_bin(bin_dir)},
+    )
+    assert result.returncode == 0, result.stderr
+
+    for ct in ("crc", "breast"):
+        for variant in ("named", "anonymized"):
+            run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
+            assert (run_dir / "transcript.json").exists()
+
+    log = argv_log.read_text()
+    assert "exec" in log
+    assert "--sandbox" in log and "workspace-write" in log
+    assert "--ask-for-approval" in log and "never" in log
+    assert "--skip-git-repo-check" in log
 
 
 def test_run_harness_replicates_runs_n_times(tmp_path: Path) -> None:
@@ -319,7 +411,10 @@ def test_run_harness_replicates_top_up(tmp_path: Path) -> None:
     counter = tmp_path / "counter.txt"
     _write_fake_harness(bin_dir, counter_path=counter)
 
-    seed_payload = '{"dataset_id":"x","model_id":"seed","harness_id":"seed@1","max_iterations":1,"iterations":[]}'
+    seed_payload = (
+        '{"dataset_id":"x","model_id":"seed","harness_id":"seed@1",'
+        '"max_iterations":1,"iterations":[]}'
+    )
     for ct in ("crc", "breast"):
         for variant in ("named", "anonymized"):
             for idx in (1, 2):
@@ -358,7 +453,10 @@ def test_run_harness_replicates_idempotent(tmp_path: Path) -> None:
     counter = tmp_path / "counter.txt"
     _write_fake_harness(bin_dir, counter_path=counter)
 
-    seed_payload = '{"dataset_id":"x","model_id":"seed","harness_id":"seed@1","max_iterations":1,"iterations":[]}'
+    seed_payload = (
+        '{"dataset_id":"x","model_id":"seed","harness_id":"seed@1",'
+        '"max_iterations":1,"iterations":[]}'
+    )
     for ct in ("crc", "breast"):
         for variant in ("named", "anonymized"):
             for idx in (1, 2, 3):

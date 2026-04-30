@@ -10,9 +10,10 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from onc_co_scientist.cli import app
+from onc_co_scientist.cli import JudgeBackend, _build_judge, app
 from onc_co_scientist.harness.task_spec import build_tasks
 from onc_co_scientist.harness.transcript import Transcript
+from onc_co_scientist.scoring import ClaudeCliJudge, CodexCliJudge
 from onc_co_scientist.synthetic.cancer_types import CancerType
 from onc_co_scientist.synthetic.generator import GeneratorConfig
 from onc_co_scientist.synthetic.io import read_manifest
@@ -72,6 +73,33 @@ def _stub_config(path: Path) -> Path:
         )
     )
     return path
+
+
+def test_build_judge_supports_claude_and_codex_cli_backends() -> None:
+    claude = _build_judge(
+        JudgeBackend.claude_cli,
+        judge_cli="auto",
+        judge_model=None,
+        batch_size=3,
+        cache_dir=None,
+        stub_config_path=None,
+    )
+    codex = _build_judge(
+        JudgeBackend.codex_cli,
+        judge_cli="auto",
+        judge_model="gpt-5.4",
+        batch_size=4,
+        cache_dir=None,
+        stub_config_path=None,
+    )
+
+    assert isinstance(claude, ClaudeCliJudge)
+    assert claude.cli == "claude"
+    assert claude.batch_size == 3
+    assert isinstance(codex, CodexCliJudge)
+    assert codex.cli == "codex"
+    assert codex.model_id == "gpt-5.4"
+    assert codex.batch_size == 4
 
 
 def test_score_batch_scores_named_and_anonymized_and_writes_report(tmp_path: Path) -> None:

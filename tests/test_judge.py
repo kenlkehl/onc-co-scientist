@@ -11,6 +11,7 @@ import pytest
 
 from onc_co_scientist.scoring.judge import (
     ClaudeCliJudge,
+    CodexCliJudge,
     JudgeCache,
     NoveltyJudgment,
     StubJudge,
@@ -200,6 +201,31 @@ def _write_fake_claude(bin_dir: Path, response: str) -> Path:
     return fake
 
 
+def _write_fake_codex(bin_dir: Path, response: str) -> Path:
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    fake = bin_dir / "codex"
+    fake.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env bash
+            printf '%s\\n' "$@" >> "{bin_dir}/codex_args.log"
+            cat > "{bin_dir}/codex_stdin.log"
+            (
+              flock -x 9
+              n=0
+              if [[ -f "{bin_dir}/counter" ]]; then n=$(<"{bin_dir}/counter"); fi
+              echo $((n + 1)) > "{bin_dir}/counter"
+            ) 9>"{bin_dir}/counter.lock"
+            cat <<'__EOF__'
+            {response}
+            __EOF__
+            """
+        )
+    )
+    fake.chmod(0o755)
+    return fake
+
+
 @pytestmark_shell
 def test_claude_cli_judge_invokes_subprocess(tmp_path: Path, monkeypatch):
     bin_dir = tmp_path / "bin"
@@ -237,3 +263,38 @@ def test_claude_cli_judge_batches_when_n_exceeds_size(tmp_path: Path, monkeypatc
     assert len(out) == 4
     # 4 hypotheses / batch_size 2 = 2 subprocess calls.
     assert (bin_dir / "counter").read_text().strip() == "2"
+
+
+@pytestmark_shell
+def test_codex_cli_judge_invokes_exec_with_stdin_and_schema(
+    tmp_path: Path, monkeypatch
+):
+    bin_dir = tmp_path / "bin"
+    response = '{"judgments": [{"is_novel": true, "rationale": "uses obscure subgroup"}]}'
+    _write_fake_codex(bin_dir, response)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    judge = CodexCliJudge(
+        cli="codex",
+        model_id="gpt-5.4",
+        batch_size=10,
+        cache=None,
+    )
+
+    out = judge.judge_novelty(["odd hypothesis"])
+
+    assert out == [NoveltyJudgment(is_novel=True, rationale="uses obscure subgroup")]
+    args = (bin_dir / "codex_args.log").read_text().splitlines()
+    assert args[:2] == ["exec", "--sandbox"]
+    assert "read-only" in args
+    assert "--skip-git-repo-check" in args
+    assert "--ephemeral" in args
+    assert "--ignore-user-config" in args
+    assert "--ignore-rules" in args
+    assert "--color" in args
+    assert "--model" in args
+    assert "gpt-5.4" in args
+    assert "--output-schema" in args
+    assert args[-1] == "-"
+    stdin_text = (bin_dir / "codex_stdin.log").read_text()
+    assert "odd hypothesis" in stdin_text
+    assert '"judgments"' in stdin_text

@@ -17,7 +17,8 @@ either way.
 Default backend is ``ClaudeCliJudge``: subprocess to ``claude
 --dangerously-skip-permissions -p <prompt>`` so the judge runs under the
 same Claude Code auth that's already on the box (no API key plumbing).
-A deterministic ``StubJudge`` is provided for tests.
+``CodexCliJudge`` is also available for hosts authenticated with the OpenAI
+Codex CLI. A deterministic ``StubJudge`` is provided for tests.
 
 All judgments are cached on disk by ``sha256(prompt)`` so re-running
 scoring on identical transcripts is free.
@@ -31,9 +32,10 @@ import os
 import re
 import subprocess
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Literal, Protocol
+from typing import Literal, Protocol
 
 from ..synthetic.schemas import AssociationForm, AssociationSpec
 
@@ -371,6 +373,179 @@ class ClaudeCliJudge:
         if completed.returncode != 0:
             raise RuntimeError(
                 f"claude CLI exited {completed.returncode}: "
+                f"stderr={completed.stderr.strip()!r} "
+                f"stdout={completed.stdout.strip()!r} "
+                f"prompt_len={len(prompt)}"
+            )
+        response = completed.stdout
+        payload = _extract_json_array(response)
+        if len(payload) != expected:
+            raise ValueError(
+                f"Expected {expected} judgments, got {len(payload)}: {response!r}"
+            )
+        if self.cache is not None:
+            self.cache.put(prompt, response)
+        return payload
+
+
+def _codex_structured_prompt(prompt: str) -> str:
+    return (
+        prompt
+        + "\n\nFor the Codex CLI structured-output wrapper, return ONLY a JSON "
+        'object with exactly one key, "judgments", whose value is the JSON '
+        "array requested above. Do not include prose."
+    )
+
+
+def _codex_output_schema(
+    judgment_key: Literal["is_novel", "matches"],
+) -> dict[str, object]:
+    return {
+        "type": "object",
+        "properties": {
+            "judgments": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        judgment_key: {"type": "boolean"},
+                        "rationale": {"type": "string"},
+                    },
+                    "required": [judgment_key, "rationale"],
+                    "additionalProperties": False,
+                },
+            }
+        },
+        "required": ["judgments"],
+        "additionalProperties": False,
+    }
+
+
+@dataclass
+class CodexCliJudge:
+    """Judge via the OpenAI Codex CLI's non-interactive ``codex exec`` mode.
+
+    The current Codex CLI structure is ``codex exec [OPTIONS] [PROMPT]``.
+    This backend passes ``-`` as the prompt placeholder and streams the prompt
+    on stdin, so long prompts do not become command-line arguments. By default
+    it runs read-only, ignores rules/user config for reproducibility, skips the
+    git-repository guard for one-off scoring directories, and uses
+    ``--output-schema`` to request a stable final JSON object.
+    """
+
+    cli: str = "codex"
+    model_id: str | None = None
+    extra_args: tuple[str, ...] = (
+        "--sandbox",
+        "read-only",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--color",
+        "never",
+    )
+    batch_size: int = 10
+    cache: JudgeCache | None = None
+    timeout_s: int = 600
+    use_output_schema: bool = True
+
+    def judge_novelty(self, hypotheses: list[str]) -> list[NoveltyJudgment]:
+        out: list[NoveltyJudgment] = []
+        for chunk in _chunked(hypotheses, self.batch_size):
+            payload = self._run_chunk(
+                _build_novelty_prompt(chunk),
+                expected=len(chunk),
+                judgment_key="is_novel",
+            )
+            for entry in payload:
+                out.append(
+                    NoveltyJudgment(
+                        is_novel=bool(entry.get("is_novel", False)),
+                        rationale=str(entry.get("rationale", "")),
+                    )
+                )
+        return out
+
+    def judge_matches(
+        self,
+        hypotheses: list[str],
+        spec: AssociationSpec,
+        *,
+        variant: Variant,
+        column_mapping: dict[str, str] | None = None,
+    ) -> list[MatchJudgment]:
+        out: list[MatchJudgment] = []
+        for chunk in _chunked(hypotheses, self.batch_size):
+            prompt = _build_match_prompt(
+                chunk, spec, variant=variant, column_mapping=column_mapping
+            )
+            payload = self._run_chunk(
+                prompt,
+                expected=len(chunk),
+                judgment_key="matches",
+            )
+            for entry in payload:
+                out.append(
+                    MatchJudgment(
+                        matches=bool(entry.get("matches", False)),
+                        rationale=str(entry.get("rationale", "")),
+                    )
+                )
+        return out
+
+    def _run_chunk(
+        self,
+        prompt: str,
+        *,
+        expected: int,
+        judgment_key: Literal["is_novel", "matches"],
+    ) -> list[dict]:
+        if self.cache is not None:
+            cached = self.cache.get(prompt)
+            if cached is not None:
+                payload = _extract_json_array(cached)
+                if len(payload) == expected:
+                    return payload
+
+        run_prompt = (
+            _codex_structured_prompt(prompt) if self.use_output_schema else prompt
+        )
+        argv = [self.cli, "exec", *self.extra_args]
+        if self.model_id is not None:
+            argv.extend(["--model", self.model_id])
+
+        schema_path: Path | None = None
+        if self.use_output_schema:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".schema.json",
+                delete=False,
+                encoding="utf-8",
+            ) as schema_file:
+                json.dump(
+                    _codex_output_schema(judgment_key),
+                    schema_file,
+                )
+                schema_path = Path(schema_file.name)
+            argv.extend(["--output-schema", str(schema_path)])
+
+        argv.append("-")
+        try:
+            completed = subprocess.run(
+                argv,
+                input=run_prompt,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_s,
+            )
+        finally:
+            if schema_path is not None:
+                schema_path.unlink(missing_ok=True)
+
+        if completed.returncode != 0:
+            raise RuntimeError(
+                f"codex CLI exited {completed.returncode}: "
                 f"stderr={completed.stderr.strip()!r} "
                 f"stdout={completed.stdout.strip()!r} "
                 f"prompt_len={len(prompt)}"

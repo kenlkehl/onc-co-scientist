@@ -43,7 +43,7 @@ OUT=../data/ds001 \
 HARNESS=claude \
 REPLICATES=5 \
 JOBS=4 \
-JUDGE=claude-cli \
+JUDGE=codex-cli \
 scripts/run_all.sh
 ```
 
@@ -58,7 +58,9 @@ scripts/run_all.sh
 | `JOBS`            | `4`                                | Bundles run in parallel                                     |
 | `REPLICATES`      | `5`                                | Replicate runs per bundle (idempotent top-up)               |
 | `PYTHON_ENV`      | `.venv`                            | Python env prepended to PATH per harness invocation         |
-| `JUDGE`           | `claude-cli`                       | Scoring judge backend                                       |
+| `JUDGE`           | `anthropic-vertex`                 | Scoring judge backend (`anthropic-vertex`, `claude-cli`, `codex-cli`, or `stub`) |
+| `JUDGE_CLI`       | `auto`                             | CLI binary for `claude-cli`/`codex-cli` judges (`auto`, `claude`, `codex`, or a path) |
+| `JUDGE_MODEL`     | unset                              | Optional model id for `anthropic-vertex` or `codex-cli`     |
 
 ## Running steps individually
 
@@ -112,6 +114,15 @@ scripts/run_harness.sh claude ../data/ds001/tasks \
     --replicates 5
 ```
 
+Use the Codex CLI profile the same way for hypothesis-generation runs:
+
+```bash
+scripts/run_harness.sh codex ../data/ds001/tasks \
+    --python-env .venv \
+    --jobs 4 \
+    --replicates 5
+```
+
 The script `cd`s into each `tasks/<ct>/<variant>/` before launching, so the harness inherits that as its working directory and cannot see the synth bundle's manifest one level up. Per-replicate outputs land under `tasks/<ct>/<variant>/runs/run_NNN/{transcript.json,analysis_summary.txt,harness.log}`. Re-invoking with the same `--replicates` tops up missing runs idempotently.
 
 Built-in profiles: `claude`, `codex`, `opencode`, `droid`, `pi`. Local-model wrappers also work (the script auto-inserts the `--` separator that ollama needs):
@@ -133,6 +144,18 @@ ocs score batch \
 
 The default `claude-cli` judge shells out to `claude --dangerously-skip-permissions -p`, using whatever Claude Code auth is already on the host (no API key plumbing). Judge calls are cached on disk under `~/.cache/onc-co-scientist/judge/`; pass `--no-judge-cache` to force every call to hit the LLM.
 
+You can also use `--judge codex-cli` to score through the OpenAI Codex CLI.
+That backend shells out to `codex exec` using existing Codex CLI auth.
+
+```bash
+ocs score batch \
+    --synth-root ../data/ds001 \
+    --tasks-root ../data/ds001/tasks \
+    --out ../data/ds001/score \
+    --judge codex-cli \
+    --judge-model gpt-5.4
+```
+
 For one-off scoring of a single transcript:
 
 ```bash
@@ -140,7 +163,7 @@ ocs score run \
     --dataset ../data/ds001/nsclc/named \
     --transcript ../data/ds001/tasks/nsclc/named/runs/run_001/transcript.json \
     --out ../data/ds001/nsclc/named/score \
-    --judge claude-cli
+    --judge codex-cli
 ```
 
 ## Prototype: CAA paradigm-bias vectors

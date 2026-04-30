@@ -67,7 +67,8 @@ profile_args() {
             printf '%s\0' '-p' '--dangerously-skip-permissions'
             ;;
         codex)
-            printf '%s\0' 'exec' '--dangerously-bypass-approvals-and-sandbox'
+            printf '%s\0' 'exec' '--sandbox' 'workspace-write' \
+                '--ask-for-approval' 'never' '--skip-git-repo-check'
             ;;
         opencode)
             printf '%s\0' 'run'

@@ -10,7 +10,7 @@
 # always-overwriting synth + build-task steps.)
 #
 # Honors the same env-var contract as run_all.sh:
-#   OUT HARNESS JOBS REPLICATES PYTHON_ENV JUDGE
+#   OUT HARNESS JOBS REPLICATES PYTHON_ENV JUDGE JUDGE_CLI JUDGE_MODEL
 
 set -euo pipefail
 
@@ -22,6 +22,8 @@ JOBS="${JOBS:-4}"
 REPLICATES="${REPLICATES:-20}"
 PYTHON_ENV="${PYTHON_ENV:-.venv}"
 JUDGE="${JUDGE:-anthropic-vertex}"
+JUDGE_CLI="${JUDGE_CLI:-auto}"
+JUDGE_MODEL="${JUDGE_MODEL:-}"
 
 TASKS_ROOT="$OUT/tasks"
 SCORE_ROOT="$OUT/score"
@@ -62,10 +64,18 @@ scripts/run_harness.sh "${harness_args[@]}"
 # ---- step C: score ----------------------------------------------------
 
 echo "[3/3] Scoring (judge=$JUDGE) → $SCORE_ROOT" >&2
-ocs score batch \
-    --synth-root "$OUT" \
-    --tasks-root "$TASKS_ROOT" \
-    --out "$SCORE_ROOT" \
+score_args=(
+    score
+    batch
+    --synth-root "$OUT"
+    --tasks-root "$TASKS_ROOT"
+    --out "$SCORE_ROOT"
     --judge "$JUDGE"
+    --judge-cli "$JUDGE_CLI"
+)
+if [[ -n "$JUDGE_MODEL" ]]; then
+    score_args+=( --judge-model "$JUDGE_MODEL" )
+fi
+ocs "${score_args[@]}"
 
 echo "Resume complete. Report: $SCORE_ROOT/batch_score.md" >&2
