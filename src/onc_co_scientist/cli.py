@@ -30,6 +30,7 @@ from .interventions import (
     write_contrast_pairs,
 )
 from .scoring import (
+    AnthropicVertexJudge,
     ClaudeCliJudge,
     Judge,
     JudgeCache,
@@ -71,6 +72,7 @@ class JudgeBackend(StrEnum):
     """LLM backend powering novelty + match judgments."""
 
     claude_cli = "claude-cli"
+    anthropic_vertex = "anthropic-vertex"
     stub = "stub"
 
 
@@ -352,6 +354,7 @@ def _build_judge(
     backend: JudgeBackend,
     *,
     judge_cli: str,
+    judge_model: str,
     batch_size: int,
     cache_dir: Path | None,
     stub_config_path: Path | None,
@@ -369,6 +372,12 @@ def _build_judge(
             novel_phrases=novel_phrases, match_phrases=match_phrases
         )
     cache = JudgeCache(cache_dir=cache_dir)
+    if backend is JudgeBackend.anthropic_vertex:
+        return AnthropicVertexJudge(
+            model_id=judge_model,
+            batch_size=batch_size,
+            cache=cache,
+        )
     return ClaudeCliJudge(
         cli=judge_cli,
         batch_size=batch_size,
@@ -415,8 +424,11 @@ JudgeOption = Annotated[
         "--judge",
         help="LLM backend for novelty + match judgments. 'claude-cli' shells "
         "out to `claude --dangerously-skip-permissions -p` (uses existing "
-        "Claude Code auth on the host). 'stub' is a deterministic test-only "
-        "backend driven by --stub-config.",
+        "Claude Code auth on the host; note: the CLI's pre-screen classifier "
+        "may refuse oncology hypothesis prompts). 'anthropic-vertex' calls "
+        "the Anthropic SDK directly via AnthropicVertex (requires "
+        "CLOUD_ML_REGION + ANTHROPIC_VERTEX_PROJECT_ID + ADC). 'stub' is a "
+        "deterministic test-only backend driven by --stub-config.",
         case_sensitive=False,
     ),
 ]
@@ -425,6 +437,14 @@ JudgeCliOption = Annotated[
     typer.Option(
         "--judge-cli",
         help="Path to the claude binary (only used when --judge=claude-cli).",
+    ),
+]
+JudgeModelOption = Annotated[
+    str,
+    typer.Option(
+        "--judge-model",
+        help="Model id for --judge=anthropic-vertex (e.g. 'claude-sonnet-4-6', "
+        "'claude-opus-4-7'). Ignored by other backends.",
     ),
 ]
 JudgeBatchSizeOption = Annotated[
@@ -495,6 +515,7 @@ def score_run(
     ],
     judge_backend: JudgeOption = JudgeBackend.claude_cli,
     judge_cli: JudgeCliOption = "claude",
+    judge_model: JudgeModelOption = "claude-sonnet-4-6",
     judge_batch_size: JudgeBatchSizeOption = 10,
     cache_dir: CacheDirOption = None,
     no_judge_cache: NoJudgeCacheOption = False,
@@ -512,6 +533,7 @@ def score_run(
     judge = _build_judge(
         judge_backend,
         judge_cli=judge_cli,
+        judge_model=judge_model,
         batch_size=judge_batch_size,
         cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
         stub_config_path=stub_config,
@@ -558,6 +580,7 @@ def score_batch(
     ],
     judge_backend: JudgeOption = JudgeBackend.claude_cli,
     judge_cli: JudgeCliOption = "claude",
+    judge_model: JudgeModelOption = "claude-sonnet-4-6",
     judge_batch_size: JudgeBatchSizeOption = 10,
     cache_dir: CacheDirOption = None,
     no_judge_cache: NoJudgeCacheOption = False,
@@ -586,6 +609,7 @@ def score_batch(
     judge = _build_judge(
         judge_backend,
         judge_cli=judge_cli,
+        judge_model=judge_model,
         batch_size=judge_batch_size,
         cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
         stub_config_path=stub_config,

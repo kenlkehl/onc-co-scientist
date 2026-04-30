@@ -370,7 +370,10 @@ class ClaudeCliJudge:
         )
         if completed.returncode != 0:
             raise RuntimeError(
-                f"claude CLI exited {completed.returncode}: {completed.stderr.strip()!r}"
+                f"claude CLI exited {completed.returncode}: "
+                f"stderr={completed.stderr.strip()!r} "
+                f"stdout={completed.stdout.strip()!r} "
+                f"prompt_len={len(prompt)}"
             )
         response = completed.stdout
         payload = _extract_json_array(response)
@@ -380,6 +383,101 @@ class ClaudeCliJudge:
             )
         if self.cache is not None:
             self.cache.put(prompt, response)
+        return payload
+
+
+@dataclass
+class AnthropicVertexJudge:
+    """Judge that calls Anthropic Claude on Vertex AI directly via the SDK.
+
+    Bypasses the Claude Code CLI wrapper, whose pre-screen classifier
+    refuses oncology hypothesis text as "medical advice" even though the
+    underlying model would happily evaluate it. Reuses the existing
+    ``AnthropicVertexProvider`` so credentials follow the same env-var
+    contract (``CLOUD_ML_REGION``, ``ANTHROPIC_VERTEX_PROJECT_ID``, ADC).
+    """
+
+    model_id: str = "claude-sonnet-4-6"
+    region: str | None = None
+    project_id: str | None = None
+    batch_size: int = 10
+    cache: JudgeCache | None = None
+    max_tokens: int = 4096
+    max_retries: int = 2
+
+    def __post_init__(self) -> None:
+        from ..providers.anthropic_vertex import (
+            AnthropicVertexConfig,
+            AnthropicVertexProvider,
+        )
+
+        self._provider = AnthropicVertexProvider(
+            AnthropicVertexConfig(
+                model_id=self.model_id,
+                region=self.region,
+                project_id=self.project_id,
+                max_retries=self.max_retries,
+            )
+        )
+
+    def judge_novelty(self, hypotheses: list[str]) -> list[NoveltyJudgment]:
+        out: list[NoveltyJudgment] = []
+        for chunk in _chunked(hypotheses, self.batch_size):
+            payload = self._run_chunk(_build_novelty_prompt(chunk), expected=len(chunk))
+            for entry in payload:
+                out.append(
+                    NoveltyJudgment(
+                        is_novel=bool(entry.get("is_novel", False)),
+                        rationale=str(entry.get("rationale", "")),
+                    )
+                )
+        return out
+
+    def judge_matches(
+        self,
+        hypotheses: list[str],
+        spec: AssociationSpec,
+        *,
+        variant: Variant,
+        column_mapping: dict[str, str] | None = None,
+    ) -> list[MatchJudgment]:
+        out: list[MatchJudgment] = []
+        for chunk in _chunked(hypotheses, self.batch_size):
+            prompt = _build_match_prompt(
+                chunk, spec, variant=variant, column_mapping=column_mapping
+            )
+            payload = self._run_chunk(prompt, expected=len(chunk))
+            for entry in payload:
+                out.append(
+                    MatchJudgment(
+                        matches=bool(entry.get("matches", False)),
+                        rationale=str(entry.get("rationale", "")),
+                    )
+                )
+        return out
+
+    def _run_chunk(self, prompt: str, *, expected: int) -> list[dict]:
+        if self.cache is not None:
+            cached = self.cache.get(prompt)
+            if cached is not None:
+                payload = _extract_json_array(cached)
+                if len(payload) == expected:
+                    return payload
+        from ..providers.base import ChatMessage
+
+        response = self._provider.chat(
+            messages=[ChatMessage(role="user", content=prompt)],
+            temperature=0.0,
+            max_tokens=self.max_tokens,
+        )
+        text = response.text
+        payload = _extract_json_array(text)
+        if len(payload) != expected:
+            raise ValueError(
+                f"Expected {expected} judgments, got {len(payload)}: {text!r}"
+            )
+        if self.cache is not None:
+            self.cache.put(prompt, text)
         return payload
 
 

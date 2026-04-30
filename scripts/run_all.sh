@@ -30,7 +30,7 @@ HARNESS="${HARNESS:-claude}"
 JOBS="${JOBS:-4}"
 REPLICATES="${REPLICATES:-20}"
 PYTHON_ENV="${PYTHON_ENV:-.venv}"
-JUDGE="${JUDGE:-claude-cli}"
+JUDGE="${JUDGE:-anthropic-vertex}"
 
 TASKS_ROOT="$OUT/tasks"
 SCORE_ROOT="$OUT/score"

@@ -16,12 +16,12 @@ set -euo pipefail
 
 trap 'status=$?; echo; echo "exited with status $status"; read -p "press enter to close..."' EXIT
 
-OUT="${OUT:-../data/ds001}"
+OUT="${OUT:-./example_data_20_iterations/ds001}"
 HARNESS="${HARNESS:-claude}"
 JOBS="${JOBS:-4}"
 REPLICATES="${REPLICATES:-20}"
 PYTHON_ENV="${PYTHON_ENV:-.venv}"
-JUDGE="${JUDGE:-claude-cli}"
+JUDGE="${JUDGE:-anthropic-vertex}"
 
 TASKS_ROOT="$OUT/tasks"
 SCORE_ROOT="$OUT/score"

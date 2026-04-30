@@ -9,6 +9,7 @@ from .aggregate import (
 )
 from .buried import BuriedDiscovery, BuriedScore, MatchJudgmentRecord, score_buried
 from .judge import (
+    AnthropicVertexJudge,
     ClaudeCliJudge,
     Judge,
     JudgeCache,
@@ -25,6 +26,7 @@ from .report import (
 )
 
 __all__ = [
+    "AnthropicVertexJudge",
     "BatchPipelineScore",
     "BundleScore",
     "BuriedDiscovery",
