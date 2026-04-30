@@ -1,0 +1,171 @@
+Oncology dataset analysis summary -- ds001_prostate (50,000 patients)
+=====================================================================
+
+OUTCOME
+-------
+The single available outcome is `pfs_months` (progression-free survival in months).
+It is approximately normally distributed: mean 3.74, SD 2.02, range 0.0-14.6,
+with no missing values. Across 50,000 patient records and 122 candidate features
+(77 binary, 35 continuous, 9 ordinal, 2 string-categorical, 1 constant), the
+analysis used an iterative propose-test-refine loop across 10 iterations to map
+out main effects, biomarker mediation, demographic disparities, interactions,
+nonlinearities, and suppressor effects.
+
+
+HEADLINE FINDINGS
+-----------------
+A 10-feature linear model explains R^2 = 0.974 of the variance in pfs_months.
+Adding three additional small-effect binaries pushes R^2 to 0.9737.  The dataset
+appears to be largely deterministic in pfs_months given a small set of strong
+prognostic features, with very little of the explainable signal lying outside
+those covariates.
+
+The three dominant predictors (in order of t-statistic magnitude in the joint
+model) are:
+  * feature_078 (continuous, range 30-90, mean 65; likely age):
+      univariable r=+0.856 (p effectively 0); joint slope +0.066/unit linear plus
+      +0.000831 quadratic, i.e. a steep, slightly convex positive relationship.
+  * feature_057 (ordinal 0/1/2; likely ECOG-style severity or stage):
+      monotonic decline of approximately -1.15 months per step (p effectively 0).
+      Mean PFS: 4.68 -> 3.49 -> 2.38 months at levels 0, 1, 2.
+  * log1p(feature_013) (continuous, highly skewed, range 0.12 to 3,622;
+    PSA-like): joint slope -0.383 per natural-log unit (p effectively 0).
+    By log-decile, PFS falls from 4.46 to 2.84 months from lowest to highest.
+
+
+SECONDARY INDEPENDENT PROGNOSTIC FEATURES
+-----------------------------------------
+After adjusting for the three dominant predictors, the following features
+retain significant independent association with pfs_months:
+  * feature_006 (continuous, range 0-24.6, ~28% of patients =0): joint
+    coefficient -0.077/unit (p effectively 0). Negative prognostic factor.
+  * feature_009 (continuous, range 1.5-5.5, mean 3.8): joint coefficient
+    +0.477/unit (p effectively 0). Positive prognostic factor.
+  * feature_109 (binary, prevalence 10%): joint coefficient +0.150 months
+    (p effectively 0). Positive effect, possibly a treatment indicator.
+  * feature_039 (binary, prevalence 10%): joint coefficient +0.147 months
+    (p effectively 0). Positive effect, similar magnitude to feature_109.
+  * feature_092 (continuous, range 48-830, mean 224): joint coefficient
+    -0.00052/unit (p effectively 0). Small negative effect.
+  * feature_067 (ordinal 6-10, Gleason-like): joint coefficient -0.011/step
+    (p=4.9e-13). Small negative effect that is undetectable univariably
+    (univariable Spearman rho = -0.0003, p=0.95) but emerges after adjustment.
+
+Three additional binary features show small but statistically significant
+adjusted residual effects:
+  * feature_027 (prevalence 60%): +0.025 months (p=3e-20).
+  * feature_043 (prevalence 20%): -0.018 months (p=5e-7).
+  * feature_022 (prevalence 5%):  -0.018 months (p=0.008).
+
+
+SUPPRESSOR / MEDIATION RELATIONSHIPS
+------------------------------------
+Several univariable associations were re-cast by multivariable adjustment:
+
+* feature_051 (binary, prevalence 55%) had the largest univariable binary
+  effect (mean diff -0.521 months, p=1.6e-181). After adding log feature_013
+  to the model, the feature_051 coefficient collapses to +0.0006 (p=0.87).
+  Mechanism: feature_051=1 patients have markedly higher feature_013
+  (mean 67.8 vs 12.0; +1.38 log units, p~0). The apparent prognostic value of
+  feature_051 is fully mediated by feature_013.  This is consistent with
+  feature_051 indexing presence of the underlying biomarker rather than an
+  independent treatment.
+
+* feature_027, feature_022, and feature_067 are suppressor-style: they appear
+  null univariably (p=0.27, 0.57, 0.95) but become significant after
+  multivariable adjustment, consistent with their distributions being slightly
+  imbalanced relative to the dominant prognostic factors.
+
+* Several continuous features (feature_038, feature_014, feature_010,
+  feature_101, feature_099) had weak univariable correlations with PFS that
+  vanished entirely after adjustment for the base model -- their apparent
+  signal was confounded by the dominant predictors.
+
+
+INTERACTIONS
+------------
+Two clinically interpretable interactions were identified:
+
+* feature_078 (age) x feature_057 (severity) interaction term:
+  beta = -0.0096 / (year * step), p effectively 0.  The age benefit on PFS is
+  attenuated at higher severity levels: each increase in feature_057 cuts about
+  0.01 months/year off the age slope.
+
+* log feature_013 (PSA-like) x feature_057 interaction term:
+  beta = +0.0223 / (log-unit * step), p = 3e-33.  The negative prognostic slope
+  of feature_013 is steepest at low severity (feature_057=0) and partially
+  attenuated at higher severity, consistent with feature_057 already capturing
+  much of the high-PSA risk in the most severe patients.
+
+Two interactions tested were NOT supported:
+* feature_109 x feature_057: p=0.51 (treatment effect is uniform across severity).
+* feature_039 x feature_057: p=0.56.
+* feature_109 x race (joint F-test across feature_018): F(4,49983)=0.69, p=0.60.
+  Stratified estimates ranged from +0.026 (asian) to +0.253 (black) but the
+  overall heterogeneity was not significant.
+
+
+NONLINEARITIES
+--------------
+* feature_078^2 added to the model contributes beta=+0.000831 (p effectively 0).
+  The PFS-vs-age relationship is convex.
+* feature_009^2 contributes beta=+0.013 (p=0.004); a small upward curvature.
+  No other tested nonlinearity reached strong significance.
+
+
+DEMOGRAPHIC DISPARITY ASSESSMENT
+--------------------------------
+Both univariable and multivariable analyses found NO evidence of disparity in
+PFS by race or insurance:
+
+* Race (feature_018): one-way ANOVA F=0.56, p=0.69. Adjusted race coefficients
+  in the 6-feature model all have |beta| <= 0.003, p >= 0.67.
+* Insurance (feature_045): one-way ANOVA F=0.34, p=0.79. Adjusted insurance
+  coefficients all have |beta| <= 0.001, p >= 0.90.
+* Treatment-allocation balance: feature_051 prevalence (chi^2 p=0.82) and
+  feature_057 distribution (p=0.84) do not vary by race.  feature_051 prevalence
+  is also balanced across insurance categories (p=0.37).
+* Age (feature_078) is also balanced by insurance (means within ~0.2 years).
+
+In short: this cohort shows no race- or insurance-driven heterogeneity in PFS,
+case-mix, or treatment exposure.
+
+
+HYPOTHESIS LEDGER (supported / refuted)
+---------------------------------------
+SUPPORTED:
+  * feature_078, feature_057, log feature_013, feature_006, feature_009 are
+    independent strong prognostic factors.
+  * feature_109 and feature_039 are independent positive factors (~+0.15 mo).
+  * feature_092 is a small independent negative factor.
+  * feature_067 has a small adjusted negative effect, masked univariably.
+  * feature_027, feature_043, feature_022 each have small adjusted effects.
+  * feature_078 has a significant convex (quadratic) component.
+  * Severity (feature_057) modifies both the age slope (negatively) and the
+    log feature_013 slope (positively).
+  * feature_051's apparent prognostic value is mediated through feature_013.
+
+REFUTED OR NULL:
+  * No PFS difference by race or by insurance -- unadjusted or adjusted.
+  * No interaction of feature_109 with feature_057 or with race.
+  * No interaction of feature_039 with feature_057.
+  * No prognostic value of feature_016, feature_071, feature_026, feature_096,
+    feature_033, or feature_064 (other ordinal features) after adjustment.
+  * feature_038, feature_014, feature_010, feature_101, feature_099 lose
+    significance once the base 3-predictor model is fit.
+
+
+OVERALL CONCLUSIONS
+-------------------
+The pfs_months endpoint in this 50,000-patient prostate-cancer-style cohort is
+overwhelmingly determined by a small handful of features dominated by a
+likely-age variable (feature_078), a likely-severity ordinal (feature_057), and
+a likely-PSA-style biomarker (feature_013).  The combined 10-feature
+multivariable model captures 97% of the outcome variance, leaving little room
+for additional novel signals.  Two binary indicators (feature_109, feature_039)
+behave like positive treatment indicators with consistent ~+0.15-month effects
+across severity strata and racial groups.  No demographic disparities are
+detectable in this cohort, either in PFS itself or in case-mix or treatment
+allocation.  The most clinically interesting modifiers are the two interaction
+findings: at higher severity, the prognostic information in age is attenuated,
+and the prognostic gradient of the PSA-like biomarker is partially saturated.

@@ -1,0 +1,113 @@
+# ds001_prostate analysis summary
+
+Cohort: 50,000 patient records from a commercial EHR-derived oncology dataset
+focused on prostate cancer.  All patients are male (sex_female=0 throughout).
+Outcome of interest: pfs_months (continuous, mean 3.74, SD 2.02, range 0-14.6).
+Across 10 iterations I proposed and tested 51 hypotheses spanning treatment main
+effects, classical prognostic factors, biomarkers, treatment x biomarker
+interactions, lab values, symptom burden, comorbidities, social determinants,
+germline SNPs, and a final multivariable model.
+
+## Iteration 1 - Treatment main effects on pfs_months
+Of the six treatments tested in unadjusted Welch t-tests, only treatment_olaparib
+showed a statistically significant effect: mean pfs_months 3.83 on olaparib vs 3.74
+off (diff +0.094 months, p=0.003). treatment_enzalutamide, treatment_abiraterone,
+treatment_docetaxel, treatment_lu177_psma, and treatment_pembrolizumab all showed
+trivial mean differences (|diff| <= 0.06 months) with p>0.13 - no overall main effect.
+
+## Iteration 2 - Classical prognostic factors
+Strongest signals in the entire analysis came from this iteration:
+  - ecog_ps: beta = -1.16 months per ECOG point (p ~ 0). Largest single effect.
+  - mcrpc=1 vs 0: -0.52 months (p = 1.6e-181).
+  - log(1+psa_ng_ml): beta = -0.38 months per log-unit (p ~ 0).
+  - visceral_mets=1: -0.05 months (p = 0.034) - significant but very small.
+  - age_years: beta = +0.174 months per year (p ~ 0).  Direction OPPOSITE
+    to my prior; in this cohort older patients have longer recorded PFS
+    (likely a synthetic data construct or selection effect).
+  - liver_mets, bone_mets, gleason_score: no significant association with pfs_months.
+
+## Iteration 3 - Biomarker main effects
+Most biomarkers showed no main effect on PFS:
+  - brca2_mutation=1: +0.100 months vs wild-type (p = 0.002). Direction OPPOSITE
+    to my prior expectation that BRCA2 mutation is a poor prognostic feature;
+    here it is associated with longer PFS.
+  - ar_v7_positive, msi_high, psma_high, tp53_mutation, pten_loss: all NS.
+
+## Iteration 4 - Treatment x biomarker (precision-oncology) interactions
+This iteration produced the single most striking interaction in the dataset:
+  - treatment_olaparib x brca2_mutation: interaction beta = +1.62 (p = 4.3e-61).
+    Olaparib effect on PFS is +1.55 months in BRCA2-mutant patients but -0.07
+    months in BRCA2-wild-type patients - a textbook synthetic-lethality pattern.
+  - treatment_enzalutamide x ar_v7_positive: NS (p=0.96).
+  - treatment_abiraterone x ar_v7_positive: NS (p=0.33).
+  - treatment_pembrolizumab x msi_high: NS (p=0.15) and trended in the OPPOSITE
+    direction (pembro effect -0.27 mo in MSI-high vs +0.075 in MSI-low). The
+    expected immunotherapy/MSI signal is not present in this cohort.
+  - treatment_lu177_psma x psma_high: NS (p=0.74). The expected theranostic
+    interaction is not present.
+
+## Iteration 5 - Lab-based prognostic factors
+  - albumin_g_dl: beta = +0.495 mo per g/dl (p = 1.5e-166). Strongly prognostic.
+  - ldh_u_l: beta = -4.2e-4 per U/L (p = 0.00018). Significant but very small per-unit.
+  - alkaline_phosphatase_u_l: beta = -5.0e-4 per U/L (p = 0.0066).
+  - hemoglobin_g_dl: beta = -0.012 mo per g/dl (p = 0.023). Direction OPPOSITE
+    to my prior - significant but tiny in magnitude.
+  - nlr, crp_mg_l: NS, contrary to the usual inflammation-prognosis literature.
+
+## Iteration 6 - Symptom burden and weight loss
+  - weight_loss_pct_6mo: beta = -0.075 mo per pct point (p = 9.9e-226).
+    Among the strongest prognostic signals after ECOG.
+  - fatigue_grade, pain_nrs, dyspnea_grade, appetite_loss_grade: all NS.
+
+## Iteration 7 - Comorbidities and prior therapies
+All tested factors were NS: chronic_kidney_disease, heart_failure,
+diabetes_mellitus, prior_chemotherapy, prior_lines_of_therapy,
+years_since_diagnosis. Comorbidity burden does not appear to drive PFS in this cohort.
+
+## Iteration 8 - Demographics and social determinants
+Race-ethnicity (5 groups), insurance type (4 groups), rural_residence,
+smoking_pack_years, education_years, and uninsured-vs-private comparison were
+ALL NS. There is no detectable disparity by demographic / socioeconomic factors
+in this dataset - notable given how often such effects are observed in real-world
+oncology data.
+
+## Iteration 9 - Germline SNP screen
+Of the 25 SNPs in the dataset, 1 reached uncorrected p<0.05 (snp_rs4986893,
+p=0.0145, beta=-0.092). 0 survived Bonferroni correction (threshold ~0.002).
+Specific candidates rs1045642 (ABCB1), rs429358 (APOE), and rs1800629 (TNF)
+were all NS. No germline-PFS signal in this cohort.
+
+## Iteration 10 - Multivariable confirmation and refinements
+Joint OLS adjusting for ECOG, mCRPC, visceral mets, log PSA, albumin, hemoglobin,
+LDH, NLR, and all six treatments (R^2 = 0.220):
+  - ecog_ps remains independently strongly negative (beta=-1.16, p~0). CONFIRMED.
+  - albumin_g_dl remains independently positive (beta=+0.49, p=1.7e-205). CONFIRMED.
+  - The olaparib x brca2_mutation interaction strengthens after adjustment for
+    ECOG and mCRPC (beta=+1.62, p=1.9e-73). CONFIRMED.
+  - The pembrolizumab x msi_high interaction is NOT significant after adjustment
+    (p=0.14). REFUTED.
+  - The unadjusted nominal docetaxel signal is gone after adjustment (p=0.44).
+    REFUTED - any apparent docetaxel effect is explained by other variables.
+  - Uninsured-vs-private contrast remains NS after disease-state adjustment
+    (p=0.72). The dataset shows no insurance disparity in PFS.
+
+## Overall conclusions
+1. Performance status (ECOG) is by far the dominant prognostic factor for PFS in
+   this cohort, followed by serum albumin, mCRPC status, log PSA, weight loss,
+   and (paradoxically positive) age.
+2. The single robust treatment-biomarker interaction is olaparib x BRCA2 mutation:
+   olaparib provides ~1.5 months of PFS benefit in BRCA2-mutant patients and no
+   benefit in BRCA2 wild-type. This is highly significant (p < 1e-60), survives
+   multivariable adjustment, and matches the well-established mechanism of PARP
+   inhibition in homologous-recombination-deficient tumors.
+3. Other anticipated precision-oncology interactions (enzalutamide/abiraterone
+   x AR-V7, pembrolizumab x MSI-high, Lu177-PSMA x PSMA-high) are NOT supported
+   in this cohort.
+4. Most laboratory inflammation markers (NLR, CRP), comorbidities, symptom grades
+   (fatigue, pain, dyspnea, appetite loss), demographic / socioeconomic factors,
+   and germline SNPs show no detectable association with PFS - these are likely
+   pure noise variables in this synthetic cohort.
+5. Several main effects went in the opposite direction from my clinical prior
+   (older age associated with LONGER PFS; BRCA2 mutation main effect POSITIVE;
+   higher hemoglobin slightly NEGATIVE) - probably reflecting how the synthetic
+   data were generated rather than real biology, but flagged here for completeness.

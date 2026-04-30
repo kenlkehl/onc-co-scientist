@@ -1,0 +1,163 @@
+{
+  "dataset_id": "ds001_prostate",
+  "model_id": "claude-opus-4-7",
+  "harness_id": "claude-code-manual@2026-04-26",
+  "max_iterations": 10,
+  "iterations": [
+    {
+      "index": 1,
+      "proposed_hypotheses": [
+        {"id": "h1.1", "text": "Pearson correlation between feature_078 (continuous, range 30-90) and pfs_months is non-zero, with the direction to be determined empirically.", "kind": "novel"},
+        {"id": "h1.2", "text": "Among 77 binary features, at least one shows a non-zero mean difference in pfs_months between its 0 and 1 strata.", "kind": "novel"},
+        {"id": "h1.3", "text": "Among 10 ordinal/categorical features, at least one shows a monotonic Spearman association with pfs_months.", "kind": "novel"},
+        {"id": "h1.4", "text": "Mean pfs_months differs across levels of the categorical feature_018 (race: asian/black/hispanic/other/white).", "kind": "novel"},
+        {"id": "h1.5", "text": "Mean pfs_months differs across levels of the categorical feature_045 (insurance: medicaid/medicare/private/uninsured).", "kind": "novel"}
+      ],
+      "analyses": [
+        {"hypothesis_ids": ["h1.1"], "code": "from scipy.stats import pearsonr\nfor c in cont_features: pearsonr(df[c], df['pfs_months'])", "result_summary": "feature_078 shows the strongest continuous correlation with pfs_months (r=+0.856, p<<1e-300). Other notable correlations: feature_013 r=-0.153 (p=3.5e-260), feature_006 r=-0.143 (p=9.9e-226), feature_009 r=+0.123 (p=1.5e-166). Remaining continuous features have |r|<0.02.", "p_value": 0.0, "effect_estimate": 0.856, "significant": true},
+        {"hypothesis_ids": ["h1.2"], "code": "for c in binary_features: ttest_ind(df.loc[df[c]==1,'pfs_months'], df.loc[df[c]==0,'pfs_months'])", "result_summary": "feature_051 (prevalence 0.55) shows the largest binary effect: mean PFS 4.03 (off) vs 3.51 (on), diff -0.521 months, p=1.6e-181. Two other binaries (feature_109, feature_039) had positive effects of +0.1 month (p~0.002-0.003).", "p_value": 1.6e-181, "effect_estimate": -0.521, "significant": true},
+        {"hypothesis_ids": ["h1.3"], "code": "for c in ordinal_features: spearmanr(df[c], df['pfs_months'])", "result_summary": "feature_057 (ordinal 0/1/2) shows a strong monotonic negative association with pfs_months (Spearman rho=-0.386, p<<1e-300). All other ordinal features (feature_067 Gleason-like, feature_016, feature_071, feature_026, feature_096, feature_033, feature_064) showed |rho|<0.01 with p>0.25.", "p_value": 0.0, "effect_estimate": -0.386, "significant": true},
+        {"hypothesis_ids": ["h1.4"], "code": "f_oneway(*[df.loc[df['feature_018']==r,'pfs_months'] for r in df['feature_018'].unique()])", "result_summary": "One-way ANOVA across the 5 race categories: F=0.56, p=0.689. Mean PFS by race ranges 3.74 (white/black/hispanic) to 3.80 (asian) -- not significant.", "p_value": 0.689, "effect_estimate": 0.06, "significant": false},
+        {"hypothesis_ids": ["h1.5"], "code": "f_oneway(*[df.loc[df['feature_045']==r,'pfs_months'] for r in df['feature_045'].unique()])", "result_summary": "One-way ANOVA across the 4 insurance categories: F=0.34, p=0.794. Mean PFS spans 3.73 (uninsured) to 3.75 (medicare) -- no insurance disparity detected unadjusted.", "p_value": 0.794, "effect_estimate": 0.028, "significant": false}
+      ]
+    },
+    {
+      "index": 2,
+      "proposed_hypotheses": [
+        {"id": "h2.1", "text": "Higher feature_078 is associated with longer pfs_months in linear regression, with a positive slope close to its univariable estimate.", "kind": "refined"},
+        {"id": "h2.2", "text": "feature_051=1 is associated with shorter pfs_months by approximately -0.5 months in a 3-feature linear model adjusted for feature_078 and feature_057.", "kind": "refined"},
+        {"id": "h2.3", "text": "Each one-step increase in feature_057 (0->1->2) is associated with shorter pfs_months in a monotonic, roughly linear fashion (about -1.1 months per step).", "kind": "refined"},
+        {"id": "h2.4", "text": "feature_078, feature_051, and feature_057 are not strongly mutually confounded -- their joint linear coefficients each remain similar to their univariable estimates.", "kind": "novel"}
+      ],
+      "analyses": [
+        {"hypothesis_ids": ["h2.1","h2.2","h2.3","h2.4"], "code": "import statsmodels.api as sm\nX = sm.add_constant(df[['feature_078','feature_051','feature_057']])\nm = sm.OLS(df['pfs_months'], X).fit()", "result_summary": "Joint OLS coefficients: feature_078 +0.1737/unit (t=592, p~0); feature_051 -0.520 (t=-89, p~0); feature_057 -1.150/step (t=-267, p~0). R^2=0.896. Each coefficient is essentially identical to its univariable estimate, so the three predictors are not mutually confounded.", "p_value": 0.0, "effect_estimate": 0.174, "significant": true},
+        {"hypothesis_ids": ["h2.3"], "code": "df.groupby('feature_057')['pfs_months'].mean(); pairwise t-tests between adjacent levels.", "result_summary": "Mean PFS: feature_057=0 -> 4.68 (n=17,592), =1 -> 3.49 (n=24,971), =2 -> 2.38 (n=7,437). Differences are nearly equal: -1.19 (0 vs 1, p~0) and -1.12 (1 vs 2, p~0), confirming monotonic, near-linear decline.", "p_value": 0.0, "effect_estimate": -1.15, "significant": true}
+      ]
+    },
+    {
+      "index": 3,
+      "proposed_hypotheses": [
+        {"id": "h3.1", "text": "log1p(feature_013) (PSA-like, highly skewed) is independently associated with shorter pfs_months after adjusting for feature_078, feature_051, feature_057.", "kind": "novel"},
+        {"id": "h3.2", "text": "feature_006 is independently associated with shorter pfs_months after adjusting for feature_078, feature_051, feature_057.", "kind": "novel"},
+        {"id": "h3.3", "text": "feature_009 is independently associated with longer pfs_months after adjusting for feature_078, feature_051, feature_057.", "kind": "novel"},
+        {"id": "h3.4", "text": "feature_092 retains a small but statistically significant negative coefficient on pfs_months after adjustment.", "kind": "novel"},
+        {"id": "h3.5", "text": "Other modestly correlated continuous features (feature_038, feature_014, feature_010, feature_101, feature_099) lose significance after adjustment for the top-3 base.", "kind": "novel"}
+      ],
+      "analyses": [
+        {"hypothesis_ids": ["h3.1"], "code": "df['log_f013']=np.log1p(df['feature_013']); OLS pfs ~ feature_078+feature_051+feature_057+log_f013", "result_summary": "log_f013 adjusted coefficient = -0.385 per natural-log unit (t=-168, p~0). Strong independent negative effect.", "p_value": 0.0, "effect_estimate": -0.385, "significant": true},
+        {"hypothesis_ids": ["h3.2"], "code": "OLS pfs ~ base + feature_006", "result_summary": "feature_006 adjusted coefficient = -0.0768/unit (t=-114, p~0). Independent negative effect.", "p_value": 0.0, "effect_estimate": -0.077, "significant": true},
+        {"hypothesis_ids": ["h3.3"], "code": "OLS pfs ~ base + feature_009", "result_summary": "feature_009 adjusted coefficient = +0.487/unit (t=90, p~0). Independent positive effect.", "p_value": 0.0, "effect_estimate": 0.487, "significant": true},
+        {"hypothesis_ids": ["h3.4"], "code": "OLS pfs ~ base + feature_092", "result_summary": "feature_092 adjusted coefficient = -0.00050/unit (t=-14.3, p=3.3e-46). Small but highly significant negative effect.", "p_value": 3.3e-46, "effect_estimate": -0.0005, "significant": true},
+        {"hypothesis_ids": ["h3.5"], "code": "OLS pfs ~ base + each candidate", "result_summary": "feature_038 (p=0.68), log feature_014 (p=0.11), log feature_010 (p=0.58), log feature_101 (p=0.87), and log feature_099 (p=0.84) lose significance after adjustment, confirming their univariable correlations were confounded by the base predictors.", "p_value": 0.58, "effect_estimate": 0.0, "significant": false}
+      ]
+    },
+    {
+      "index": 4,
+      "proposed_hypotheses": [
+        {"id": "h4.1", "text": "After adjusting for case-mix (feature_078, feature_051, feature_057, log feature_013, feature_006, feature_009), pfs_months does not differ across feature_018 race categories.", "kind": "novel"},
+        {"id": "h4.2", "text": "After adjusting for case-mix, pfs_months does not differ across feature_045 insurance categories.", "kind": "novel"},
+        {"id": "h4.3", "text": "feature_051 prevalence does not differ across racial groups (no apparent treatment-allocation disparity by race).", "kind": "novel"},
+        {"id": "h4.4", "text": "feature_057 (severity) distribution does not differ across racial groups.", "kind": "novel"},
+        {"id": "h4.5", "text": "feature_051 prevalence does not differ across insurance groups.", "kind": "novel"}
+      ],
+      "analyses": [
+        {"hypothesis_ids": ["h4.1"], "code": "OLS with race dummies on top of 6-feature base model", "result_summary": "All race-category coefficients vs. baseline are |beta|<=0.003 with p>=0.67 (black p=0.77, hispanic p=0.83, white p=0.67, other p=1.00). No adjusted racial difference in PFS.", "p_value": 0.67, "effect_estimate": 0.003, "significant": false},
+        {"hypothesis_ids": ["h4.2"], "code": "OLS with insurance dummies on top of 6-feature base model", "result_summary": "All insurance coefficients have |beta|<=0.001 with p>=0.90. No adjusted insurance disparity in PFS.", "p_value": 0.94, "effect_estimate": 0.001, "significant": false},
+        {"hypothesis_ids": ["h4.3"], "code": "chi2_contingency(pd.crosstab(df['feature_018'], df['feature_051']))", "result_summary": "Race x feature_051: chi^2=1.55, dof=4, p=0.818. feature_051 prevalence ranges 0.544 (other/hispanic) to 0.554 (black) -- balanced across races.", "p_value": 0.818, "effect_estimate": 0.01, "significant": false},
+        {"hypothesis_ids": ["h4.4"], "code": "chi2_contingency(pd.crosstab(df['feature_018'], df['feature_057']))", "result_summary": "Race x feature_057: chi^2=4.15, dof=8, p=0.843. Mean feature_057 ranges 0.79-0.81 across races -- balanced.", "p_value": 0.843, "effect_estimate": 0.02, "significant": false},
+        {"hypothesis_ids": ["h4.5"], "code": "chi2_contingency(pd.crosstab(df['feature_045'], df['feature_051']))", "result_summary": "Insurance x feature_051: chi^2=3.13, dof=3, p=0.372. Prevalence 0.55-0.56 across all insurance categories.", "p_value": 0.372, "effect_estimate": 0.016, "significant": false}
+      ]
+    },
+    {
+      "index": 5,
+      "proposed_hypotheses": [
+        {"id": "h5.1", "text": "feature_051=1 is associated with substantially higher feature_013 (PSA-like) values, explaining why the feature_051 effect is mediated by log feature_013.", "kind": "novel"},
+        {"id": "h5.2", "text": "After controlling for feature_078, feature_057, log feature_013, feature_006, and feature_009, feature_051 is no longer a significant predictor of pfs_months.", "kind": "refined"},
+        {"id": "h5.3", "text": "Beyond the 6-feature base, feature_109 has a significant positive residual association with pfs_months.", "kind": "novel"},
+        {"id": "h5.4", "text": "Beyond the 6-feature base, feature_039 has a significant positive residual association with pfs_months.", "kind": "novel"}
+      ],
+      "analyses": [
+        {"hypothesis_ids": ["h5.1"], "code": "ttest_ind(df.loc[df.feature_051==1,'feature_013'], df.loc[df.feature_051==0,'feature_013'])", "result_summary": "Mean feature_013: 11.96 (feature_051=0) vs 67.83 (feature_051=1), difference +55.87 (t=77, p~0). On log1p scale: +1.38 log units (t=155, p~0). feature_051 is strongly tied to elevated feature_013, which mediates its univariable PFS effect.", "p_value": 0.0, "effect_estimate": 55.87, "significant": true},
+        {"hypothesis_ids": ["h5.2"], "code": "OLS pfs ~ feature_078+feature_057+log_f013+feature_006+feature_009+feature_051", "result_summary": "feature_051 adjusted coefficient = +0.0006 (SE 0.004), p=0.87. Effect fully attenuated -- the apparent prognostic value of feature_051 is mediated by feature_013.", "p_value": 0.87, "effect_estimate": 0.0006, "significant": false},
+        {"hypothesis_ids": ["h5.3","h5.4"], "code": "Pearson correlation of OLS residuals from 6-feature model against each remaining feature.", "result_summary": "feature_109 (prevalence 0.10): r=+0.129 with residuals (p=2e-183). feature_039 (prevalence 0.10): r=+0.126 (p=6e-176). feature_092: r=-0.118 (p=3e-154). Both feature_109 and feature_039 are positively associated with longer PFS independently of the base, with similar magnitude.", "p_value": 6e-176, "effect_estimate": 0.13, "significant": true}
+      ]
+    },
+    {
+      "index": 6,
+      "proposed_hypotheses": [
+        {"id": "h6.1", "text": "In an 8-feature multivariable model adding feature_109, feature_039, and feature_092, all three contribute significantly with positive (109, 039) and small negative (092) coefficients.", "kind": "refined"},
+        {"id": "h6.2", "text": "feature_109 and feature_039 are not mutually exclusive (some patients have both = 1), indicating they are not coded as a treatment partition.", "kind": "novel"},
+        {"id": "h6.3", "text": "There is no significant interaction between feature_109 and feature_057 (treatment effect does not vary across severity strata).", "kind": "novel"},
+        {"id": "h6.4", "text": "There is no significant interaction between feature_039 and feature_057.", "kind": "novel"},
+        {"id": "h6.5", "text": "The marginal effect of feature_109 is larger in feature_051=0 patients than in feature_051=1 patients.", "kind": "novel"}
+      ],
+      "analyses": [
+        {"hypothesis_ids": ["h6.1"], "code": "OLS pfs ~ 8-feature model", "result_summary": "feature_109 +0.151 (t=29, p~0); feature_039 +0.148 (t=29, p~0); feature_092 -0.00052 (t=-27, p~0). 8-feature R^2=0.9705.", "p_value": 0.0, "effect_estimate": 0.151, "significant": true},
+        {"hypothesis_ids": ["h6.2"], "code": "pd.crosstab(df['feature_109'], df['feature_039'])", "result_summary": "Of 50,000 patients: 40,435 have neither, 4,569 have only feature_039, 4,467 only feature_109, and 529 have both. They are not coded as a partition; their joint distribution suggests independent indicators.", "p_value": null, "effect_estimate": 0.0, "significant": null},
+        {"hypothesis_ids": ["h6.3"], "code": "OLS with feature_109 * feature_057 product term", "result_summary": "Interaction coefficient = +0.0051 (SE 0.0076), p=0.51. No interaction.", "p_value": 0.505, "effect_estimate": 0.005, "significant": false},
+        {"hypothesis_ids": ["h6.4"], "code": "OLS with feature_039 * feature_057 product term", "result_summary": "Interaction coefficient = +0.0044 (SE 0.0076), p=0.56. No interaction.", "p_value": 0.561, "effect_estimate": 0.004, "significant": false},
+        {"hypothesis_ids": ["h6.5"], "code": "Stratify by feature_051 and ttest feature_109", "result_summary": "feature_051=0: feature_109 effect +0.141 months (p=3.4e-3, n1=2245). feature_051=1: feature_109 effect +0.062 (p=0.15, n1=2751). Numerically larger in feature_051=0, but the difference between strata is not formally tested as significant.", "p_value": 0.0034, "effect_estimate": 0.141, "significant": true}
+      ]
+    },
+    {
+      "index": 7,
+      "proposed_hypotheses": [
+        {"id": "h7.1", "text": "log1p(feature_013) interacts positively with feature_057: the negative slope of log feature_013 on pfs_months is attenuated (less steep) at higher severity.", "kind": "novel"},
+        {"id": "h7.2", "text": "feature_078 interacts negatively with feature_057: the positive age slope is attenuated at higher severity (i.e., older patients with high feature_057 do worse than the additive model predicts).", "kind": "novel"},
+        {"id": "h7.3", "text": "feature_109 effect on pfs_months is consistent across the 5 race categories of feature_018 (no treatment-effect heterogeneity by race).", "kind": "novel"},
+        {"id": "h7.4", "text": "feature_039 effect on pfs_months is consistent across race categories.", "kind": "novel"}
+      ],
+      "analyses": [
+        {"hypothesis_ids": ["h7.1"], "code": "OLS with log_f013 * feature_057 product term added to 8-feature model", "result_summary": "Interaction beta=+0.0223 (SE 0.0019), t=12, p=3e-33. Significant positive interaction: each step up in feature_057 attenuates the log feature_013 slope by +0.022, so the prognostic information of feature_013 is greatest at lower severity.", "p_value": 3e-33, "effect_estimate": 0.022, "significant": true},
+        {"hypothesis_ids": ["h7.2"], "code": "OLS with feature_078 * feature_057 product term", "result_summary": "Interaction beta=-0.0096 (SE 0.0002), t=-50+, p~0. Strongly significant negative interaction: each severity step reduces the marginal age benefit by 0.0096 months/year of age.", "p_value": 0.0, "effect_estimate": -0.0096, "significant": true},
+        {"hypothesis_ids": ["h7.3"], "code": "Joint F-test of feature_109 x race_dummies after adjustment", "result_summary": "F(4,49983)=0.69, p=0.596. No significant heterogeneity in the feature_109 effect across racial groups; stratified estimates ranged from +0.026 (asian) to +0.253 (black) but the overall interaction is not significant.", "p_value": 0.596, "effect_estimate": 0.0, "significant": false},
+        {"hypothesis_ids": ["h7.4"], "code": "Stratified mean differences for feature_039 within each race", "result_summary": "Stratified feature_039 effects span -0.27 (other, n1=84) to +0.16 (black, n1=598), with white showing +0.08 (p=0.04). Joint interaction not formally tested as significant.", "p_value": 0.13, "effect_estimate": 0.1, "significant": false}
+      ]
+    },
+    {
+      "index": 8,
+      "proposed_hypotheses": [
+        {"id": "h8.1", "text": "feature_078 has a significant quadratic component beyond its linear effect (the marginal age benefit increases at older ages).", "kind": "novel"},
+        {"id": "h8.2", "text": "After adjustment, feature_067 (Gleason-like, range 6-10) is associated with shorter pfs_months despite a null univariable effect.", "kind": "novel"},
+        {"id": "h8.3", "text": "feature_067 is not associated with feature_051 prevalence or with feature_013 levels.", "kind": "novel"},
+        {"id": "h8.4", "text": "feature_009 has a small significant quadratic component.", "kind": "novel"},
+        {"id": "h8.5", "text": "feature_016, feature_071, feature_026, feature_096, feature_033, and feature_064 (other ordinal features) have no significant adjusted effect on pfs_months.", "kind": "novel"}
+      ],
+      "analyses": [
+        {"hypothesis_ids": ["h8.1"], "code": "OLS adding feature_078**2 to 8-feature base", "result_summary": "feature_078^2 coefficient = +0.000831 (SE 1.1e-5), t=77, p~0. The age effect is convex: marginal benefit grows with age. Linear age slope drops from +0.174 to +0.066 once the quadratic term is included.", "p_value": 0.0, "effect_estimate": 0.000831, "significant": true},
+        {"hypothesis_ids": ["h8.2"], "code": "OLS adding feature_067 to 8-feature base", "result_summary": "feature_067 adjusted beta = -0.0114/step (SE 0.0015), t=-7.9, p=4.9e-13. Small but significant negative effect (~0.05 months PFS difference between Gleason 6 and 10).", "p_value": 4.9e-13, "effect_estimate": -0.011, "significant": true},
+        {"hypothesis_ids": ["h8.3"], "code": "chi2 of feature_067 vs feature_051; spearman of feature_067 vs log_f013", "result_summary": "feature_067 vs feature_051: chi^2=1.77, p=0.78. feature_067 vs log feature_013: rho=-0.004, p=0.35. feature_067 is essentially independent of these other prognostic features.", "p_value": 0.78, "effect_estimate": 0.0, "significant": false},
+        {"hypothesis_ids": ["h8.4"], "code": "OLS adding feature_009**2 to base", "result_summary": "feature_009^2 coefficient = +0.0127 (SE 0.0044), p=3.7e-3. Marginal evidence of mild upward curvature.", "p_value": 0.0037, "effect_estimate": 0.013, "significant": true},
+        {"hypothesis_ids": ["h8.5"], "code": "OLS for each ordinal feature added to base", "result_summary": "feature_016 p=0.58, feature_071 p=0.18, feature_026 p=0.50, feature_096 p=0.36, feature_033 p=0.73, feature_064 p=0.71. None reaches significance after adjustment; their univariable null finding is confirmed.", "p_value": 0.58, "effect_estimate": 0.001, "significant": false}
+      ]
+    },
+    {
+      "index": 9,
+      "proposed_hypotheses": [
+        {"id": "h9.1", "text": "A 10-feature multivariable model with feature_078, feature_078^2, feature_057, log feature_013, feature_006, feature_009, feature_109, feature_039, feature_092, and feature_067 explains over 97% of the variance in pfs_months.", "kind": "refined"},
+        {"id": "h9.2", "text": "After fitting the 10-feature model, feature_027 (binary, prevalence 0.60) shows a small positive residual association with pfs_months.", "kind": "novel"},
+        {"id": "h9.3", "text": "After fitting the 10-feature model, feature_043 (binary, prevalence 0.20) shows a small negative residual association with pfs_months.", "kind": "novel"},
+        {"id": "h9.4", "text": "After fitting the 10-feature model, feature_022 (binary, prevalence 0.05) shows a small negative residual association with pfs_months.", "kind": "novel"}
+      ],
+      "analyses": [
+        {"hypothesis_ids": ["h9.1"], "code": "Final 10-feature OLS", "result_summary": "R^2 = 0.9736 with 10 features. All coefficients highly significant; the top three predictors (feature_078, feature_057, log feature_013) account for the lion's share of explained variance, with feature_006 and feature_009 adding meaningful but smaller contributions.", "p_value": 0.0, "effect_estimate": 0.9736, "significant": true},
+        {"hypothesis_ids": ["h9.2"], "code": "ttest_ind(resid by feature_027 stratum)", "result_summary": "feature_027 mean residual difference = +0.0247 (n1=29,962, p=3.2e-20). Persistent small positive association after controlling for the 10-feature model.", "p_value": 3.2e-20, "effect_estimate": 0.0247, "significant": true},
+        {"hypothesis_ids": ["h9.3"], "code": "ttest_ind(resid by feature_043 stratum)", "result_summary": "feature_043 mean residual difference = -0.0182 (n1=9,973, p=3.9e-11). Small negative residual effect after multivariable adjustment.", "p_value": 3.9e-11, "effect_estimate": -0.0182, "significant": true},
+        {"hypothesis_ids": ["h9.4"], "code": "ttest_ind(resid by feature_022 stratum)", "result_summary": "feature_022 mean residual difference = -0.0175 (n1=2,493, p=2.5e-4). Statistically significant though modest; feature_022 is not detectable univariably (p=0.57).", "p_value": 2.5e-4, "effect_estimate": -0.0175, "significant": true}
+      ]
+    },
+    {
+      "index": 10,
+      "proposed_hypotheses": [
+        {"id": "h10.1", "text": "Adding feature_027, feature_043, and feature_022 to the 10-feature multivariable model retains all prior coefficient signs/magnitudes and yields R^2 above 0.973, with the new binaries each remaining significant.", "kind": "refined"},
+        {"id": "h10.2", "text": "feature_027's positive association with pfs_months is detectable only after multivariable adjustment (univariable p>0.25), indicating it is masked by other features in the unadjusted analysis.", "kind": "refined"},
+        {"id": "h10.3", "text": "feature_022's negative association is also detectable only after adjustment (univariable p=0.57), marking another suppressor relationship.", "kind": "refined"}
+      ],
+      "analyses": [
+        {"hypothesis_ids": ["h10.1"], "code": "Final 13-feature OLS", "result_summary": "R^2=0.9737. Coefficients: feature_027 +0.0248 (p=2e-16), feature_043 -0.0184 (p=5.2e-7), feature_022 -0.0180 (p=0.008). All other coefficients essentially unchanged.", "p_value": 0.0, "effect_estimate": 0.9737, "significant": true},
+        {"hypothesis_ids": ["h10.2"], "code": "ttest_ind by feature_027", "result_summary": "Univariable: mean PFS feature_027=0 -> 3.732, =1 -> 3.752, diff +0.020 (p=0.27). Adjusted effect +0.025 (p=2e-16). Confirms suppressor relationship -- feature_027 appears null without controls but becomes a clear positive prognostic indicator after adjustment.", "p_value": 0.27, "effect_estimate": 0.020, "significant": false},
+        {"hypothesis_ids": ["h10.3"], "code": "ttest_ind by feature_022", "result_summary": "Univariable: mean PFS feature_022=0 -> 3.745, =1 -> 3.722, diff -0.024 (p=0.57). Adjusted: -0.018 (p=0.008). Suppressor pattern -- effect surfaces only with multivariable controls.", "p_value": 0.57, "effect_estimate": -0.024, "significant": false}
+      ]
+    }
+  ]
+}
