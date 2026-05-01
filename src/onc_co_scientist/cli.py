@@ -18,6 +18,7 @@ from typing import Annotated
 import numpy as np
 import typer
 import yaml
+from pydantic import ValidationError
 from rich.console import Console
 
 from .harness.task_spec import build_task, build_tasks
@@ -506,6 +507,19 @@ def _resolve_cache_dir(
     return cache_dir if cache_dir is not None else default_cache_dir()
 
 
+def _load_transcript(path: Path) -> Transcript:
+    try:
+        return Transcript.model_validate_json(path.read_text(encoding="utf-8-sig"))
+    except ValidationError as exc:
+        errors = exc.errors(include_input=False, include_url=False)
+        detail = "; ".join(str(err.get("msg", err)) for err in errors[:3])
+        raise typer.BadParameter(f"Invalid transcript JSON at {path}: {detail}") from exc
+    except UnicodeError as exc:
+        raise typer.BadParameter(
+            f"Transcript is not valid UTF-8 at {path}: {exc}"
+        ) from exc
+
+
 @score_app.command("run")
 def score_run(
     dataset: Annotated[
@@ -543,7 +557,7 @@ def score_run(
     ``anonymized``); novelty scoring is skipped for the anonymized variant.
     """
     manifest = read_manifest(dataset)
-    transcript = Transcript.model_validate_json(transcript_path.read_text(encoding="utf-8"))
+    transcript = _load_transcript(transcript_path)
     variant = _infer_variant(dataset)
     column_mapping = load_column_mapping(dataset)
     judge = _build_judge(
@@ -647,7 +661,7 @@ def score_batch(
         column_mapping = load_column_mapping(bundle_dir)
         replicate_scores = []
         for tp in transcript_paths:
-            transcript = Transcript.model_validate_json(tp.read_text(encoding="utf-8"))
+            transcript = _load_transcript(tp)
             replicate_scores.append(
                 _score_replicate(
                     manifest,

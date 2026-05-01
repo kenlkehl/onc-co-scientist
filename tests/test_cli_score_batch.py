@@ -44,7 +44,9 @@ def _build_synth_and_tasks(tmp_path: Path) -> tuple[Path, Path]:
     return synth_root, tasks_root
 
 
-def _write_transcript(path: Path, dataset_id: str) -> None:
+def _write_transcript(
+    path: Path, dataset_id: str, *, encoding: str = "utf-8"
+) -> None:
     payload = Transcript(
         dataset_id=dataset_id,
         model_id="fake-model",
@@ -61,7 +63,7 @@ def _write_transcript(path: Path, dataset_id: str) -> None:
         ],
     ).model_dump_json()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(payload)
+    path.write_text(payload, encoding=encoding)
 
 
 def _stub_config(path: Path) -> Path:
@@ -113,7 +115,16 @@ def test_score_batch_scores_named_and_anonymized_and_writes_report(tmp_path: Pat
             manifest = read_manifest(synth_root / ct / variant)
             for idx in (1, 2):
                 run_dir = tasks_root / ct / variant / "runs" / f"run_{idx:03d}"
-                _write_transcript(run_dir / "transcript.json", manifest.dataset_id)
+                encoding = (
+                    "utf-8-sig"
+                    if ct == "crc" and variant == "named" and idx == 1
+                    else "utf-8"
+                )
+                _write_transcript(
+                    run_dir / "transcript.json",
+                    manifest.dataset_id,
+                    encoding=encoding,
+                )
 
     runner = CliRunner()
     out_dir = tmp_path / "score"
@@ -229,7 +240,7 @@ def test_score_run_writes_single_replicate_report(tmp_path: Path) -> None:
     transcript_path = (
         tasks_root / "crc" / "named" / "runs" / "run_001" / "transcript.json"
     )
-    _write_transcript(transcript_path, manifest.dataset_id)
+    _write_transcript(transcript_path, manifest.dataset_id, encoding="utf-8-sig")
 
     runner = CliRunner()
     out_dir = tmp_path / "score"
