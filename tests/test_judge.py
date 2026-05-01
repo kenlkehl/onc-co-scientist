@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import onc_co_scientist.scoring.judge as judge_module
 from onc_co_scientist.scoring.judge import (
     ClaudeCliJudge,
     CodexCliJudge,
@@ -16,6 +17,7 @@ from onc_co_scientist.scoring.judge import (
     NoveltyJudgment,
     StubJudge,
     _extract_json_array,
+    _resolve_cli_argv,
 )
 from onc_co_scientist.synthetic.schemas import (
     AssociationForm,
@@ -69,6 +71,72 @@ def test_extract_json_array_handles_preamble():
 def test_extract_json_array_raises_when_missing():
     with pytest.raises(ValueError, match="No JSON array"):
         _extract_json_array("no json here")
+
+
+def test_resolve_cli_argv_prefers_windows_cmd_shim(monkeypatch):
+    codex_cmd = "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd"
+
+    def fake_which(candidate: str) -> str | None:
+        if candidate == "codex.cmd":
+            return codex_cmd
+        return None
+
+    monkeypatch.setattr(judge_module.shutil, "which", fake_which)
+
+    assert _resolve_cli_argv("codex", windows=True) == [codex_cmd]
+
+
+def test_resolve_cli_argv_wraps_windows_ps1_shim(monkeypatch):
+    codex_ps1 = "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.ps1"
+    powershell = (
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+    )
+
+    def fake_which(candidate: str) -> str | None:
+        return {
+            "codex.ps1": codex_ps1,
+            "powershell.exe": powershell,
+        }.get(candidate)
+
+    monkeypatch.setattr(judge_module.shutil, "which", fake_which)
+
+    assert _resolve_cli_argv("codex", windows=True) == [
+        powershell,
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        codex_ps1,
+    ]
+
+
+def test_codex_cli_judge_forces_utf8_subprocess_text(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def fake_run(argv: list[str], **kwargs: object):
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return judge_module.subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout='[{"is_novel": true, "rationale": "unicode ok"}]',
+            stderr="",
+        )
+
+    monkeypatch.setattr(judge_module.subprocess, "run", fake_run)
+    judge = CodexCliJudge(
+        cli="codex",
+        batch_size=10,
+        cache=None,
+        use_output_schema=False,
+    )
+
+    out = judge.judge_novelty(["β response – not ASCII"])
+
+    assert out == [NoveltyJudgment(is_novel=True, rationale="unicode ok")]
+    assert captured["text"] is True
+    assert captured["encoding"] == "utf-8"
+    assert "β response – not ASCII" in str(captured["input"])
 
 
 def test_stub_judge_novelty_marks_phrases():
@@ -198,6 +266,9 @@ def _write_fake_claude(bin_dir: Path, response: str) -> Path:
         )
     )
     fake.chmod(0o755)
+    if os.name == "nt":
+        cmd = bin_dir / "claude.cmd"
+        cmd.write_text(f'@echo off\r\nbash "{fake}" %*\r\n')
     return fake
 
 
@@ -223,6 +294,9 @@ def _write_fake_codex(bin_dir: Path, response: str) -> Path:
         )
     )
     fake.chmod(0o755)
+    if os.name == "nt":
+        cmd = bin_dir / "codex.cmd"
+        cmd.write_text(f'@echo off\r\nbash "{fake}" %*\r\n')
     return fake
 
 
@@ -233,7 +307,7 @@ def test_claude_cli_judge_invokes_subprocess(tmp_path: Path, monkeypatch):
     _write_fake_claude(bin_dir, response)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     judge = ClaudeCliJudge(cli="claude", batch_size=10, cache=None)
-    out = judge.judge_novelty(["odd hypothesis"])
+    out = judge.judge_novelty(["odd hypothesis – β signal"])
     assert out == [NoveltyJudgment(is_novel=True, rationale="uses obscure subgroup")]
     assert (bin_dir / "counter").read_text().strip() == "1"
 
@@ -280,7 +354,7 @@ def test_codex_cli_judge_invokes_exec_with_stdin_and_schema(
         cache=None,
     )
 
-    out = judge.judge_novelty(["odd hypothesis"])
+    out = judge.judge_novelty(["odd hypothesis – β signal"])
 
     assert out == [NoveltyJudgment(is_novel=True, rationale="uses obscure subgroup")]
     args = (bin_dir / "codex_args.log").read_text().splitlines()
@@ -295,6 +369,6 @@ def test_codex_cli_judge_invokes_exec_with_stdin_and_schema(
     assert "gpt-5.4" in args
     assert "--output-schema" in args
     assert args[-1] == "-"
-    stdin_text = (bin_dir / "codex_stdin.log").read_text()
-    assert "odd hypothesis" in stdin_text
+    stdin_text = (bin_dir / "codex_stdin.log").read_text(encoding="utf-8")
+    assert "odd hypothesis – β signal" in stdin_text
     assert '"judgments"' in stdin_text

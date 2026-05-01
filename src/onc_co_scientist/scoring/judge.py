@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Iterable
@@ -302,6 +303,77 @@ def _chunked(items: list[str], n: int) -> Iterable[list[str]]:
         yield items[i : i + n]
 
 
+_WINDOWS_CLI_EXTENSIONS = (".exe", ".cmd", ".bat", ".ps1")
+
+
+def _has_path_separator(value: str) -> bool:
+    return "/" in value or "\\" in value
+
+
+def _resolve_cli_argv(cli: str, *, windows: bool | None = None) -> list[str]:
+    """Return an argv prefix that Python can launch with ``shell=False``.
+
+    On Windows, npm-installed CLIs are commonly exposed as ``.cmd`` and
+    ``.ps1`` shims. ``subprocess.run(["codex", ...])`` does not reliably
+    resolve those shims, so we resolve the concrete launcher first.
+    """
+
+    is_windows = os.name == "nt" if windows is None else windows
+    if not is_windows:
+        return [cli]
+
+    resolved = _resolve_windows_cli_path(cli)
+    if resolved is None:
+        return [cli]
+
+    resolved_path = Path(resolved)
+    if resolved_path.suffix.lower() == ".ps1":
+        powershell = (
+            shutil.which("powershell.exe")
+            or shutil.which("pwsh.exe")
+            or "powershell.exe"
+        )
+        return [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(resolved_path),
+        ]
+    return [str(resolved_path)]
+
+
+def _resolve_windows_cli_path(cli: str) -> str | None:
+    cli_path = Path(cli)
+    candidates: list[str] = []
+    if not cli_path.suffix:
+        candidates.extend(f"{cli}{ext}" for ext in _WINDOWS_CLI_EXTENSIONS)
+    candidates.append(cli)
+
+    if _has_path_separator(cli):
+        for candidate in candidates:
+            candidate_path = Path(candidate)
+            if candidate_path.is_file():
+                return str(candidate_path)
+        return None
+
+    for candidate in candidates:
+        found = shutil.which(candidate)
+        if found is not None:
+            return found
+    return None
+
+
+def _cli_launch_error(label: str, requested_cli: str, argv: list[str]) -> str:
+    return (
+        f"Unable to launch {label} CLI {requested_cli!r} "
+        f"(argv prefix starts with {argv[:5]!r}). "
+        "If this is an npm-installed CLI on Windows, pass the .cmd shim "
+        "explicitly with --judge-cli, or make sure that shim is on PATH."
+    )
+
+
 @dataclass
 class ClaudeCliJudge:
     """Default judge: shells out to the ``claude`` CLI with ``-p``.
@@ -363,13 +435,19 @@ class ClaudeCliJudge:
                 if len(payload) == expected:
                     return payload
                 # Cache mismatch on length — fall through and re-call.
-        argv = [self.cli, *self.extra_args, "-p", prompt]
-        completed = subprocess.run(
-            argv,
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_s,
-        )
+        argv = [*_resolve_cli_argv(self.cli), *self.extra_args, "-p", prompt]
+        try:
+            completed = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=self.timeout_s,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                _cli_launch_error("claude", self.cli, argv)
+            ) from exc
         if completed.returncode != 0:
             raise RuntimeError(
                 f"claude CLI exited {completed.returncode}: "
@@ -511,7 +589,7 @@ class CodexCliJudge:
         run_prompt = (
             _codex_structured_prompt(prompt) if self.use_output_schema else prompt
         )
-        argv = [self.cli, "exec", *self.extra_args]
+        argv = [*_resolve_cli_argv(self.cli), "exec", *self.extra_args]
         if self.model_id is not None:
             argv.extend(["--model", self.model_id])
 
@@ -532,13 +610,19 @@ class CodexCliJudge:
 
         argv.append("-")
         try:
-            completed = subprocess.run(
-                argv,
-                input=run_prompt,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_s,
-            )
+            try:
+                completed = subprocess.run(
+                    argv,
+                    input=run_prompt,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=self.timeout_s,
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(
+                    _cli_launch_error("codex", self.cli, argv)
+                ) from exc
         finally:
             if schema_path is not None:
                 schema_path.unlink(missing_ok=True)
