@@ -68,7 +68,7 @@ profile_args() {
             ;;
         codex)
             printf '%s\0' 'exec' '--sandbox' 'workspace-write' \
-                '--ask-for-approval' 'never' '--skip-git-repo-check'
+                '--skip-git-repo-check'
             ;;
         opencode)
             printf '%s\0' 'run'
@@ -162,7 +162,6 @@ run_one_replicate() {
     local run_name
     run_name="run_$(printf '%03d' "$idx")"
     local run_dir="$bundle/runs/$run_name"
-    mkdir -p "$run_dir"
 
     local -a argv=()
     while IFS= read -r -d '' tok; do
@@ -175,6 +174,8 @@ run_one_replicate() {
         printf '\n'
         return 0
     fi
+
+    mkdir -p "$run_dir"
 
     set +e
     (
@@ -440,7 +441,7 @@ else
 
     set +e
     printf '%s\0' "${bundle_dirs[@]}" \
-        | xargs -0 -n1 -P "$JOBS" -I{} \
+        | xargs -0 -P "$JOBS" -I{} \
             "${self_argv[@]}" --_run-one "{}" "${extra_flags[@]}" "$SPEC" "$TASKS_ROOT"
     rc=$?
     set -e

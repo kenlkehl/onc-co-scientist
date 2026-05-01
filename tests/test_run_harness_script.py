@@ -65,15 +65,12 @@ def _write_fake_harness(
         counter_block = textwrap.dedent(
             f"""\
             # Increment the invocation counter (independent of cwd).
-            (
-              flock -x 9
-              n=0
-              if [[ -f "{counter_path}" ]]; then
-                n=$(<"{counter_path}")
-              fi
-              n=$((n + 1))
-              echo "$n" > "{counter_path}"
-            ) 9>"{counter_path}.lock"
+            n=0
+            if [[ -f "{counter_path}" ]]; then
+              n=$(<"{counter_path}")
+            fi
+            n=$((n + 1))
+            echo "$n" > "{counter_path}"
             """
         )
     fake.write_text(
@@ -169,6 +166,22 @@ def test_run_harness_parallel_jobs_writes_per_bundle_log(tmp_path: Path) -> None
             run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
             assert (run_dir / "transcript.json").exists()
             assert (run_dir / "harness.log").exists()
+
+
+def test_run_harness_dry_run_does_not_create_run_dirs(tmp_path: Path) -> None:
+    tasks_root = _build_two_cancer_tasks(tmp_path)
+
+    result = _run_script(
+        "fake-harness",
+        str(tasks_root),
+        "--dry-run",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "would run replicate run_001" in result.stdout
+
+    for ct in ("crc", "breast"):
+        for variant in ("named", "anonymized"):
+            assert not (tasks_root / ct / variant / "runs").exists()
 
 
 def test_run_harness_skip_existing_skips_bundles_with_transcript(tmp_path: Path) -> None:
@@ -324,22 +337,20 @@ def test_run_harness_codex_profile_invokes_exec_with_workspace_write(
             saw_exec=0
             saw_sandbox=0
             saw_workspace_write=0
-            saw_approval=0
-            saw_never=0
+            saw_removed_approval_flag=0
             saw_skip_git=0
             for arg in "$@"; do
               case "$arg" in
                 exec) saw_exec=1 ;;
                 --sandbox) saw_sandbox=1 ;;
                 workspace-write) saw_workspace_write=1 ;;
-                --ask-for-approval) saw_approval=1 ;;
-                never) saw_never=1 ;;
+                --ask-for-approval) saw_removed_approval_flag=1 ;;
                 --skip-git-repo-check) saw_skip_git=1 ;;
               esac
             done
             if [[ $saw_exec -eq 1 && $saw_sandbox -eq 1 \
-              && $saw_workspace_write -eq 1 && $saw_approval -eq 1 \
-              && $saw_never -eq 1 && $saw_skip_git -eq 1 ]]; then
+              && $saw_workspace_write -eq 1 && $saw_removed_approval_flag -eq 0 \
+              && $saw_skip_git -eq 1 ]]; then
               cat > transcript.json <<'JSON'
             {{
               "dataset_id": "x",
@@ -352,8 +363,9 @@ def test_run_harness_codex_profile_invokes_exec_with_workspace_write(
               echo "codex fake harness ran in $(pwd)" > analysis_summary.txt
             else
               echo "contract violation: exec=$saw_exec sandbox=$saw_sandbox \
-                workspace=$saw_workspace_write approval=$saw_approval \
-                never=$saw_never skip_git=$saw_skip_git" >&2
+                workspace=$saw_workspace_write \
+                removed_approval_flag=$saw_removed_approval_flag \
+                skip_git=$saw_skip_git" >&2
               exit 18
             fi
             """
@@ -376,7 +388,7 @@ def test_run_harness_codex_profile_invokes_exec_with_workspace_write(
     log = argv_log.read_text()
     assert "exec" in log
     assert "--sandbox" in log and "workspace-write" in log
-    assert "--ask-for-approval" in log and "never" in log
+    assert "--ask-for-approval" not in log
     assert "--skip-git-repo-check" in log
 
 
