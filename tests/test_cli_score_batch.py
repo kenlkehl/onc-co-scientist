@@ -32,6 +32,7 @@ def _build_synth_and_tasks(tmp_path: Path) -> tuple[Path, Path]:
         n_discordant=0,
         n_hidden_novel=0,
         n_buried_signatures=1,
+        min_buried_treated_subgroup_n=0,
         n_extra_covariates=4,
     )
     chosen = [CancerType.crc, CancerType.breast]

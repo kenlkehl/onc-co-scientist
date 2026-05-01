@@ -27,6 +27,7 @@ def test_write_and_read_bundle_roundtrip(tmp_path):
         n_concordant=1,
         n_discordant=1,
         n_hidden_novel=1,
+        min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(cfg)
     out = write_bundle(bundle, tmp_path / "ds")
@@ -47,6 +48,7 @@ def test_bundle_layout_isolates_manifest_from_agent_view(tmp_path):
         n_concordant=1,
         n_discordant=1,
         n_hidden_novel=1,
+        min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(cfg)
     out = write_bundle(bundle, tmp_path / "ds")
@@ -74,6 +76,7 @@ def test_discover_bundles_walks_paired_layout(tmp_path):
         n_discordant=0,
         n_hidden_novel=0,
         n_buried_signatures=1,
+        min_buried_treated_subgroup_n=0,
         n_extra_covariates=5,
     )
     chosen = [CancerType.crc, CancerType.breast]
@@ -99,6 +102,7 @@ def test_discover_bundles_walks_single_variant_layout(tmp_path):
         n_discordant=0,
         n_hidden_novel=0,
         n_buried_signatures=1,
+        min_buried_treated_subgroup_n=0,
         n_extra_covariates=4,
     )
     chosen = [CancerType.nsclc, CancerType.aml]

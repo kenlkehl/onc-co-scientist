@@ -27,6 +27,7 @@ def test_build_task_writes_agent_bundle(tmp_path):
         n_concordant=1,
         n_discordant=1,
         n_hidden_novel=1,
+        min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(cfg)
     dataset_dir = write_bundle(bundle, tmp_path / "ds")
@@ -93,6 +94,7 @@ def test_build_task_embeds_python_env(tmp_path):
         n_concordant=1,
         n_discordant=0,
         n_hidden_novel=0,
+        min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(cfg)
     dataset_dir = write_bundle(bundle, tmp_path / "ds")
@@ -121,6 +123,7 @@ def test_build_tasks_mirrors_synth_tree(tmp_path):
         n_discordant=0,
         n_hidden_novel=0,
         n_buried_signatures=1,
+        min_buried_treated_subgroup_n=0,
         n_extra_covariates=6,
     )
     chosen = [CancerType.crc, CancerType.breast]

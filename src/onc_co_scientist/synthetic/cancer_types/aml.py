@@ -163,12 +163,12 @@ def hidden_novel_catalog() -> list[AssociationSpec]:
 def buried_signature_catalog() -> list[AssociationSpec]:
     return [
         AssociationSpec(
-            id="buried_venaza_idh1_npm1_complexkaryo_neg_unfit",
+            id="buried_venaza_unfit_npm1_complexkaryo_neg_tp53wt",
             paradigm_class=ParadigmClass.hidden_novel,
             form=AssociationForm.subgroup_conditional,
             variables=[
                 "treatment_venetoclax_azacitidine",
-                "idh1_mutation",
+                "unfit_for_intensive",
                 "npm1_mutation",
                 "complex_karyotype",
                 "tp53_mutation",
@@ -178,23 +178,23 @@ def buried_signature_catalog() -> list[AssociationSpec]:
             direction=+1,
             effect_size=+3.0,
             subgroup=SubgroupSpec(
-                name="venaza_idh1_npm1_simple_karyo_tp53wt_signature",
+                name="venaza_unfit_npm1_simple_karyo_tp53wt_signature",
                 predicate={
-                    "idh1_mutation": 1,
+                    "unfit_for_intensive": 1,
                     "npm1_mutation": 1,
                     "complex_karyotype": 0,
                     "tp53_mutation": 0,
                 },
                 description=(
-                    "IDH1-mutant, NPM1-mutant patients with non-complex "
-                    "karyotype and TP53-wildtype disease."
+                    "Patients unfit for intensive induction whose AML is "
+                    "NPM1-mutant, non-complex-karyotype, and TP53-wildtype."
                 ),
             ),
             natural_language_description=(
                 "Venetoclax plus azacitidine produces exceptional complete "
-                "remission rates in the conjunction of IDH1-mutant, NPM1-"
-                "mutant, non-complex-karyotype, TP53-wildtype acute myeloid "
-                "leukemia — beyond what any single mutation predicts."
+                "remission rates in the conjunction of unfit-for-intensive, "
+                "NPM1-mutant, non-complex-karyotype, TP53-wildtype acute "
+                "myeloid leukemia — beyond what any single feature predicts."
             ),
         ),
         AssociationSpec(

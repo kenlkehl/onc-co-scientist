@@ -37,6 +37,7 @@ def test_profile_generates_a_bundle(cancer_type: CancerType) -> None:
         patient_n=300,
         seed=0,
         n_buried_signatures=1,
+        min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(cfg)
     assert len(bundle.frame) == 300
@@ -92,6 +93,7 @@ def test_profile_buried_signal_recoverable(cancer_type: CancerType) -> None:
         patient_n=5_000,
         seed=0,
         n_buried_signatures=1,
+        min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(cfg)
     spec = bundle.manifest.associations[0]
@@ -139,6 +141,7 @@ def test_profile_full_paradigm_mix_smoke(cancer_type: CancerType) -> None:
         n_discordant=1,
         n_hidden_novel=1,
         n_buried_signatures=1,
+        min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(cfg)
     assert len(bundle.manifest.associations) == 4

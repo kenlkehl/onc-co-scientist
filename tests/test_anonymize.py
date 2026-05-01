@@ -41,6 +41,7 @@ def _small_buried_config(**overrides) -> GeneratorConfig:
         n_discordant=0,
         n_hidden_novel=0,
         n_buried_signatures=1,
+        min_buried_treated_subgroup_n=0,
     )
     base.update(overrides)
     return GeneratorConfig(**base)

@@ -34,7 +34,7 @@ from .cancer_types import CancerProfile, CancerType, get_profile
 from .distractors import DEFAULT_DISTRACTOR_POOL, sample_distractors
 from .injector import InjectionResult, inject_associations, summarize_injection
 from .paradigms import select_associations
-from .schemas import AssociationSpec, DatasetManifest, ParadigmClass
+from .schemas import AssociationForm, AssociationSpec, DatasetManifest, ParadigmClass
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +68,12 @@ class GeneratorConfig:
     # independently from n_hidden_novel so the legacy single-predicate
     # catalog and the multi-feature catalog stay configurable separately.
     n_buried_signatures: int = 1
+    # Minimum number of rows that must satisfy both the buried-signature
+    # subgroup predicate and the signature's treatment driver. A strict floor
+    # keeps selected buried findings statistically recoverable while still
+    # leaving the agent to find the right multivariable candidate. Set to 0
+    # for tiny smoke-test cohorts.
+    min_buried_treated_subgroup_n: int = 1000
     backend: BackendName = "builtin"
     continuous_outcome_sigma: float = 2.0
     # Per-covariate marginal-prevalence overrides for the builtin backend.
@@ -80,7 +86,7 @@ class GeneratorConfig:
     # agent to exercise variable-selection judgment instead of brute-forcing a
     # univariate test against every column. Max is the pool size in
     # ``distractors.DEFAULT_DISTRACTOR_POOL``. Applies to all backends.
-    n_extra_covariates: int = 100
+    n_extra_covariates: int = 50
 
 
 def _resolve_profile(config: GeneratorConfig) -> CancerProfile:
@@ -204,6 +210,83 @@ def _append_distractor_covariates(
     return pd.concat([base_frame, distractor_frame], axis=1)
 
 
+def _predicate_mask(frame: pd.DataFrame, predicate: dict[str, object]) -> np.ndarray:
+    """Evaluate a subgroup predicate using the injector's predicate semantics."""
+    mask = np.ones(len(frame), dtype=bool)
+    for col, val in predicate.items():
+        if col not in frame.columns:
+            raise KeyError(f"Subgroup column {col!r} missing from frame")
+        col_vals = frame[col].to_numpy()
+        if isinstance(val, dict) and ({"min", "max"} & val.keys()):
+            low = val.get("min", -np.inf)
+            high = val.get("max", np.inf)
+            mask &= (col_vals >= low) & (col_vals <= high)
+        else:
+            mask &= col_vals == val
+    return mask
+
+
+def _subgroup_driver(spec: AssociationSpec) -> str:
+    """Return the treatment/driver column for a subgroup-conditional spec."""
+    if spec.form is not AssociationForm.subgroup_conditional or spec.subgroup is None:
+        raise ValueError(
+            f"Buried-signature {spec.id!r} must be subgroup_conditional."
+        )
+    active = [c for c in spec.variables if c != spec.outcome]
+    predicate_cols = set(spec.subgroup.predicate)
+    drivers = [c for c in active if c not in predicate_cols]
+    if not drivers:
+        raise ValueError(
+            f"Buried-signature {spec.id!r} needs a driver variable outside "
+            "the subgroup predicate."
+        )
+    return drivers[0]
+
+
+def _treated_subgroup_n(frame: pd.DataFrame, spec: AssociationSpec) -> int:
+    """Rows satisfying both the subgroup predicate and active treatment driver."""
+    if spec.subgroup is None:
+        raise ValueError(f"Buried-signature {spec.id!r} requires a subgroup.")
+    driver = _subgroup_driver(spec)
+    if driver not in frame.columns:
+        raise KeyError(f"Driver column {driver!r} missing from frame")
+    mask = _predicate_mask(frame, spec.subgroup.predicate)
+    treated = frame[driver].to_numpy() == 1
+    return int((mask & treated).sum())
+
+
+def _eligible_buried_pool(
+    profile: CancerProfile,
+    base_frame: pd.DataFrame,
+    config: GeneratorConfig,
+) -> list[AssociationSpec]:
+    """Filter buried signatures by actual treated subgroup size."""
+    threshold = config.min_buried_treated_subgroup_n
+    if threshold < 0:
+        raise ValueError(
+            "min_buried_treated_subgroup_n must be >= 0, "
+            f"got {threshold}."
+        )
+
+    pool = profile.buried_signature_catalog()
+    if threshold == 0:
+        return pool
+
+    counts = [(spec, _treated_subgroup_n(base_frame, spec)) for spec in pool]
+    eligible = [spec for spec, n in counts if n >= threshold]
+    if config.n_buried_signatures > len(eligible):
+        detail = ", ".join(f"{spec.id}={n}" for spec, n in counts)
+        raise ValueError(
+            f"Requested {config.n_buried_signatures} buried-signature "
+            "association(s) with "
+            f"min_buried_treated_subgroup_n={threshold}, but only "
+            f"{len(eligible)} of {len(pool)} candidates are eligible for "
+            f"cancer_type={profile.cancer_type!r} at patient_n={config.patient_n}. "
+            f"Treated subgroup counts: {detail}."
+        )
+    return eligible
+
+
 def _public_description(
     config: GeneratorConfig, frame: pd.DataFrame, outcomes: list[str]
 ) -> str:
@@ -240,11 +323,14 @@ class DatasetBundle:
 def generate_dataset(config: GeneratorConfig) -> DatasetBundle:
     """Produce a full dataset bundle: frame + ground-truth manifest + public description."""
     profile = _resolve_profile(config)
+    base_frame = _select_backend(config)
+    buried_pool = _eligible_buried_pool(profile, base_frame, config)
     associations: list[AssociationSpec] = select_associations(
         n_concordant=config.n_concordant,
         n_discordant=config.n_discordant,
         n_hidden_novel=config.n_hidden_novel,
         n_buried_signatures=config.n_buried_signatures,
+        buried_pool=buried_pool,
         profile=profile,
     )
     _assert_no_cross_class_contradictions(associations)
@@ -256,7 +342,6 @@ def generate_dataset(config: GeneratorConfig) -> DatasetBundle:
         {k.value: v for k, v in counts.items()},
     )
 
-    base_frame = _select_backend(config)
     base_frame = _append_distractor_covariates(base_frame, config)
     injection: InjectionResult = inject_associations(
         base_frame=base_frame,

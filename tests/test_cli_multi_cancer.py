@@ -18,6 +18,7 @@ def _write_minimal_config(path: Path, patient_n: int = 80) -> Path:
         "patient_n": patient_n,
         "seed": 0,
         "n_buried_signatures": 1,
+        "min_buried_treated_subgroup_n": 0,
         "n_extra_covariates": 5,
     }
     path.write_text(yaml.safe_dump(config))

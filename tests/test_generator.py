@@ -10,8 +10,28 @@ from onc_co_scientist.synthetic.paradigms import (
 )
 from onc_co_scientist.synthetic.schemas import (
     AssociationForm,
+    AssociationSpec,
     ParadigmClass,
 )
+
+
+def _treated_subgroup_count(bundle, spec: AssociationSpec) -> int:
+    df = bundle.frame
+    predicate_cols = set(spec.subgroup.predicate)
+    drivers = [
+        v for v in spec.variables if v != spec.outcome and v not in predicate_cols
+    ]
+    driver = drivers[0]
+    mask = np.ones(len(df), dtype=bool)
+    for col, val in spec.subgroup.predicate.items():
+        col_vals = df[col].to_numpy()
+        if isinstance(val, dict) and ({"min", "max"} & val.keys()):
+            low = val.get("min", -np.inf)
+            high = val.get("max", np.inf)
+            mask &= (col_vals >= low) & (col_vals <= high)
+        else:
+            mask &= col_vals == val
+    return int((mask & (df[driver].to_numpy() == 1)).sum())
 
 
 def test_builtin_generator_produces_expected_mix():
@@ -45,6 +65,7 @@ def test_builtin_generator_is_deterministic():
         n_concordant=1,
         n_discordant=1,
         n_hidden_novel=1,
+        min_buried_treated_subgroup_n=0,
     )
     a = generate_dataset(cfg)
     b = generate_dataset(cfg)
@@ -67,13 +88,14 @@ def test_generator_rejects_cross_class_variable_overlap():
         n_concordant=1,
         n_discordant=2,  # second discordant is the inverted pembrolizumab+EGFR entry
         n_hidden_novel=0,
+        n_buried_signatures=0,
     )
     with pytest.raises(ValueError, match="paradigm-concordant and paradigm-discordant"):
         generate_dataset(cfg)
 
 
 def test_default_generator_includes_many_extra_covariates():
-    # The default config makes the task harder by appending ~100 distractor
+    # The default config makes the task harder by appending many distractor
     # covariates. Every distractor column should land in the manifest's
     # covariate list.
     config = GeneratorConfig(
@@ -83,6 +105,7 @@ def test_default_generator_includes_many_extra_covariates():
         n_concordant=1,
         n_discordant=1,
         n_hidden_novel=1,
+        min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(config)
     assert config.n_extra_covariates >= 50, "default should be substantial"
@@ -106,6 +129,7 @@ def test_zero_extra_covariates_matches_original_column_set():
         n_concordant=1,
         n_discordant=1,
         n_hidden_novel=1,
+        min_buried_treated_subgroup_n=0,
         n_extra_covariates=0,
     )
     bundle = generate_dataset(config)
@@ -150,6 +174,7 @@ def test_requested_extras_exceeding_pool_size_raises():
         n_concordant=1,
         n_discordant=1,
         n_hidden_novel=1,
+        min_buried_treated_subgroup_n=0,
         n_extra_covariates=len(DEFAULT_DISTRACTOR_POOL) + 1,
     )
     with pytest.raises(ValueError, match="exceeds DEFAULT_DISTRACTOR_POOL"):
@@ -166,6 +191,7 @@ def test_extra_covariates_are_independent_of_seed_for_base_frame():
         n_concordant=1,
         n_discordant=1,
         n_hidden_novel=1,
+        min_buried_treated_subgroup_n=0,
     )
     a = generate_dataset(GeneratorConfig(**cfg_kwargs, n_extra_covariates=0))
     b = generate_dataset(GeneratorConfig(**cfg_kwargs, n_extra_covariates=50))
@@ -186,6 +212,7 @@ def test_public_description_excludes_ground_truth():
         n_concordant=1,
         n_discordant=1,
         n_hidden_novel=1,
+        min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(config)
     desc = bundle.public_description.lower()
@@ -250,7 +277,7 @@ def test_buried_signature_catalog_predicates_are_disjoint_from_background():
 
 
 def test_buried_only_config_injects_single_multifeature_finding():
-    # Default-style config: paradigm counts at zero, one buried signature.
+    # Tiny cohort smoke test opts out of the treated-subgroup size floor.
     cfg = GeneratorConfig(
         dataset_id="buried_only",
         patient_n=400,
@@ -259,6 +286,7 @@ def test_buried_only_config_injects_single_multifeature_finding():
         n_discordant=0,
         n_hidden_novel=0,
         n_buried_signatures=1,
+        min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(cfg)
     assert len(bundle.manifest.associations) == 1
@@ -270,6 +298,39 @@ def test_buried_only_config_injects_single_multifeature_finding():
     # Predicate columns must all be present in the generated frame.
     for col in spec.subgroup.predicate:
         assert col in bundle.frame.columns
+
+
+def test_buried_selection_respects_treated_subgroup_floor():
+    cfg = GeneratorConfig(
+        dataset_id="buried_floor",
+        patient_n=50_000,
+        seed=0,
+        n_concordant=0,
+        n_discordant=0,
+        n_hidden_novel=0,
+        n_buried_signatures=1,
+        min_buried_treated_subgroup_n=1000,
+        n_extra_covariates=0,
+    )
+    bundle = generate_dataset(cfg)
+    spec = bundle.manifest.associations[0]
+    assert _treated_subgroup_count(bundle, spec) >= 1000
+
+
+def test_buried_selection_raises_when_floor_unmet():
+    cfg = GeneratorConfig(
+        dataset_id="buried_floor_fail",
+        patient_n=400,
+        seed=0,
+        n_concordant=0,
+        n_discordant=0,
+        n_hidden_novel=0,
+        n_buried_signatures=1,
+        min_buried_treated_subgroup_n=1000,
+        n_extra_covariates=0,
+    )
+    with pytest.raises(ValueError, match="min_buried_treated_subgroup_n=1000"):
+        generate_dataset(cfg)
 
 
 def test_buried_signature_signal_has_recoverable_effect_at_modest_n():
@@ -286,6 +347,7 @@ def test_buried_signature_signal_has_recoverable_effect_at_modest_n():
         n_discordant=0,
         n_hidden_novel=0,
         n_buried_signatures=1,
+        min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(cfg)
     spec = bundle.manifest.associations[0]
@@ -341,6 +403,7 @@ def test_background_prognostics_yield_realistic_r_squared():
         n_concordant=2,
         n_discordant=1,
         n_hidden_novel=1,
+        min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(config)
     df = bundle.frame
