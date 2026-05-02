@@ -86,7 +86,7 @@ class GeneratorConfig:
     # agent to exercise variable-selection judgment instead of brute-forcing a
     # univariate test against every column. Max is the pool size in
     # ``distractors.DEFAULT_DISTRACTOR_POOL``. Applies to all backends.
-    n_extra_covariates: int = 50
+    n_extra_covariates: int = 10
 
 
 def _resolve_profile(config: GeneratorConfig) -> CancerProfile:
