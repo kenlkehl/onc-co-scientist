@@ -94,8 +94,8 @@ def test_generator_rejects_cross_class_variable_overlap():
         generate_dataset(cfg)
 
 
-def test_default_generator_includes_many_extra_covariates():
-    # The default config makes the task harder by appending many distractor
+def test_default_generator_includes_ten_extra_covariates():
+    # The default config makes the task harder by appending 10 distractor
     # covariates. Every distractor column should land in the manifest's
     # covariate list.
     config = GeneratorConfig(
@@ -108,7 +108,7 @@ def test_default_generator_includes_many_extra_covariates():
         min_buried_treated_subgroup_n=0,
     )
     bundle = generate_dataset(config)
-    assert config.n_extra_covariates >= 50, "default should be substantial"
+    assert config.n_extra_covariates == 10
     expected_names = [spec.name for spec in DEFAULT_DISTRACTOR_POOL[: config.n_extra_covariates]]
     for name in expected_names:
         assert name in bundle.frame.columns
@@ -194,7 +194,7 @@ def test_extra_covariates_are_independent_of_seed_for_base_frame():
         min_buried_treated_subgroup_n=0,
     )
     a = generate_dataset(GeneratorConfig(**cfg_kwargs, n_extra_covariates=0))
-    b = generate_dataset(GeneratorConfig(**cfg_kwargs, n_extra_covariates=50))
+    b = generate_dataset(GeneratorConfig(**cfg_kwargs, n_extra_covariates=10))
     shared = set(a.frame.columns) & set(b.frame.columns)
     # The paradigm-used and outcome columns must survive the transformation
     # unchanged (same RNG stream on both).
