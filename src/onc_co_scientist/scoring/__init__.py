@@ -16,6 +16,7 @@ from .judge import (
     JudgeCache,
     MatchJudgment,
     NoveltyJudgment,
+    RecoveryLevel,
     StubJudge,
     default_cache_dir,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "NoveltyJudgment",
     "NoveltyJudgmentRecord",
     "NoveltyScore",
+    "RecoveryLevel",
     "ReplicateScore",
     "StubJudge",
     "aggregate_batch",

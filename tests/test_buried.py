@@ -5,11 +5,22 @@ from __future__ import annotations
 from pathlib import Path
 
 from onc_co_scientist.harness.transcript import Transcript
-from onc_co_scientist.scoring import StubJudge, score_buried
+from onc_co_scientist.scoring import MatchJudgment, StubJudge, score_buried
 from onc_co_scientist.synthetic.paradigms import hidden_novel_catalog
 from onc_co_scientist.synthetic.schemas import DatasetManifest
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
+
+
+class _FixedMatchJudge:
+    def __init__(self, judgment: MatchJudgment) -> None:
+        self.judgment = judgment
+
+    def judge_novelty(self, hypotheses: list[str]):
+        raise NotImplementedError
+
+    def judge_matches(self, hypotheses, spec, *, variant, column_mapping=None):
+        return [self.judgment for _ in hypotheses]
 
 
 def _buried_manifest() -> DatasetManifest:
@@ -46,6 +57,8 @@ def test_perfect_transcript_uncovers_buried_at_iteration_2():
     assert score.earliest_iteration_uncovered == 2
     assert score.score == 2
     assert score.uncovered is True
+    assert score.recovery_level == "exact"
+    assert score.recovery_iteration == 2
     # Match-judgment trace is populated for review: every transcript
     # hypothesis appears (matches True or False), with the stub rationale.
     discovery = score.per_association[0]
@@ -66,8 +79,9 @@ def test_empty_transcript_falls_back_to_max_iterations():
     judge = StubJudge()
     score = score_buried(manifest, transcript, judge)
     assert score.earliest_iteration_uncovered is None
-    assert score.score == 5
+    assert score.score == 6
     assert score.uncovered is False
+    assert score.recovery_level == "none"
 
 
 def test_proposed_but_not_tested_does_not_count():
@@ -95,9 +109,10 @@ def test_proposed_but_not_tested_does_not_count():
     )
     score = score_buried(manifest, transcript, judge)
     assert score.earliest_iteration_uncovered is None
-    assert score.score == 4
+    assert score.score == 5
     assert score.per_association[0].proposed_iteration == 1
     assert score.per_association[0].tested_iteration is None
+    assert score.recovery_level == "none"
 
 
 def test_wrong_direction_analysis_does_not_count():
@@ -140,7 +155,93 @@ def test_wrong_direction_analysis_does_not_count():
     )
     score = score_buried(manifest, transcript, judge)
     assert score.earliest_iteration_uncovered is None
-    assert score.score == 3
+    assert score.score == 4
+
+
+def test_near_recovery_is_reported_without_exact_uncovered():
+    manifest = _buried_manifest()
+    transcript = Transcript(
+        dataset_id="score_ds",
+        model_id="m",
+        harness_id="h@1",
+        max_iterations=4,
+        iterations=[
+            {
+                "index": 2,
+                "proposed_hypotheses": [
+                    {"id": "h1", "text": "near olaparib subgroup hypothesis"}
+                ],
+                "analyses": [
+                    {
+                        "hypothesis_ids": ["h1"],
+                        "result_summary": "direction-correct significant support",
+                        "p_value": 0.001,
+                        "effect_estimate": 1.0,
+                        "significant": True,
+                    }
+                ],
+            }
+        ],
+    )
+    judge = _FixedMatchJudge(
+        MatchJudgment(
+            matches=False,
+            recovery_level="near",
+            rationale="correct driver/outcome and most subgroup structure",
+        )
+    )
+
+    score = score_buried(manifest, transcript, judge)
+
+    assert score.uncovered is False
+    assert score.score == 5
+    assert score.recovery_level == "near"
+    assert score.recovery_iteration == 2
+    assert score.near_or_better is True
+    assert score.component_or_better is True
+
+
+def test_component_recovery_accepts_significant_partial_signal():
+    manifest = _buried_manifest()
+    transcript = Transcript(
+        dataset_id="score_ds",
+        model_id="m",
+        harness_id="h@1",
+        max_iterations=4,
+        iterations=[
+            {
+                "index": 1,
+                "proposed_hypotheses": [
+                    {"id": "h1", "text": "component olaparib modifier"}
+                ],
+                "analyses": [
+                    {
+                        "hypothesis_ids": ["h1"],
+                        "result_summary": "significant partial modifier",
+                        "p_value": 0.001,
+                        "effect_estimate": -1.0,
+                        "significant": True,
+                    }
+                ],
+            }
+        ],
+    )
+    judge = _FixedMatchJudge(
+        MatchJudgment(
+            matches=False,
+            recovery_level="component",
+            rationale="correct driver/outcome with one modifier",
+        )
+    )
+
+    score = score_buried(manifest, transcript, judge)
+
+    assert score.uncovered is False
+    assert score.score == 5
+    assert score.recovery_level == "component"
+    assert score.recovery_iteration == 1
+    assert score.near_or_better is False
+    assert score.component_or_better is True
 
 
 def test_manifest_with_no_hidden_novel_yields_max_iterations_score():
@@ -162,7 +263,7 @@ def test_manifest_with_no_hidden_novel_yields_max_iterations_score():
         iterations=[],
     )
     score = score_buried(manifest, transcript, StubJudge())
-    assert score.score == 4
+    assert score.score == 5
     assert score.per_association == []
 
 

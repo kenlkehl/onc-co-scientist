@@ -64,6 +64,14 @@ def test_aggregate_replicates_mean_and_sd():
     assert bundle.buried_score_sd == stdev([2.0, 5.0])
     assert bundle.n_replicates_uncovered == 1
     assert bundle.fraction_uncovered == 0.5
+    assert bundle.n_replicates_near_or_better == 1
+    assert bundle.n_replicates_component_or_better == 1
+    assert bundle.recovery_level_counts == {
+        "none": 1,
+        "component": 0,
+        "near": 0,
+        "exact": 1,
+    }
 
 
 def test_aggregate_replicates_single_run_sd_none():
@@ -162,5 +170,8 @@ def test_aggregate_batch_to_dict_round_trips():
     assert payload["n_bundles"] == 1
     assert payload["n_replicates_total"] == 1
     assert payload["frac_novel"] == 0.4
+    assert payload["fraction_near_or_better_named"] == 1.0
+    assert payload["fraction_component_or_better_named"] == 1.0
     assert payload["per_bundle"][0]["dataset_id"] == "ds_a"
     assert payload["per_bundle"][0]["variant"] == "named"
+    assert payload["per_bundle"][0]["recovery_level_counts"]["exact"] == 1

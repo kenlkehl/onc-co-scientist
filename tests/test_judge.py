@@ -162,6 +162,7 @@ def test_stub_judge_matches_uses_spec_block_substring():
         variant="named",
     )
     assert [m.matches for m in matches] == [True, False, True]
+    assert [m.recovery_level for m in matches] == ["exact", "none", "exact"]
 
 
 def test_stub_judge_matches_anonymized_keys_on_feature_tokens():

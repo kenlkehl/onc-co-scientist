@@ -176,6 +176,8 @@ def test_score_batch_scores_named_and_anonymized_and_writes_report(tmp_path: Pat
     assert "Novelty %" in md
     assert "Buried discovery iteration — named" in md
     assert "Buried discovery iteration — anonymized" in md
+    assert "Fraction near-or-better recovery" in md
+    assert "component-or-better recovery" in md
 
     # Only named replicates contribute to the judgments JSONL.
     judgments = (out_dir / "batch_judgments.jsonl").read_text(encoding="utf-8").splitlines()
@@ -201,6 +203,7 @@ def test_score_batch_scores_named_and_anonymized_and_writes_report(tmp_path: Pat
         "hypothesis_id",
         "text",
         "matches",
+        "recovery_level",
         "rationale",
     } <= sample.keys()
 

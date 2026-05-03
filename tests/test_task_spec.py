@@ -42,6 +42,8 @@ def test_build_task_writes_agent_bundle(tmp_path):
     instructions = task.instructions_path.read_text()
     assert "ds_task" in instructions
     assert "Maximum iterations (N):** 4" in instructions
+    assert "systematic treatment-effect heterogeneity search" in instructions
+    assert "final best-supported treatment-effect subgroup hypothesis" in instructions
 
     # Agent-facing files must not leak the benchmark's evaluation intent.
     description_text = task.description_path.read_text().lower()

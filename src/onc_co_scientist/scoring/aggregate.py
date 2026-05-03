@@ -21,6 +21,7 @@ from statistics import mean, stdev
 from typing import Literal
 
 from .buried import BuriedScore
+from .judge import RecoveryLevel
 from .novelty import NoveltyScore
 
 Variant = Literal["named", "anonymized"]
@@ -65,6 +66,22 @@ class ReplicateScore:
     def uncovered(self) -> bool:
         return self.buried.uncovered
 
+    @property
+    def recovery_level(self) -> RecoveryLevel:
+        return self.buried.recovery_level
+
+    @property
+    def recovery_iteration(self) -> int | None:
+        return self.buried.recovery_iteration
+
+    @property
+    def near_or_better(self) -> bool:
+        return self.buried.near_or_better
+
+    @property
+    def component_or_better(self) -> bool:
+        return self.buried.component_or_better
+
     def to_dict(self) -> dict:
         return {
             "dataset_id": self.dataset_id,
@@ -75,6 +92,10 @@ class ReplicateScore:
             "frac_novel": self.frac_novel,
             "buried_score": self.buried_score,
             "uncovered": self.uncovered,
+            "recovery_level": self.recovery_level,
+            "recovery_iteration": self.recovery_iteration,
+            "near_or_better": self.near_or_better,
+            "component_or_better": self.component_or_better,
             "novelty": self.novelty.to_dict() if self.novelty is not None else None,
             "buried": self.buried.to_dict(),
         }
@@ -92,6 +113,9 @@ class BundleScore:
     buried_score_mean: float | None
     buried_score_sd: float | None
     n_replicates_uncovered: int
+    n_replicates_near_or_better: int
+    n_replicates_component_or_better: int
+    recovery_level_counts: dict[RecoveryLevel, int]
     replicates: list[ReplicateScore] = field(default_factory=list)
 
     @property
@@ -99,6 +123,18 @@ class BundleScore:
         if self.n_replicates == 0:
             return None
         return self.n_replicates_uncovered / self.n_replicates
+
+    @property
+    def fraction_near_or_better(self) -> float | None:
+        if self.n_replicates == 0:
+            return None
+        return self.n_replicates_near_or_better / self.n_replicates
+
+    @property
+    def fraction_component_or_better(self) -> float | None:
+        if self.n_replicates == 0:
+            return None
+        return self.n_replicates_component_or_better / self.n_replicates
 
     def to_dict(self) -> dict:
         return {
@@ -111,6 +147,11 @@ class BundleScore:
             "buried_score_sd": self.buried_score_sd,
             "n_replicates_uncovered": self.n_replicates_uncovered,
             "fraction_uncovered": self.fraction_uncovered,
+            "n_replicates_near_or_better": self.n_replicates_near_or_better,
+            "fraction_near_or_better": self.fraction_near_or_better,
+            "n_replicates_component_or_better": self.n_replicates_component_or_better,
+            "fraction_component_or_better": self.fraction_component_or_better,
+            "recovery_level_counts": dict(self.recovery_level_counts),
             "replicates": [r.to_dict() for r in self.replicates],
         }
 
@@ -132,6 +173,10 @@ class BatchPipelineScore:
     buried_score_anonymized: float | None
     fraction_uncovered_named: float | None
     fraction_uncovered_anonymized: float | None
+    fraction_near_or_better_named: float | None
+    fraction_near_or_better_anonymized: float | None
+    fraction_component_or_better_named: float | None
+    fraction_component_or_better_anonymized: float | None
     per_bundle: list[BundleScore] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -145,6 +190,10 @@ class BatchPipelineScore:
             "buried_score_anonymized": self.buried_score_anonymized,
             "fraction_uncovered_named": self.fraction_uncovered_named,
             "fraction_uncovered_anonymized": self.fraction_uncovered_anonymized,
+            "fraction_near_or_better_named": self.fraction_near_or_better_named,
+            "fraction_near_or_better_anonymized": self.fraction_near_or_better_anonymized,
+            "fraction_component_or_better_named": self.fraction_component_or_better_named,
+            "fraction_component_or_better_anonymized": self.fraction_component_or_better_anonymized,
             "per_bundle": [b.to_dict() for b in self.per_bundle],
         }
 
@@ -171,6 +220,16 @@ def aggregate_replicates(scores: list[ReplicateScore]) -> BundleScore:
     frac_novels: list[float | None] = [s.frac_novel for s in scores]
     buried_scores: list[float | None] = [float(s.buried_score) for s in scores]
     n_uncovered = sum(1 for s in scores if s.uncovered)
+    n_near_or_better = sum(1 for s in scores if s.near_or_better)
+    n_component_or_better = sum(1 for s in scores if s.component_or_better)
+    recovery_counts: dict[RecoveryLevel, int] = {
+        "none": 0,
+        "component": 0,
+        "near": 0,
+        "exact": 0,
+    }
+    for score in scores:
+        recovery_counts[score.recovery_level] += 1
     return BundleScore(
         dataset_id=next(iter(dataset_ids)),
         variant=next(iter(variants)),
@@ -180,6 +239,9 @@ def aggregate_replicates(scores: list[ReplicateScore]) -> BundleScore:
         buried_score_mean=_mean_of_present(buried_scores),
         buried_score_sd=_sd_of_present(buried_scores),
         n_replicates_uncovered=n_uncovered,
+        n_replicates_near_or_better=n_near_or_better,
+        n_replicates_component_or_better=n_component_or_better,
+        recovery_level_counts=recovery_counts,
         replicates=list(scores),
     )
 
@@ -203,6 +265,18 @@ def aggregate_batch(bundle_scores: list[BundleScore]) -> BatchPipelineScore:
     fraction_uncovered_anon = _mean_of_present(
         [b.fraction_uncovered for b in anon]
     )
+    fraction_near_named = _mean_of_present(
+        [b.fraction_near_or_better for b in named]
+    )
+    fraction_near_anon = _mean_of_present(
+        [b.fraction_near_or_better for b in anon]
+    )
+    fraction_component_named = _mean_of_present(
+        [b.fraction_component_or_better for b in named]
+    )
+    fraction_component_anon = _mean_of_present(
+        [b.fraction_component_or_better for b in anon]
+    )
     return BatchPipelineScore(
         n_bundles=len(bundle_scores),
         n_replicates_total=sum(b.n_replicates for b in bundle_scores),
@@ -213,5 +287,9 @@ def aggregate_batch(bundle_scores: list[BundleScore]) -> BatchPipelineScore:
         buried_score_anonymized=buried_score_anon,
         fraction_uncovered_named=fraction_uncovered_named,
         fraction_uncovered_anonymized=fraction_uncovered_anon,
+        fraction_near_or_better_named=fraction_near_named,
+        fraction_near_or_better_anonymized=fraction_near_anon,
+        fraction_component_or_better_named=fraction_component_named,
+        fraction_component_or_better_anonymized=fraction_component_anon,
         per_bundle=list(bundle_scores),
     )

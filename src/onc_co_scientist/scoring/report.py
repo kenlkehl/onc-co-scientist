@@ -61,20 +61,38 @@ def _render_variant_block(bundle: BundleScore) -> list[str]:
     lines.append(
         f"- replicates uncovered: {bundle.n_replicates_uncovered}/{bundle.n_replicates}"
     )
+    lines.append(
+        f"- near-or-better recovery: "
+        f"{bundle.n_replicates_near_or_better}/{bundle.n_replicates}"
+    )
+    lines.append(
+        f"- component-or-better recovery: "
+        f"{bundle.n_replicates_component_or_better}/{bundle.n_replicates}"
+    )
+    lines.append(
+        "- recovery levels: "
+        + ", ".join(
+            f"{level}={bundle.recovery_level_counts.get(level, 0)}"
+            for level in ("exact", "near", "component", "none")
+        )
+    )
     lines.append("")
     if bundle.variant == "named":
         lines.append(
-            "| replicate | model | harness | frac_novel | buried_score | uncovered@ | sample novel hypotheses |"
+            "| replicate | model | harness | frac_novel | buried_score | exact@ | recovery | recovery@ | sample novel hypotheses |"
         )
-        lines.append("|---|---|---|---|---|---|---|")
+        lines.append("|---|---|---|---|---|---|---|---|---|")
     else:
-        lines.append("| replicate | model | harness | buried_score | uncovered@ |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| replicate | model | harness | buried_score | exact@ | recovery | recovery@ |")
+        lines.append("|---|---|---|---|---|---|---|")
     for i, rep in enumerate(bundle.replicates, 1):
         uncovered_at = (
             str(rep.buried.earliest_iteration_uncovered)
             if rep.buried.earliest_iteration_uncovered is not None
             else "—"
+        )
+        recovery_at = (
+            str(rep.recovery_iteration) if rep.recovery_iteration is not None else "n/a"
         )
         if bundle.variant == "named":
             sample = _sample_novel(rep)
@@ -82,12 +100,14 @@ def _render_variant_block(bundle: BundleScore) -> list[str]:
             lines.append(
                 f"| {i:03d} | {rep.model_id} | {rep.harness_id} | "
                 f"{_fmt(rep.frac_novel)} | {rep.buried_score} | "
-                f"{uncovered_at} | {sample_md} |"
+                f"{uncovered_at} | {rep.recovery_level} | {recovery_at} | "
+                f"{sample_md} |"
             )
         else:
             lines.append(
                 f"| {i:03d} | {rep.model_id} | {rep.harness_id} | "
-                f"{rep.buried_score} | {uncovered_at} |"
+                f"{rep.buried_score} | {uncovered_at} | "
+                f"{rep.recovery_level} | {recovery_at} |"
             )
     return lines
 
@@ -107,10 +127,11 @@ def render_markdown_batch(batch: BatchPipelineScore) -> str:
     )
     lines.append(
         f"- **Buried discovery iteration — named** (lower = uncovers earlier; "
-        f"falls back to max_iterations if never): {_fmt(batch.buried_score_named)}"
+        f"exact only; no exact = max_iterations + 1): {_fmt(batch.buried_score_named)}"
     )
     lines.append(
-        f"- **Buried discovery iteration — anonymized:** "
+        f"- **Buried discovery iteration — anonymized** "
+        f"(exact only; no exact = max_iterations + 1): "
         f"{_fmt(batch.buried_score_anonymized)}"
     )
     lines.append(
@@ -120,6 +141,22 @@ def render_markdown_batch(batch: BatchPipelineScore) -> str:
     lines.append(
         f"- **Fraction of replicates uncovering buried — anonymized:** "
         f"{_fmt(batch.fraction_uncovered_anonymized)}"
+    )
+    lines.append(
+        f"- **Fraction near-or-better recovery — named:** "
+        f"{_fmt(batch.fraction_near_or_better_named)}"
+    )
+    lines.append(
+        f"- **Fraction near-or-better recovery — anonymized:** "
+        f"{_fmt(batch.fraction_near_or_better_anonymized)}"
+    )
+    lines.append(
+        f"- **Fraction component-or-better recovery — named:** "
+        f"{_fmt(batch.fraction_component_or_better_named)}"
+    )
+    lines.append(
+        f"- **Fraction component-or-better recovery — anonymized:** "
+        f"{_fmt(batch.fraction_component_or_better_anonymized)}"
     )
     lines.append("")
     lines.append("## Per-bundle detail (mean ± SD across replicates)")
@@ -198,6 +235,7 @@ def _write_match_judgments_jsonl(batch: BatchPipelineScore, path: Path) -> None:
                                     "hypothesis_id": j.hypothesis_id,
                                     "text": j.text,
                                     "matches": j.matches,
+                                    "recovery_level": j.recovery_level,
                                     "rationale": j.rationale,
                                 }
                             )

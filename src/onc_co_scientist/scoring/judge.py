@@ -41,6 +41,8 @@ from typing import Literal, Protocol
 from ..synthetic.schemas import AssociationForm, AssociationSpec
 
 Variant = Literal["named", "anonymized"]
+RecoveryLevel = Literal["none", "component", "near", "exact"]
+RECOVERY_LEVELS: tuple[RecoveryLevel, ...] = ("none", "component", "near", "exact")
 
 
 @dataclass
@@ -53,6 +55,7 @@ class NoveltyJudgment:
 class MatchJudgment:
     matches: bool
     rationale: str
+    recovery_level: RecoveryLevel = "none"
 
 
 class Judge(Protocol):
@@ -116,6 +119,22 @@ or test of association for a main effect.
 3. The direction of effect, if specified by the hypothesis, agrees with \
 the ground truth.
 
+Also assign a recovery_level:
+- "exact": the hypothesis MATCHES by the definition above.
+- "near": the hypothesis identifies the correct treatment/driver, outcome, \
+direction, and most of the defining subgroup/interaction structure, but omits \
+or approximates one predicate/threshold. This is not exact recovery.
+- "component": the hypothesis identifies the correct treatment/driver and \
+outcome plus at least one correct subgroup modifier, lower-order interaction, \
+or other meaningful component of the ground-truth process, but is incomplete \
+or framed as a component rather than the joint association.
+- "none": no meaningful recovery of the ground-truth association.
+
+Do not give "near" or "component" credit for a hypothesis that merely lists \
+ground-truth variables as covariates while asserting a different driver, a \
+different extra modifier, or a generic adjusted main effect. Set matches=true \
+if and only if recovery_level is "exact".
+
 Ground-truth association:
 {spec_block}
 Hypotheses (one per item, indexed in order):
@@ -123,7 +142,7 @@ Hypotheses (one per item, indexed in order):
 
 Respond with ONLY a JSON array of length {n}, one entry per hypothesis in \
 the same order:
-[{{"matches": true|false, "rationale": "<one sentence>"}}, ...]
+[{{"matches": true|false, "recovery_level": "exact"|"near"|"component"|"none", "rationale": "<one sentence>"}}, ...]
 """
 
 
@@ -233,6 +252,26 @@ def _build_match_prompt(
         spec_block=_render_spec_block(spec, variant, column_mapping),
         numbered=_format_numbered(hypotheses),
         n=len(hypotheses),
+    )
+
+
+def _match_judgment_from_payload(entry: dict) -> MatchJudgment:
+    matches = bool(entry.get("matches", False))
+    raw_level = str(entry.get("recovery_level", "")).lower()
+    level: RecoveryLevel
+    if raw_level in RECOVERY_LEVELS:
+        level = raw_level  # type: ignore[assignment]
+    else:
+        level = "exact" if matches else "none"
+
+    if matches:
+        level = "exact"
+    elif level == "exact":
+        matches = True
+    return MatchJudgment(
+        matches=matches,
+        recovery_level=level,
+        rationale=str(entry.get("rationale", "")),
     )
 
 
@@ -419,12 +458,7 @@ class ClaudeCliJudge:
             )
             payload = self._run_chunk(prompt, expected=len(chunk))
             for entry in payload:
-                out.append(
-                    MatchJudgment(
-                        matches=bool(entry.get("matches", False)),
-                        rationale=str(entry.get("rationale", "")),
-                    )
-                )
+                out.append(_match_judgment_from_payload(entry))
         return out
 
     def _run_chunk(self, prompt: str, *, expected: int) -> list[dict]:
@@ -478,6 +512,17 @@ def _codex_structured_prompt(prompt: str) -> str:
 def _codex_output_schema(
     judgment_key: Literal["is_novel", "matches"],
 ) -> dict[str, object]:
+    item_properties: dict[str, object] = {
+        judgment_key: {"type": "boolean"},
+        "rationale": {"type": "string"},
+    }
+    required = [judgment_key, "rationale"]
+    if judgment_key == "matches":
+        item_properties["recovery_level"] = {
+            "type": "string",
+            "enum": list(RECOVERY_LEVELS),
+        }
+        required.insert(1, "recovery_level")
     return {
         "type": "object",
         "properties": {
@@ -485,11 +530,8 @@ def _codex_output_schema(
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "properties": {
-                        judgment_key: {"type": "boolean"},
-                        "rationale": {"type": "string"},
-                    },
-                    "required": [judgment_key, "rationale"],
+                    "properties": item_properties,
+                    "required": required,
                     "additionalProperties": False,
                 },
             }
@@ -564,12 +606,7 @@ class CodexCliJudge:
                 judgment_key="matches",
             )
             for entry in payload:
-                out.append(
-                    MatchJudgment(
-                        matches=bool(entry.get("matches", False)),
-                        rationale=str(entry.get("rationale", "")),
-                    )
-                )
+                out.append(_match_judgment_from_payload(entry))
         return out
 
     def _run_chunk(
@@ -707,12 +744,7 @@ class AnthropicVertexJudge:
             )
             payload = self._run_chunk(prompt, expected=len(chunk))
             for entry in payload:
-                out.append(
-                    MatchJudgment(
-                        matches=bool(entry.get("matches", False)),
-                        rationale=str(entry.get("rationale", "")),
-                    )
-                )
+                out.append(_match_judgment_from_payload(entry))
         return out
 
     def _run_chunk(self, prompt: str, *, expected: int) -> list[dict]:
@@ -783,13 +815,17 @@ class StubJudge:
             if key.lower() in haystack:
                 active = phrases
                 break
-        return [
-            MatchJudgment(
-                matches=any(p.lower() in h.lower() for p in active),
-                rationale="stub",
+        out: list[MatchJudgment] = []
+        for hypothesis in hypotheses:
+            matches = any(p.lower() in hypothesis.lower() for p in active)
+            out.append(
+                MatchJudgment(
+                    matches=matches,
+                    recovery_level="exact" if matches else "none",
+                    rationale="stub",
+                )
             )
-            for h in hypotheses
-        ]
+        return out
 
 
 def default_cache_dir() -> Path:
