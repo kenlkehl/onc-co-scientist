@@ -147,9 +147,7 @@ def hidden_novel_catalog() -> list[AssociationSpec]:
             subgroup=SubgroupSpec(
                 name="enasidenib_idh2_subgroup",
                 predicate={"idh2_mutation": 1},
-                description=(
-                    "Patients whose leukemic blasts harbor an IDH2 mutation."
-                ),
+                description=("Patients whose leukemic blasts harbor an IDH2 mutation."),
             ),
             natural_language_description=(
                 "Enasidenib produces complete remissions in IDH2-mutated "
@@ -258,7 +256,7 @@ DEFAULT_PREVALENCES: dict[str, float] = {
 }
 
 
-def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
+def base_frame_fn(config: GeneratorConfig) -> pd.DataFrame:
     rng = np.random.default_rng(config.seed)
     n = config.patient_n
     overrides = config.covariate_prevalences
@@ -272,13 +270,17 @@ def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
     # Molecular markers.
     flt3_itd = marginal_bernoulli(rng, "flt3_itd", DEFAULT_PREVALENCES["flt3_itd"], n, overrides)
     # FLT3-TKD is mutually exclusive with FLT3-ITD in most tumors.
-    flt3_tkd_base = rng.binomial(1, float(overrides.get("flt3_tkd", DEFAULT_PREVALENCES["flt3_tkd"])), size=n)
+    flt3_tkd_base = rng.binomial(
+        1, float(overrides.get("flt3_tkd", DEFAULT_PREVALENCES["flt3_tkd"])), size=n
+    )
     flt3_tkd = np.where(flt3_itd == 1, 0, flt3_tkd_base).astype(int)
     # IDH1 and IDH2 are mutually exclusive in nearly all tumors.
     idh1_mutation = marginal_bernoulli(
         rng, "idh1_mutation", DEFAULT_PREVALENCES["idh1_mutation"], n, overrides
     )
-    idh2_base = rng.binomial(1, float(overrides.get("idh2_mutation", DEFAULT_PREVALENCES["idh2_mutation"])), size=n)
+    idh2_base = rng.binomial(
+        1, float(overrides.get("idh2_mutation", DEFAULT_PREVALENCES["idh2_mutation"])), size=n
+    )
     idh2_mutation = np.where(idh1_mutation == 1, 0, idh2_base).astype(int)
     npm1_mutation = marginal_bernoulli(
         rng, "npm1_mutation", DEFAULT_PREVALENCES["npm1_mutation"], n, overrides
@@ -298,13 +300,9 @@ def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
     )
 
     # WBC at presentation (right-skewed).
-    wbc_k_per_ul = np.round(
-        np.clip(rng.lognormal(2.5, 1.0, size=n), 0.5, 500.0), 1
-    )
+    wbc_k_per_ul = np.round(np.clip(rng.lognormal(2.5, 1.0, size=n), 0.5, 500.0), 1)
     # Blast percentage in marrow (continuous, 20-100% by AML diagnostic threshold).
-    blast_pct_marrow = np.round(
-        np.clip(rng.normal(60, 20, size=n), 20.0, 100.0), 1
-    )
+    blast_pct_marrow = np.round(np.clip(rng.normal(60, 20, size=n), 20.0, 100.0), 1)
 
     treatments = {
         col: marginal_bernoulli(rng, col, DEFAULT_PREVALENCES[col], n, overrides)

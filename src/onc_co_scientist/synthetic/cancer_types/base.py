@@ -63,11 +63,11 @@ class CancerProfile:
     prognostic_contribution: Callable[[pd.DataFrame, str], np.ndarray]
     background_prognostic_variables: frozenset[str]
     default_prevalences: dict[str, float]
+    dataset_kind: str = "clinical_cohort"
+    id_columns: tuple[str, ...] = ("patient_id",)
 
 
-def sample_demographics(
-    rng: np.random.Generator, n: int
-) -> dict[str, np.ndarray]:
+def sample_demographics(rng: np.random.Generator, n: int) -> dict[str, np.ndarray]:
     """Universal demographic draws: age, sex, ECOG performance status."""
     return {
         "age_years": np.clip(rng.normal(65, 10, size=n), 30, 90).round(1),
@@ -76,30 +76,18 @@ def sample_demographics(
     }
 
 
-def sample_disease_burden_labs(
-    rng: np.random.Generator, n: int
-) -> dict[str, np.ndarray]:
+def sample_disease_burden_labs(rng: np.random.Generator, n: int) -> dict[str, np.ndarray]:
     """Universal disease-burden labs/indices: albumin, LDH, weight loss, CRP, NLR."""
     return {
-        "albumin_g_dl": np.round(
-            np.clip(rng.normal(3.8, 0.5, size=n), 1.5, 5.5), 1
-        ),
-        "ldh_u_l": np.round(
-            np.clip(rng.lognormal(5.35, 0.35, size=n), 0.0, 2000.0), 2
-        ),
-        "weight_loss_pct_6mo": np.round(
-            np.clip(rng.normal(3.0, 5.0, size=n), 0.0, 40.0), 1
-        ),
-        "crp_mg_l": np.round(
-            np.clip(rng.lognormal(1.20, 1.10, size=n), 0.0, 300.0), 2
-        ),
+        "albumin_g_dl": np.round(np.clip(rng.normal(3.8, 0.5, size=n), 1.5, 5.5), 1),
+        "ldh_u_l": np.round(np.clip(rng.lognormal(5.35, 0.35, size=n), 0.0, 2000.0), 2),
+        "weight_loss_pct_6mo": np.round(np.clip(rng.normal(3.0, 5.0, size=n), 0.0, 40.0), 1),
+        "crp_mg_l": np.round(np.clip(rng.lognormal(1.20, 1.10, size=n), 0.0, 300.0), 2),
         "nlr": np.round(np.clip(rng.lognormal(1.10, 0.55, size=n), 0.0, 40.0), 2),
     }
 
 
-def shared_prognostic_contribution(
-    frame: pd.DataFrame, outcome: str
-) -> np.ndarray:
+def shared_prognostic_contribution(frame: pd.DataFrame, outcome: str) -> np.ndarray:
     """Universal disease-burden adjustments to the outcome linear predictor.
 
     Reads only the columns named in ``SHARED_BACKGROUND_PROGNOSTIC_VARIABLES``,
@@ -114,18 +102,14 @@ def shared_prognostic_contribution(
         contrib += -1.2 * frame["ecog_ps"].to_numpy()
         contrib += -0.02 * (frame["age_years"].to_numpy() - 65.0)
         contrib += +0.5 * (frame["albumin_g_dl"].to_numpy() - 3.5)
-        contrib += -0.001 * np.clip(
-            frame["ldh_u_l"].to_numpy() - 250.0, a_min=0.0, a_max=750.0
-        )
+        contrib += -0.001 * np.clip(frame["ldh_u_l"].to_numpy() - 250.0, a_min=0.0, a_max=750.0)
         contrib += -0.08 * frame["weight_loss_pct_6mo"].to_numpy()
         return contrib
     if outcome == "objective_response":
         contrib += -0.4 * frame["ecog_ps"].to_numpy()
         contrib += +0.15 * (frame["albumin_g_dl"].to_numpy() - 3.5)
         contrib += -0.04 * frame["weight_loss_pct_6mo"].to_numpy()
-        contrib += -0.10 * (
-            np.log1p(frame["crp_mg_l"].to_numpy()) - np.log(6.0)
-        )
+        contrib += -0.10 * (np.log1p(frame["crp_mg_l"].to_numpy()) - np.log(6.0))
         return contrib
     return contrib
 

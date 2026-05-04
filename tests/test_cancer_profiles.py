@@ -99,10 +99,7 @@ def test_profile_buried_signal_recoverable(cancer_type: CancerType) -> None:
     spec = bundle.manifest.associations[0]
     df = bundle.frame
     predicate_cols = set(spec.subgroup.predicate)
-    drivers = [
-        v for v in spec.variables if v != spec.outcome and v not in predicate_cols
-    ]
-    driver = drivers[0]
+    drivers = [v for v in spec.variables if v != spec.outcome and v not in predicate_cols]
     mask = np.ones(len(df), dtype=bool)
     for col, val in spec.subgroup.predicate.items():
         col_vals = df[col].to_numpy()
@@ -112,9 +109,9 @@ def test_profile_buried_signal_recoverable(cancer_type: CancerType) -> None:
             mask &= (col_vals >= low) & (col_vals <= high)
         else:
             mask &= col_vals == val
-    treated = df[driver].to_numpy() == 1
-    in_grp = treated & mask
-    out_grp = treated & ~mask
+    active = df[drivers[0]].to_numpy() == 1 if drivers else np.ones(len(df), dtype=bool)
+    in_grp = active & mask
+    out_grp = active & ~mask
     if in_grp.sum() < 30 or out_grp.sum() < 30:
         pytest.skip(
             f"Subgroup too small for power check at n=5000: "

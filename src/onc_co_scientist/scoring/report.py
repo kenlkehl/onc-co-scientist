@@ -52,18 +52,13 @@ def _render_variant_block(bundle: BundleScore) -> list[str]:
     label = bundle.variant.capitalize()
     lines.append(f"#### {label} (n_replicates={bundle.n_replicates})")
     if bundle.variant == "named":
-        lines.append(
-            f"- frac_novel: {_fmt_pair(bundle.frac_novel_mean, bundle.frac_novel_sd)}"
-        )
+        lines.append(f"- frac_novel: {_fmt_pair(bundle.frac_novel_mean, bundle.frac_novel_sd)}")
     lines.append(
         f"- buried_score: {_fmt_pair(bundle.buried_score_mean, bundle.buried_score_sd, digits=2)}"
     )
+    lines.append(f"- replicates uncovered: {bundle.n_replicates_uncovered}/{bundle.n_replicates}")
     lines.append(
-        f"- replicates uncovered: {bundle.n_replicates_uncovered}/{bundle.n_replicates}"
-    )
-    lines.append(
-        f"- near-or-better recovery: "
-        f"{bundle.n_replicates_near_or_better}/{bundle.n_replicates}"
+        f"- near-or-better recovery: {bundle.n_replicates_near_or_better}/{bundle.n_replicates}"
     )
     lines.append(
         f"- component-or-better recovery: "
@@ -79,11 +74,14 @@ def _render_variant_block(bundle: BundleScore) -> list[str]:
     lines.append("")
     if bundle.variant == "named":
         lines.append(
-            "| replicate | model | harness | frac_novel | buried_score | exact@ | recovery | recovery@ | sample novel hypotheses |"
+            "| replicate | model | harness | frac_novel | buried_score | "
+            "exact@ | recovery | recovery@ | sample novel hypotheses |"
         )
         lines.append("|---|---|---|---|---|---|---|---|---|")
     else:
-        lines.append("| replicate | model | harness | buried_score | exact@ | recovery | recovery@ |")
+        lines.append(
+            "| replicate | model | harness | buried_score | exact@ | recovery | recovery@ |"
+        )
         lines.append("|---|---|---|---|---|---|---|")
     for i, rep in enumerate(bundle.replicates, 1):
         uncovered_at = (
@@ -91,9 +89,7 @@ def _render_variant_block(bundle: BundleScore) -> list[str]:
             if rep.buried.earliest_iteration_uncovered is not None
             else "—"
         )
-        recovery_at = (
-            str(rep.recovery_iteration) if rep.recovery_iteration is not None else "n/a"
-        )
+        recovery_at = str(rep.recovery_iteration) if rep.recovery_iteration is not None else "n/a"
         if bundle.variant == "named":
             sample = _sample_novel(rep)
             sample_md = "<br>".join(_md_escape(s) for s in sample) if sample else "—"
@@ -122,8 +118,7 @@ def render_markdown_batch(batch: BatchPipelineScore) -> str:
     )
     lines.append(f"- **Replicates (total):** {batch.n_replicates_total}")
     lines.append(
-        f"- **Novelty %** (named only, unweighted mean of bundle means): "
-        f"{_fmt(batch.frac_novel)}"
+        f"- **Novelty %** (named only, unweighted mean of bundle means): {_fmt(batch.frac_novel)}"
     )
     lines.append(
         f"- **Buried discovery iteration — named** (lower = uncovers earlier; "

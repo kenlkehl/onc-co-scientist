@@ -18,9 +18,7 @@ from onc_co_scientist.synthetic.schemas import (
 def _treated_subgroup_count(bundle, spec: AssociationSpec) -> int:
     df = bundle.frame
     predicate_cols = set(spec.subgroup.predicate)
-    drivers = [
-        v for v in spec.variables if v != spec.outcome and v not in predicate_cols
-    ]
+    drivers = [v for v in spec.variables if v != spec.outcome and v not in predicate_cols]
     driver = drivers[0]
     mask = np.ones(len(df), dtype=bool)
     for col, val in spec.subgroup.predicate.items():
@@ -355,9 +353,7 @@ def test_buried_signature_signal_has_recoverable_effect_at_modest_n():
     # Driver = the variable in spec.variables that is neither the outcome nor
     # in the predicate (mirrors the injector's resolution logic).
     predicate_cols = set(spec.subgroup.predicate)
-    drivers = [
-        v for v in spec.variables if v != spec.outcome and v not in predicate_cols
-    ]
+    drivers = [v for v in spec.variables if v != spec.outcome and v not in predicate_cols]
     driver = drivers[0]
 
     # Build the subgroup mask using the same semantics as the injector.

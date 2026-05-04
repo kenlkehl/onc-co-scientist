@@ -25,6 +25,7 @@ class CancerType(StrEnum):
     breast = "breast"
     prostate = "prostate"
     aml = "aml"
+    depmap = "depmap"
 
 
 _REGISTRY: dict[CancerType, CancerProfile] | None = None
@@ -34,7 +35,7 @@ def _load_registry() -> dict[CancerType, CancerProfile]:
     global _REGISTRY
     if _REGISTRY is not None:
         return _REGISTRY
-    from . import aml, breast, crc, nsclc, prostate
+    from . import aml, breast, crc, depmap, nsclc, prostate
 
     _REGISTRY = {
         CancerType.nsclc: nsclc.PROFILE,
@@ -42,6 +43,7 @@ def _load_registry() -> dict[CancerType, CancerProfile]:
         CancerType.breast: breast.PROFILE,
         CancerType.prostate: prostate.PROFILE,
         CancerType.aml: aml.PROFILE,
+        CancerType.depmap: depmap.PROFILE,
     }
     return _REGISTRY
 

@@ -52,9 +52,7 @@ def write_multi_bundle_pair(
     out_path = Path(out_dir)
     written: dict[CancerType, tuple[Path, Path]] = {}
     for ct, bundle in bundles.items():
-        named_dir, anon_dir = write_bundle_pair(
-            bundle, out_path / ct.value, anon_seed=anon_seed
-        )
+        named_dir, anon_dir = write_bundle_pair(bundle, out_path / ct.value, anon_seed=anon_seed)
         written[ct] = (named_dir, anon_dir)
     return written
 

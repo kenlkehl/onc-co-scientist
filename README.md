@@ -2,11 +2,11 @@
 
 Initial pipeline for the **Oncology Co-Scientist Benchmark** (Aims 1.1 and 1.2 of the grant *"Do Large Language Models Entrench Biomedical Scientific Paradigms? A Study in Cancer Research"*).
 
-The benchmark asks: when an agentic harness analyzes a synthetic patient cohort that contains a deliberately buried multi-feature treatment effect, how often does it surface novel hypotheses, and at which iteration does it uncover the buried finding?
+The benchmark asks: when an agentic harness analyzes a synthetic oncology dataset that contains a deliberately buried multi-feature association, how often does it surface novel hypotheses, and at which iteration does it uncover the buried finding?
 
 ## What's in the box
 
-- **Synthetic dataset generator (Aim 1.1).** Large patient-level oncology cohorts (50,000 patients by default). One bundle per supported cancer type — **NSCLC, CRC, breast, prostate, AML** — each with a single buried multi-feature finding (a treatment exceptional only inside a 3–4 feature conjunction). Each cancer-type bundle ships in two parallel forms:
+- **Synthetic dataset generator (Aim 1.1).** Large oncology cohorts (50,000 records by default). One bundle per supported clinical cancer type - **NSCLC, CRC, breast, prostate, AML** - plus a **CRISPR/DepMap-style cell-line dependency screen**. Each bundle contains a single buried multi-feature finding: a treatment exceptional only inside a 3-4 feature conjunction for clinical cohorts, or a gene dependency concentrated in a multi-feature cell-line subgroup for the DepMap profile. Each bundle ships in two parallel forms:
   - `named/` — real clinical column names.
   - `anonymized/` — non-outcome columns renamed to `feature_NNN`.
 - **Harness-agnostic task builder (Aim 1.2).** Emits a generic data-mining brief that any external agent (Claude Code, Codex, custom ReAct, …) can execute against a parquet file.
@@ -52,7 +52,7 @@ scripts/run_all.sh
 | `CONFIG`          | `configs/synthetic.example.yaml`   | Generator config YAML                                       |
 | `OUT`             | `../data/ds001`                    | Output root (datasets, tasks, scores)                       |
 | `SEED`            | `0`                                | Generator seed                                              |
-| `CANCER_TYPES`    | `all`                              | `all` or comma list (`nsclc,crc`)                           |
+| `CANCER_TYPES`    | `all`                              | `all` or comma list (`nsclc,crc,depmap`)                    |
 | `MAX_ITERATIONS`  | `10`                               | Iteration cap baked into the task brief                     |
 | `HARNESS`         | `claude`                           | First arg to `scripts/run_harness.sh` (any supported spec)  |
 | `JOBS`            | `4`                                | Bundles run in parallel                                     |
@@ -75,7 +75,7 @@ ocs synth generate \
     --seed 0
 ```
 
-Per cancer type, this writes:
+Per dataset profile, this writes:
 
 ```
 ../data/ds001/<cancer_type>/

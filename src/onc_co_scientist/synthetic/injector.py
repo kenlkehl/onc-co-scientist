@@ -44,6 +44,9 @@ OUTCOME_BASELINES: dict[str, float] = {
     "pfs_months": 6.0,  # months
     "objective_response": -1.0,  # log-odds (~27% baseline response rate)
 }
+DEPENDENCY_OUTCOME_PREFIX = "dependency_"
+DEPENDENCY_BASELINE = -0.25
+DEPENDENCY_SIGMA = 0.35
 
 
 def background_prognostic_variables(profile: CancerProfile) -> frozenset[str]:
@@ -81,16 +84,12 @@ def _subgroup_mask(frame: pd.DataFrame, predicate: dict[str, object]) -> np.ndar
     return mask
 
 
-def _association_contribution(
-    frame: pd.DataFrame, spec: AssociationSpec
-) -> np.ndarray:
+def _association_contribution(frame: pd.DataFrame, spec: AssociationSpec) -> np.ndarray:
     """Per-row contribution of one association to its outcome's linear predictor."""
     n = len(frame)
     for col in spec.variables:
         if col not in frame.columns and col != spec.outcome:
-            raise KeyError(
-                f"Association {spec.id!r} references missing column {col!r}"
-            )
+            raise KeyError(f"Association {spec.id!r} references missing column {col!r}")
 
     if spec.form is AssociationForm.main_effect:
         active = [c for c in spec.variables if c != spec.outcome]
@@ -119,15 +118,13 @@ def _association_contribution(
         active = [c for c in spec.variables if c != spec.outcome]
         predicate_cols = set(spec.subgroup.predicate)
         drivers = [c for c in active if c not in predicate_cols]
-        if not drivers:
-            raise ValueError(
-                f"subgroup_conditional association {spec.id!r} needs at least one driver "
-                f"variable outside the subgroup predicate"
-            )
-        driver = drivers[0]
         mask = _subgroup_mask(frame, spec.subgroup.predicate)
         contrib = np.zeros(n, dtype=float)
-        contrib[mask] = spec.effect_size * frame.loc[mask, driver].to_numpy()
+        if drivers:
+            driver = drivers[0]
+            contrib[mask] = spec.effect_size * frame.loc[mask, driver].to_numpy()
+        else:
+            contrib[mask] = spec.effect_size
         return contrib
 
     raise ValueError(f"unknown AssociationForm {spec.form!r}")
@@ -154,10 +151,36 @@ def _sample_binary(linear: np.ndarray, rng: np.random.Generator) -> np.ndarray:
 
 
 def _sample_continuous(
-    linear: np.ndarray, rng: np.random.Generator, sigma: float
+    linear: np.ndarray,
+    rng: np.random.Generator,
+    sigma: float,
+    *,
+    clip_min: float | None = 0.0,
 ) -> np.ndarray:
     draws = linear + rng.normal(0.0, sigma, size=linear.shape)
-    return np.clip(draws, a_min=0.0, a_max=None)
+    if clip_min is None:
+        return draws
+    return np.clip(draws, a_min=clip_min, a_max=None)
+
+
+def _is_dependency_outcome(outcome: str) -> bool:
+    return outcome.startswith(DEPENDENCY_OUTCOME_PREFIX)
+
+
+def _is_continuous_outcome(outcome: str) -> bool:
+    return outcome in CONTINUOUS_OUTCOMES or _is_dependency_outcome(outcome)
+
+
+def _outcome_baseline(outcome: str) -> float:
+    if _is_dependency_outcome(outcome):
+        return DEPENDENCY_BASELINE
+    return OUTCOME_BASELINES[outcome]
+
+
+def _outcome_sigma(outcome: str, configured_sigma: float) -> float:
+    if _is_dependency_outcome(outcome):
+        return DEPENDENCY_SIGMA
+    return configured_sigma
 
 
 def inject_associations(
@@ -182,13 +205,14 @@ def inject_associations(
     outcomes = sorted({spec.outcome for spec in associations})
 
     for outcome in outcomes:
-        if outcome not in CONTINUOUS_OUTCOMES and outcome not in BINARY_OUTCOMES:
+        if not _is_continuous_outcome(outcome) and outcome not in BINARY_OUTCOMES:
             raise ValueError(
                 f"Outcome {outcome!r} is not supported by the initial injector. "
-                f"Add a baseline in OUTCOME_BASELINES and a sampler branch."
+                f"Add a baseline in OUTCOME_BASELINES, use the dependency_ "
+                f"prefix, or add a sampler branch."
             )
 
-        baseline = OUTCOME_BASELINES[outcome]
+        baseline = _outcome_baseline(outcome)
         linear = np.full(len(frame), baseline, dtype=float)
         for spec in associations:
             if spec.outcome != outcome:
@@ -199,7 +223,12 @@ def inject_associations(
         if outcome in BINARY_OUTCOMES:
             frame[outcome] = _sample_binary(linear, rng)
         else:
-            frame[outcome] = _sample_continuous(linear, rng, continuous_outcome_sigma)
+            frame[outcome] = _sample_continuous(
+                linear,
+                rng,
+                _outcome_sigma(outcome, continuous_outcome_sigma),
+                clip_min=None if _is_dependency_outcome(outcome) else 0.0,
+            )
 
     return InjectionResult(frame=frame, outcome_columns=outcomes)
 

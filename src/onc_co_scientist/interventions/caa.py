@@ -70,8 +70,7 @@ def load_transformers_text_model(
         from transformers import AutoProcessor, AutoTokenizer
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise RuntimeError(
-            "CAA experiments require the interventions extra: "
-            "uv pip install -e '.[interventions]'"
+            "CAA experiments require the interventions extra: uv pip install -e '.[interventions]'"
         ) from exc
 
     common_kwargs: dict[str, Any] = {
@@ -176,9 +175,7 @@ def derive_caa_vectors(
     for concept, layer_map in accum.items():
         vectors[concept] = {}
         for layer, values in layer_map.items():
-            vectors[concept][layer] = np.mean(np.stack(values, axis=0), axis=0).astype(
-                np.float32
-            )
+            vectors[concept][layer] = np.mean(np.stack(values, axis=0), axis=0).astype(np.float32)
 
     metadata = {
         "created_at_utc": dt.datetime.now(dt.UTC).isoformat(),
@@ -225,9 +222,7 @@ def collect_prompt_activations(
     n_transformer_layers = len(hidden_states) - 1
     bad = [layer for layer in layers if layer < 0 or layer >= n_transformer_layers]
     if bad:
-        raise ValueError(
-            f"Layer(s) out of range for {n_transformer_layers} hidden layers: {bad}."
-        )
+        raise ValueError(f"Layer(s) out of range for {n_transformer_layers} hidden layers: {bad}.")
 
     attention_mask = inputs.get("attention_mask")
     out: dict[int, np.ndarray] = {}
@@ -375,9 +370,7 @@ class SteeringHooks:
                     else:
                         unit = (v_float / norm).to(dtype=hidden.dtype)
                         coeff = hidden.float().matmul(unit.float()).to(dtype=hidden.dtype)
-                        adjusted = hidden - self.scale * coeff.unsqueeze(-1) * unit.view(
-                            1, 1, -1
-                        )
+                        adjusted = hidden - self.scale * coeff.unsqueeze(-1) * unit.view(1, 1, -1)
                 else:
                     raise ValueError(f"Unknown steering mode {self.mode!r}.")
                 return rebuild(adjusted)
@@ -522,7 +515,6 @@ def _import_torch():
         import torch
     except ImportError as exc:  # pragma: no cover - depends on optional extra
         raise RuntimeError(
-            "CAA experiments require torch. Install with: "
-            "uv pip install -e '.[interventions]'"
+            "CAA experiments require torch. Install with: uv pip install -e '.[interventions]'"
         ) from exc
     return torch

@@ -175,13 +175,9 @@ def _analysis_supports_recovery_level(
     significance_threshold: float,
 ) -> bool:
     if level in {"exact", "near"}:
-        return _analysis_supports(
-            analysis, spec, significance_threshold=significance_threshold
-        )
+        return _analysis_supports(analysis, spec, significance_threshold=significance_threshold)
     if level == "component":
-        return _analysis_is_significant(
-            analysis, significance_threshold=significance_threshold
-        )
+        return _analysis_is_significant(analysis, significance_threshold=significance_threshold)
     return False
 
 
@@ -303,9 +299,7 @@ def _discover_for_spec(
     for it_index, analysis in transcript.flat_analyses():
         if not set(analysis.hypothesis_ids) & matched_ids:
             continue
-        if not _analysis_supports(
-            analysis, spec, significance_threshold=significance_threshold
-        ):
+        if not _analysis_supports(analysis, spec, significance_threshold=significance_threshold):
             continue
         if tested_iteration is None or it_index < tested_iteration:
             tested_iteration = it_index
@@ -391,11 +385,7 @@ def score_buried(
             )
             for (it, h), m in zip(flat, match_judgments, strict=True)
         ]
-        matched = [
-            (it, h)
-            for (it, h), m in zip(flat, match_judgments, strict=True)
-            if m.matches
-        ]
+        matched = [(it, h) for (it, h), m in zip(flat, match_judgments, strict=True) if m.matches]
         graded = [
             (it, h, m.recovery_level)
             for (it, h), m in zip(flat, match_judgments, strict=True)
@@ -412,11 +402,7 @@ def score_buried(
             )
         )
 
-    earliest = [
-        d.iteration_uncovered
-        for d in per_association
-        if d.iteration_uncovered is not None
-    ]
+    earliest = [d.iteration_uncovered for d in per_association if d.iteration_uncovered is not None]
     earliest_iter = min(earliest) if earliest else None
     score = earliest_iter if earliest_iter is not None else transcript.max_iterations + 1
     return BuriedScore(

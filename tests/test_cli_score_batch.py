@@ -44,9 +44,7 @@ def _build_synth_and_tasks(tmp_path: Path) -> tuple[Path, Path]:
     return synth_root, tasks_root
 
 
-def _write_transcript(
-    path: Path, dataset_id: str, *, encoding: str = "utf-8"
-) -> None:
+def _write_transcript(path: Path, dataset_id: str, *, encoding: str = "utf-8") -> None:
     payload = Transcript(
         dataset_id=dataset_id,
         model_id="fake-model",
@@ -55,9 +53,7 @@ def _write_transcript(
         iterations=[
             {
                 "index": 1,
-                "proposed_hypotheses": [
-                    {"id": "h1", "text": "feature_037 modifies pfs"}
-                ],
+                "proposed_hypotheses": [{"id": "h1", "text": "feature_037 modifies pfs"}],
                 "analyses": [],
             }
         ],
@@ -116,9 +112,7 @@ def test_score_batch_scores_named_and_anonymized_and_writes_report(tmp_path: Pat
             for idx in (1, 2):
                 run_dir = tasks_root / ct / variant / "runs" / f"run_{idx:03d}"
                 encoding = (
-                    "utf-8-sig"
-                    if ct == "crc" and variant == "named" and idx == 1
-                    else "utf-8"
+                    "utf-8-sig" if ct == "crc" and variant == "named" and idx == 1 else "utf-8"
                 )
                 _write_transcript(
                     run_dir / "transcript.json",
@@ -187,11 +181,7 @@ def test_score_batch_scores_named_and_anonymized_and_writes_report(tmp_path: Pat
     # tuple. The base config sets n_buried_signatures=1 → 1 hidden_novel
     # association per bundle; 4 bundles × 2 reps × 1 hypothesis × 1
     # association = 8 lines.
-    match_lines = (
-        (out_dir / "batch_match_judgments.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    )
+    match_lines = (out_dir / "batch_match_judgments.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(match_lines) == 8
     sample = json.loads(match_lines[0])
     assert {
@@ -240,9 +230,7 @@ def test_score_run_writes_single_replicate_report(tmp_path: Path) -> None:
     synth_root, tasks_root = _build_synth_and_tasks(tmp_path)
     bundle = synth_root / "crc" / "named"
     manifest = read_manifest(bundle)
-    transcript_path = (
-        tasks_root / "crc" / "named" / "runs" / "run_001" / "transcript.json"
-    )
+    transcript_path = tasks_root / "crc" / "named" / "runs" / "run_001" / "transcript.json"
     _write_transcript(transcript_path, manifest.dataset_id, encoding="utf-8-sig")
 
     runner = CliRunner()

@@ -1,7 +1,7 @@
 """Produce an anonymized twin of a ``DatasetBundle``.
 
-The anonymized variant preserves rows, outcome column names, and ``patient_id``
-verbatim while renaming every other column to a deterministic ``feature_NNN``
+The anonymized variant preserves rows, outcome column names, and identifier
+columns verbatim while renaming every other column to a deterministic ``feature_NNN``
 identifier. The same generated bundle can therefore be served in two parallel
 forms — one with real clinical names, one stripped of any semantic prior — so
 the eval can compare an agent's behaviour with and without domain anchoring.
@@ -46,21 +46,14 @@ def build_column_mapping(
     order = list(feature_cols)
     rng.shuffle(order)
     needed_width = max(width, len(str(len(order))))
-    return {
-        original: f"{prefix}{(i + 1):0{needed_width}d}"
-        for i, original in enumerate(order)
-    }
+    return {original: f"{prefix}{(i + 1):0{needed_width}d}" for i, original in enumerate(order)}
 
 
-def _rename_predicate(
-    predicate: dict[str, object], mapping: dict[str, str]
-) -> dict[str, object]:
+def _rename_predicate(predicate: dict[str, object], mapping: dict[str, str]) -> dict[str, object]:
     return {mapping.get(k, k): v for k, v in predicate.items()}
 
 
-def _rename_association(
-    spec: AssociationSpec, mapping: dict[str, str]
-) -> AssociationSpec:
+def _rename_association(spec: AssociationSpec, mapping: dict[str, str]) -> AssociationSpec:
     new = spec.model_copy(deep=True)
     new.variables = [mapping.get(v, v) for v in spec.variables]
     if spec.subgroup is not None:
@@ -72,14 +65,14 @@ def _rename_association(
     return new
 
 
-def _rename_manifest(
-    manifest: DatasetManifest, mapping: dict[str, str]
-) -> DatasetManifest:
+def _rename_manifest(manifest: DatasetManifest, mapping: dict[str, str]) -> DatasetManifest:
     return DatasetManifest(
         dataset_id=manifest.dataset_id,
         seed=manifest.seed,
         patient_n=manifest.patient_n,
         cancer_type=manifest.cancer_type,
+        dataset_kind=manifest.dataset_kind,
+        id_columns=list(manifest.id_columns),
         columns=[mapping.get(c, c) for c in manifest.columns],
         treatment_columns=[mapping.get(c, c) for c in manifest.treatment_columns],
         outcome_columns=list(manifest.outcome_columns),
@@ -95,12 +88,30 @@ def _anonymized_description(
     columns: list[str],
     outcomes: list[str],
     id_columns: tuple[str, ...],
+    dataset_kind: str,
 ) -> str:
-    feature_cols = [
-        c for c in columns if c not in set(outcomes) and c not in set(id_columns)
-    ]
+    feature_cols = [c for c in columns if c not in set(outcomes) and c not in set(id_columns)]
+    id_bullet = "\n".join(f"- `{c}`" for c in columns if c in set(id_columns))
     bullet = "\n".join(f"- `{c}`" for c in feature_cols)
     outcome_bullet = "\n".join(f"- `{c}`" for c in outcomes)
+    if dataset_kind == "crispr_depmap":
+        return (
+            f"# CRISPR dependency map `{config.dataset_id}`\n\n"
+            f"This dataset contains {config.patient_n} cancer cell-line records "
+            "from a CRISPR knockout dependency screen with CCLE-style molecular "
+            "annotations. Cell-line feature names have been replaced with opaque "
+            "labels (`feature_001`, `feature_002`, ...); dependency outcome "
+            "columns retain their original gene names. More negative dependency "
+            "scores indicate stronger dependency after knockout.\n\n"
+            "## Columns\n\n"
+            "### Identifiers\n"
+            f"{id_bullet}\n\n"
+            "### Cell-line features\n"
+            f"{bullet}\n\n"
+            "### Dependency outcomes\n"
+            f"{outcome_bullet}\n\n"
+            "Each row represents one cancer cell line; no missing values are present."
+        )
     return (
         f"# Oncology patient cohort `{config.dataset_id}`\n\n"
         f"This dataset contains {config.patient_n} patient records assembled "
@@ -121,7 +132,7 @@ def anonymize_bundle(
     bundle: DatasetBundle,
     *,
     seed: int = 0,
-    id_columns: tuple[str, ...] = DEFAULT_ID_COLUMNS,
+    id_columns: tuple[str, ...] | None = None,
 ) -> tuple[DatasetBundle, dict[str, str]]:
     """Return an anonymized twin of ``bundle`` plus the rename mapping.
 
@@ -135,10 +146,11 @@ def anonymize_bundle(
       ``covariate_columns`` and per-``AssociationSpec`` ``variables`` /
       ``subgroup.predicate`` keys are remapped consistently.
     """
+    active_id_columns = tuple(bundle.manifest.id_columns) if id_columns is None else id_columns
     mapping = build_column_mapping(
         list(bundle.frame.columns),
         list(bundle.manifest.outcome_columns),
-        id_columns=id_columns,
+        id_columns=active_id_columns,
         seed=seed,
     )
     new_frame = bundle.frame.rename(columns=mapping)
@@ -147,7 +159,8 @@ def anonymize_bundle(
         bundle.config,
         list(new_frame.columns),
         list(new_manifest.outcome_columns),
-        id_columns,
+        active_id_columns,
+        new_manifest.dataset_kind,
     )
     new_bundle = DatasetBundle(
         config=deepcopy(bundle.config),

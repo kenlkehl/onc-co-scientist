@@ -100,9 +100,18 @@ class DatasetManifest(BaseModel):
         "paradigm catalogs. Defaults to 'nsclc' so manifests written before "
         "multi-cancer support deserialize without modification.",
     )
-    columns: list[str] = Field(
-        description="All column names present in dataset.parquet, in order."
+    dataset_kind: str = Field(
+        default="clinical_cohort",
+        description="High-level data modality used to render agent-facing "
+        "task context. Existing oncology patient cohorts use "
+        "'clinical_cohort'; CRISPR dependency maps use 'crispr_depmap'.",
     )
+    id_columns: list[str] = Field(
+        default_factory=lambda: ["patient_id"],
+        description="Identifier columns preserved when a named bundle is "
+        "converted to its anonymized twin.",
+    )
+    columns: list[str] = Field(description="All column names present in dataset.parquet, in order.")
     treatment_columns: list[str]
     outcome_columns: list[str]
     covariate_columns: list[str]

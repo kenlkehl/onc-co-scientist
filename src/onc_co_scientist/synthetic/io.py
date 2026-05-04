@@ -54,9 +54,7 @@ def write_bundle(bundle: DatasetBundle, out_dir: Path | str) -> Path:
         bundle.manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
     )
     bundle.frame.to_parquet(public / DATASET_FILENAME, index=False)
-    (public / DESCRIPTION_FILENAME).write_text(
-        bundle.public_description + "\n", encoding="utf-8"
-    )
+    (public / DESCRIPTION_FILENAME).write_text(bundle.public_description + "\n", encoding="utf-8")
     return out_path
 
 

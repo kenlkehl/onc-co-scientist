@@ -94,9 +94,7 @@ def test_proposed_but_not_tested_does_not_count():
         iterations=[
             {
                 "index": 1,
-                "proposed_hypotheses": [
-                    {"id": "h1", "text": "olaparib helps a BRCA2 subgroup"}
-                ],
+                "proposed_hypotheses": [{"id": "h1", "text": "olaparib helps a BRCA2 subgroup"}],
                 "analyses": [],  # no analysis at all
             }
         ],
@@ -132,9 +130,7 @@ def test_wrong_direction_analysis_does_not_count():
         iterations=[
             {
                 "index": 1,
-                "proposed_hypotheses": [
-                    {"id": "h1", "text": "olaparib helps a BRCA2 subgroup"}
-                ],
+                "proposed_hypotheses": [{"id": "h1", "text": "olaparib helps a BRCA2 subgroup"}],
                 "analyses": [
                     {
                         "hypothesis_ids": ["h1"],
@@ -168,9 +164,7 @@ def test_near_recovery_is_reported_without_exact_uncovered():
         iterations=[
             {
                 "index": 2,
-                "proposed_hypotheses": [
-                    {"id": "h1", "text": "near olaparib subgroup hypothesis"}
-                ],
+                "proposed_hypotheses": [{"id": "h1", "text": "near olaparib subgroup hypothesis"}],
                 "analyses": [
                     {
                         "hypothesis_ids": ["h1"],
@@ -211,9 +205,7 @@ def test_component_recovery_accepts_significant_partial_signal():
         iterations=[
             {
                 "index": 1,
-                "proposed_hypotheses": [
-                    {"id": "h1", "text": "component olaparib modifier"}
-                ],
+                "proposed_hypotheses": [{"id": "h1", "text": "component olaparib modifier"}],
                 "analyses": [
                     {
                         "hypothesis_ids": ["h1"],

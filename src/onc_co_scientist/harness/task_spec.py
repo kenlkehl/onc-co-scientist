@@ -21,6 +21,7 @@ from .transcript import Transcript
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 AGENT_INSTRUCTIONS_TEMPLATE = "agent_instructions.md.j2"
 TRANSCRIPT_EXAMPLE = "transcript_example.json"
+DEPMAP_TRANSCRIPT_EXAMPLE = "transcript_example_depmap.json"
 INSTRUCTIONS_FILENAME = "agent_instructions.md"
 SCHEMA_FILENAME = "transcript_schema.json"
 EXAMPLE_FILENAME = "transcript_example.json"
@@ -40,9 +41,111 @@ class TaskBundle:
     description_path: Path
 
 
+@dataclass(frozen=True)
+class TaskInstructionContext:
+    title: str
+    record_label: str
+    role: str
+    isolation: str
+    protocol_scope: str
+    heterogeneity_search: str
+    good_hypothesis_example: str
+    final_hypothesis: str
+
+
+def _instruction_context(dataset_kind: str) -> TaskInstructionContext:
+    if dataset_kind == "crispr_depmap":
+        return TaskInstructionContext(
+            title="CRISPR Dependency Map Analysis - Task Brief",
+            record_label="Cell lines",
+            role=(
+                "You have been asked to analyze a cancer cell-line CRISPR "
+                "knockout screen dataset in the style of DepMap/CCLE. Your "
+                "job is to explore the dataset and surface biologically "
+                "meaningful patterns - main effects, subgroup heterogeneity, "
+                "and multivariable interactions among cell-line features and "
+                "gene dependency outcomes - testing each pattern statistically "
+                "and refining your ideas as evidence accumulates across "
+                "iterations."
+            ),
+            isolation=(
+                "You must not look outside the current working directory for "
+                "additional data or context. Use only the local task bundle so "
+                "every harness is evaluated against the same evidence."
+            ),
+            protocol_scope=(
+                "relationships among cell-line features, molecular subgroups, "
+                "screen covariates, and dependency-score outcomes"
+            ),
+            heterogeneity_search=(
+                "Do not stop after main effects. Before your final transcript, "
+                "run at least one systematic dependency-heterogeneity search "
+                "for each dependency outcome. Appropriate approaches include "
+                "feature-by-feature interaction screening, joint models over "
+                "the strongest modifiers, tree/rule-based subgroup discovery, "
+                "or exhaustive checks of small multi-feature subgroups. When "
+                "a dependency appears concentrated in a subgroup, state and "
+                "test the complete subgroup definition, including variables "
+                "whose value appears to suppress or enable the dependency."
+            ),
+            good_hypothesis_example=(
+                "In cell lines with `feature_example` set, "
+                "`dependency_gene_example` is more negative than in cell lines "
+                "without it"
+            ),
+            final_hypothesis=(
+                "A final best-supported dependency subgroup hypothesis for "
+                "each dependency outcome where one is plausible, naming the "
+                "dependency outcome, direction, and all subgroup predicates "
+                "you believe define the effect."
+            ),
+        )
+    return TaskInstructionContext(
+        title="Oncology Dataset Analysis - Task Brief",
+        record_label="Patients",
+        role=(
+            "You have been asked to analyze a large oncology dataset assembled "
+            "from electronic health records aggregated by a commercial "
+            "healthcare data vendor. Your job is to explore the dataset and "
+            "surface clinically meaningful patterns - main effects, subgroup "
+            "heterogeneity, and multivariable interactions among the features "
+            "and outcomes - testing each pattern statistically and refining "
+            "your ideas as evidence accumulates across iterations."
+        ),
+        isolation=(
+            "You must not look outside the current working directory for "
+            "additional data or context. This is critical for patient privacy."
+        ),
+        protocol_scope=("relationships among features, subgroups, and outcomes"),
+        heterogeneity_search=(
+            "Do not stop after main effects. Before your final transcript, "
+            "run at least one systematic treatment-effect heterogeneity search "
+            "for each outcome with usable treatment variation. Appropriate "
+            "approaches include treatment-by-feature interaction screening, "
+            "joint models over the strongest modifiers, tree/rule-based "
+            "subgroup discovery, or exhaustive checks of small multi-feature "
+            "subgroups. When a treatment effect appears concentrated in a "
+            "subgroup, state and test the complete subgroup definition, "
+            "including variables whose unfavorable value appears to suppress "
+            "the treatment effect."
+        ),
+        good_hypothesis_example=(
+            "In patients with `feature_example` set, mean `outcome_example` "
+            "is lower than in patients without it"
+        ),
+        final_hypothesis=(
+            "A final best-supported treatment-effect subgroup hypothesis for "
+            "each outcome where one is plausible, naming the treatment, "
+            "outcome, direction, and all subgroup predicates you believe "
+            "define the effect."
+        ),
+    )
+
+
 def _render_instructions(
     dataset_id: str,
     patient_n: int,
+    dataset_kind: str,
     max_iterations: int,
     dataset_relpath: str,
     description_relpath: str,
@@ -54,9 +157,11 @@ def _render_instructions(
         keep_trailing_newline=True,
     )
     template = env.get_template(AGENT_INSTRUCTIONS_TEMPLATE)
+    context = _instruction_context(dataset_kind)
     return template.render(
         dataset_id=dataset_id,
         patient_n=patient_n,
+        context=context,
         max_iterations=max_iterations,
         dataset_relpath=dataset_relpath,
         description_relpath=description_relpath,
@@ -107,6 +212,7 @@ def build_task(
     instructions = _render_instructions(
         dataset_id=manifest.dataset_id,
         patient_n=manifest.patient_n,
+        dataset_kind=manifest.dataset_kind,
         max_iterations=max_iterations,
         dataset_relpath=TASK_DATASET_LINK,
         description_relpath=TASK_DESCRIPTION_LINK,
@@ -118,7 +224,12 @@ def build_task(
     # Schema + reference example for the transcript format.
     schema_path = task_dir / SCHEMA_FILENAME
     _write_schema(schema_path)
-    example_src = TEMPLATE_DIR / TRANSCRIPT_EXAMPLE
+    example_template = (
+        DEPMAP_TRANSCRIPT_EXAMPLE
+        if manifest.dataset_kind == "crispr_depmap"
+        else TRANSCRIPT_EXAMPLE
+    )
+    example_src = TEMPLATE_DIR / example_template
     example_path = task_dir / EXAMPLE_FILENAME
     shutil.copyfile(example_src, example_path)
 

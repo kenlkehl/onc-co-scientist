@@ -7,8 +7,7 @@ from pydantic import ValidationError
 from onc_co_scientist.harness.transcript import Transcript
 
 EXAMPLE = (
-    Path(__file__).parent.parent
-    / "src/onc_co_scientist/harness/templates/transcript_example.json"
+    Path(__file__).parent.parent / "src/onc_co_scientist/harness/templates/transcript_example.json"
 )
 
 

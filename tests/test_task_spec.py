@@ -70,7 +70,9 @@ def test_build_task_writes_agent_bundle(tmp_path):
         "ground truth",
         "generated for",
     ):
-        assert tell not in description_text, f"dataset_description.md betrays synthetic nature: {tell!r}"
+        assert tell not in description_text, (
+            f"dataset_description.md betrays synthetic nature: {tell!r}"
+        )
 
     # Schema file is valid JSON and includes the Transcript title.
     schema = json.loads(task.schema_path.read_text())
@@ -104,9 +106,7 @@ def test_build_task_embeds_python_env(tmp_path):
     env_dir = tmp_path / "agent_venv"
     env_dir.mkdir()
 
-    task = build_task(
-        dataset_dir, tmp_path / "task", max_iterations=2, python_env=env_dir
-    )
+    task = build_task(dataset_dir, tmp_path / "task", max_iterations=2, python_env=env_dir)
     instructions = task.instructions_path.read_text()
 
     # The absolute path to the env should appear verbatim in the brief.

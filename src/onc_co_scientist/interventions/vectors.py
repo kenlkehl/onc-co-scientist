@@ -112,9 +112,7 @@ class VectorBundle:
             vectors.setdefault(concept, {})[layer] = loaded[key].astype(np.float32)
         metadata_path = metadata_path_for(path)
         metadata = (
-            json.loads(metadata_path.read_text(encoding="utf-8"))
-            if metadata_path.is_file()
-            else {}
+            json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.is_file() else {}
         )
         return cls(vectors=vectors, metadata=metadata)
 

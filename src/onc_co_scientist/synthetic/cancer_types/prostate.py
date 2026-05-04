@@ -137,9 +137,7 @@ def hidden_novel_catalog() -> list[AssociationSpec]:
             subgroup=SubgroupSpec(
                 name="lu177_brca2_subgroup",
                 predicate={"brca2_mutation": 1},
-                description=(
-                    "Patients harboring a BRCA2 loss-of-function mutation."
-                ),
+                description=("Patients harboring a BRCA2 loss-of-function mutation."),
             ),
             natural_language_description=(
                 "Lu-177 PSMA radioligand therapy produces unexpectedly high "
@@ -248,7 +246,7 @@ DEFAULT_PREVALENCES: dict[str, float] = {
 }
 
 
-def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
+def base_frame_fn(config: GeneratorConfig) -> pd.DataFrame:
     rng = np.random.default_rng(config.seed)
     n = config.patient_n
     overrides = config.covariate_prevalences
@@ -273,9 +271,7 @@ def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
         rng, "ar_v7_positive", DEFAULT_PREVALENCES["ar_v7_positive"], n, overrides
     )
     msi_high = marginal_bernoulli(rng, "msi_high", DEFAULT_PREVALENCES["msi_high"], n, overrides)
-    psma_high = marginal_bernoulli(
-        rng, "psma_high", DEFAULT_PREVALENCES["psma_high"], n, overrides
-    )
+    psma_high = marginal_bernoulli(rng, "psma_high", DEFAULT_PREVALENCES["psma_high"], n, overrides)
 
     # PSA at study entry: mCRPC has higher and more variable PSA than mCSPC.
     psa_log = np.where(
@@ -329,9 +325,7 @@ def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
 # predicate variables for prostate cancer, so the disjointness invariant
 # excludes them here. PSA still carries a strong disease-burden signal that
 # keeps the cohort from looking implausibly noiseless.
-PROSTATE_BACKGROUND_PROGNOSTIC_VARIABLES: frozenset[str] = frozenset(
-    {"psa_ng_ml"}
-)
+PROSTATE_BACKGROUND_PROGNOSTIC_VARIABLES: frozenset[str] = frozenset({"psa_ng_ml"})
 
 
 def prognostic_contribution(frame: pd.DataFrame, outcome: str) -> np.ndarray:

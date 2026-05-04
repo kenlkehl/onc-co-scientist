@@ -1,15 +1,15 @@
 """Synthetic oncology dataset generator with paradigm-class ground truth.
 
-The generator produces patient-level tabular data containing realistic
-demographics, biomarker, and treatment columns for a chosen cancer type, then
-layers in outcome columns driven by a selected mix of paradigm-concordant,
+The generator produces tabular oncology datasets containing realistic clinical
+cohort columns or CRISPR/DepMap-style cell-line features, then layers in
+outcome columns driven by a selected mix of paradigm-concordant,
 paradigm-discordant, and hidden-novel associations.
 
 Cancer-type behaviour (base-frame sampler, paradigm catalogs, prognostic
 layer, prevalence defaults) is owned by ``CancerProfile`` instances in
 ``cancer_types/``. The default profile is NSCLC, preserving the pre-multi-
-cancer pipeline; CRC, breast, prostate, and AML profiles add support for
-those cohorts.
+cancer pipeline; CRC, breast, prostate, AML, and CRISPR/DepMap profiles add
+support for additional dataset modalities.
 
 Two backends are supported:
 
@@ -32,7 +32,12 @@ import pandas as pd
 
 from .cancer_types import CancerProfile, CancerType, get_profile
 from .distractors import DEFAULT_DISTRACTOR_POOL, sample_distractors
-from .injector import InjectionResult, inject_associations, summarize_injection
+from .injector import (
+    DEPENDENCY_OUTCOME_PREFIX,
+    InjectionResult,
+    inject_associations,
+    summarize_injection,
+)
 from .paradigms import select_associations
 from .schemas import AssociationForm, AssociationSpec, DatasetManifest, ParadigmClass
 
@@ -85,7 +90,8 @@ class GeneratorConfig:
     # dataset, sampled independently of every outcome. Higher values force an
     # agent to exercise variable-selection judgment instead of brute-forcing a
     # univariate test against every column. Max is the pool size in
-    # ``distractors.DEFAULT_DISTRACTOR_POOL``. Applies to all backends.
+    # ``distractors.DEFAULT_DISTRACTOR_POOL``. Applies to clinical-cohort
+    # profiles; CRISPR/DepMap uses its own CCLE-style feature panel.
     n_extra_covariates: int = 10
 
 
@@ -168,7 +174,7 @@ _DISTRACTOR_SEED_OFFSET = 10_007
 
 
 def _append_distractor_covariates(
-    base_frame: pd.DataFrame, config: GeneratorConfig
+    base_frame: pd.DataFrame, config: GeneratorConfig, profile: CancerProfile
 ) -> pd.DataFrame:
     """Append `config.n_extra_covariates` distractor columns to `base_frame`.
 
@@ -181,6 +187,8 @@ def _append_distractor_covariates(
     profiles whose base-frame columns differ (CRC owns ``cea_ng_ml``, the
     prostate profile owns ``psa_ng_ml``, etc.).
     """
+    if profile.dataset_kind != "clinical_cohort":
+        return base_frame
     n = config.n_extra_covariates
     if n <= 0:
         return base_frame
@@ -192,9 +200,7 @@ def _append_distractor_covariates(
             f"src/onc_co_scientist/synthetic/distractors.py."
         )
     existing = set(base_frame.columns)
-    filtered_pool = tuple(
-        spec for spec in DEFAULT_DISTRACTOR_POOL if spec.name not in existing
-    )
+    filtered_pool = tuple(spec for spec in DEFAULT_DISTRACTOR_POOL if spec.name not in existing)
     if n > len(filtered_pool):
         raise ValueError(
             f"n_extra_covariates={n} exceeds the post-collision pool size "
@@ -203,9 +209,7 @@ def _append_distractor_covariates(
             f"DEFAULT_DISTRACTOR_POOL."
         )
     rng = np.random.default_rng(config.seed + _DISTRACTOR_SEED_OFFSET)
-    columns = sample_distractors(
-        rng, n_patients=len(base_frame), n=n, pool=filtered_pool
-    )
+    columns = sample_distractors(rng, n_patients=len(base_frame), n=n, pool=filtered_pool)
     distractor_frame = pd.DataFrame(columns, index=base_frame.index)
     return pd.concat([base_frame, distractor_frame], axis=1)
 
@@ -226,28 +230,23 @@ def _predicate_mask(frame: pd.DataFrame, predicate: dict[str, object]) -> np.nda
     return mask
 
 
-def _subgroup_driver(spec: AssociationSpec) -> str:
-    """Return the treatment/driver column for a subgroup-conditional spec."""
+def _subgroup_driver(spec: AssociationSpec) -> str | None:
+    """Return the driver column for a subgroup-conditional spec, if any."""
     if spec.form is not AssociationForm.subgroup_conditional or spec.subgroup is None:
-        raise ValueError(
-            f"Buried-signature {spec.id!r} must be subgroup_conditional."
-        )
+        raise ValueError(f"Buried-signature {spec.id!r} must be subgroup_conditional.")
     active = [c for c in spec.variables if c != spec.outcome]
     predicate_cols = set(spec.subgroup.predicate)
     drivers = [c for c in active if c not in predicate_cols]
-    if not drivers:
-        raise ValueError(
-            f"Buried-signature {spec.id!r} needs a driver variable outside "
-            "the subgroup predicate."
-        )
-    return drivers[0]
+    return drivers[0] if drivers else None
 
 
 def _treated_subgroup_n(frame: pd.DataFrame, spec: AssociationSpec) -> int:
-    """Rows satisfying both the subgroup predicate and active treatment driver."""
+    """Rows satisfying the subgroup predicate and optional active driver."""
     if spec.subgroup is None:
         raise ValueError(f"Buried-signature {spec.id!r} requires a subgroup.")
     driver = _subgroup_driver(spec)
+    if driver is None:
+        return int(_predicate_mask(frame, spec.subgroup.predicate).sum())
     if driver not in frame.columns:
         raise KeyError(f"Driver column {driver!r} missing from frame")
     mask = _predicate_mask(frame, spec.subgroup.predicate)
@@ -263,10 +262,7 @@ def _eligible_buried_pool(
     """Filter buried signatures by actual treated subgroup size."""
     threshold = config.min_buried_treated_subgroup_n
     if threshold < 0:
-        raise ValueError(
-            "min_buried_treated_subgroup_n must be >= 0, "
-            f"got {threshold}."
-        )
+        raise ValueError(f"min_buried_treated_subgroup_n must be >= 0, got {threshold}.")
 
     pool = profile.buried_signature_catalog()
     if threshold == 0:
@@ -288,12 +284,36 @@ def _eligible_buried_pool(
 
 
 def _public_description(
-    config: GeneratorConfig, frame: pd.DataFrame, outcomes: list[str]
+    config: GeneratorConfig,
+    frame: pd.DataFrame,
+    outcomes: list[str],
+    profile: CancerProfile,
 ) -> str:
     """Markdown shown to the agent. Does NOT reveal paradigm class or ground truth."""
-    covariates = [c for c in frame.columns if c not in outcomes and c != "patient_id"]
-    bullet = "\n".join(f"- `{c}`" for c in covariates)
+    id_columns = set(profile.id_columns)
+    covariates = [c for c in frame.columns if c not in outcomes and c not in id_columns]
+    id_bullet = "\n".join(f"- `{c}`" for c in frame.columns if c in id_columns)
+    feature_bullet = "\n".join(f"- `{c}`" for c in covariates)
     outcome_bullet = "\n".join(f"- `{c}`" for c in outcomes)
+    if profile.dataset_kind == "crispr_depmap":
+        return (
+            f"# CRISPR dependency map `{config.dataset_id}`\n\n"
+            f"This dataset contains {config.patient_n} cancer cell-line records "
+            "from a CRISPR knockout dependency screen with CCLE-style molecular "
+            "annotations. Columns include cell-line identifiers, lineage and "
+            "molecular features, screen-quality covariates, and gene dependency "
+            "scores. Dependency scores are centered so more negative values "
+            "indicate stronger dependency after knockout, while values near "
+            "zero indicate little selective effect.\n\n"
+            "## Columns\n\n"
+            "### Identifiers\n"
+            f"{id_bullet}\n\n"
+            "### Cell-line features\n"
+            f"{feature_bullet}\n\n"
+            "### Dependency outcomes\n"
+            f"{outcome_bullet}\n\n"
+            "Each row represents one cancer cell line; no missing values are present."
+        )
     return (
         f"# Oncology patient cohort `{config.dataset_id}`\n\n"
         f"This dataset contains {config.patient_n} patient records assembled "
@@ -301,11 +321,17 @@ def _public_description(
         "data vendor. Columns include patient features and clinical outcomes.\n\n"
         "## Columns\n\n"
         "### Identifiers and features\n"
-        f"{bullet}\n\n"
+        f"{feature_bullet}\n\n"
         "### Outcomes\n"
         f"{outcome_bullet}\n\n"
         "Each row represents one patient; no missing values are present."
     )
+
+
+def _profile_outcome_columns(profile: CancerProfile, frame: pd.DataFrame) -> set[str]:
+    if profile.dataset_kind == "crispr_depmap":
+        return {c for c in frame.columns if c.startswith(DEPENDENCY_OUTCOME_PREFIX)}
+    return set()
 
 
 @dataclass
@@ -342,7 +368,7 @@ def generate_dataset(config: GeneratorConfig) -> DatasetBundle:
         {k.value: v for k, v in counts.items()},
     )
 
-    base_frame = _append_distractor_covariates(base_frame, config)
+    base_frame = _append_distractor_covariates(base_frame, config, profile)
     injection: InjectionResult = inject_associations(
         base_frame=base_frame,
         associations=associations,
@@ -351,13 +377,15 @@ def generate_dataset(config: GeneratorConfig) -> DatasetBundle:
         profile=profile,
     )
     frame = injection.frame
-    outcome_columns = injection.outcome_columns
+    outcome_set = set(injection.outcome_columns) | _profile_outcome_columns(profile, frame)
+    outcome_columns = [c for c in frame.columns if c in outcome_set]
+    id_columns = [c for c in profile.id_columns if c in frame.columns]
 
     treatment_columns = [c for c in frame.columns if c.startswith("treatment_")]
     covariate_columns = [
         c
         for c in frame.columns
-        if c != "patient_id" and c not in outcome_columns and c not in treatment_columns
+        if c not in id_columns and c not in outcome_columns and c not in treatment_columns
     ]
 
     manifest = DatasetManifest(
@@ -365,6 +393,8 @@ def generate_dataset(config: GeneratorConfig) -> DatasetBundle:
         seed=config.seed,
         patient_n=config.patient_n,
         cancer_type=profile.cancer_type,
+        dataset_kind=profile.dataset_kind,
+        id_columns=id_columns,
         columns=list(frame.columns),
         treatment_columns=treatment_columns,
         outcome_columns=outcome_columns,
@@ -372,12 +402,13 @@ def generate_dataset(config: GeneratorConfig) -> DatasetBundle:
         associations=associations,
         notes=(
             f"Cancer type: {profile.cancer_type}. "
+            f"Dataset kind: {profile.dataset_kind}. "
             f"Paradigm mix: concordant={counts[ParadigmClass.concordant]}, "
             f"discordant={counts[ParadigmClass.discordant]}, "
             f"hidden_novel={counts[ParadigmClass.hidden_novel]}."
         ),
     )
-    description = _public_description(config, frame, outcome_columns)
+    description = _public_description(config, frame, outcome_columns, profile)
     return DatasetBundle(
         config=config, frame=frame, manifest=manifest, public_description=description
     )

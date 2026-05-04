@@ -35,15 +35,11 @@ class AnalysisRecord(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    hypothesis_ids: list[str] = Field(
-        description="IDs of the hypotheses this analysis addresses."
-    )
+    hypothesis_ids: list[str] = Field(description="IDs of the hypotheses this analysis addresses.")
     code: str | None = Field(
         default=None, description="Optional: the code executed (for reasoning-trace audits)."
     )
-    result_summary: str = Field(
-        description="Free-text summary of the statistical result."
-    )
+    result_summary: str = Field(description="Free-text summary of the statistical result.")
     p_value: float | None = None
     effect_estimate: float | None = Field(
         default=None,

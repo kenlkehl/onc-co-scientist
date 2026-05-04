@@ -85,15 +85,14 @@ class SteeringMode(StrEnum):
     add = "add"
     ablate = "ablate"
 
+
 app = typer.Typer(
     help="Oncology Co-Scientist Benchmark CLI.",
     no_args_is_help=True,
     add_completion=False,
 )
 synth_app = typer.Typer(help="Synthetic dataset generation (Aim 1.1).", no_args_is_help=True)
-harness_app = typer.Typer(
-    help="Harness task bundle builder (Aim 1.2).", no_args_is_help=True
-)
+harness_app = typer.Typer(help="Harness task bundle builder (Aim 1.2).", no_args_is_help=True)
 score_app = typer.Typer(help="Transcript scoring (Aim 1.2).", no_args_is_help=True)
 caa_app = typer.Typer(
     help="Contrastive activation addition prototype (Aim 2.2).",
@@ -153,8 +152,7 @@ def _parse_cancer_types(raw: str) -> list[CancerType]:
             chosen.append(ct)
     if not chosen:
         raise typer.BadParameter(
-            "No cancer types selected. Pass 'all' or a comma-separated list "
-            "such as 'nsclc,crc'."
+            "No cancer types selected. Pass 'all' or a comma-separated list such as 'nsclc,crc'."
         )
     return chosen
 
@@ -175,8 +173,8 @@ def synth_generate(
         Path,
         typer.Option(
             "--out",
-            help="Output directory. One subfolder is written per cancer "
-            "type (e.g. <out>/nsclc/, <out>/crc/, ...).",
+            help="Output directory. One subfolder is written per dataset "
+            "profile (e.g. <out>/nsclc/, <out>/crc/, <out>/depmap/, ...).",
         ),
     ],
     cancer_types: Annotated[
@@ -184,8 +182,9 @@ def synth_generate(
         typer.Option(
             "--cancer-types",
             help="Comma-separated cancer types to generate: nsclc, crc, "
-            "breast, prostate, aml. Default 'all' generates every type. "
-            "Each goes under its own <out>/<cancer_type>/ subfolder.",
+            "breast, prostate, aml, depmap. Default 'all' generates every "
+            "registered profile. Each goes under its own "
+            "<out>/<cancer_type>/ subfolder.",
         ),
     ] = "all",
     seed: Annotated[
@@ -227,9 +226,10 @@ def synth_generate(
 ) -> None:
     """Generate one or more synthetic dataset bundles, keyed by cancer type.
 
-    By default this generates all five supported cancer types (NSCLC, CRC,
-    breast, prostate, AML), each into its own subfolder of ``--out``. Pass
-    ``--cancer-types nsclc,crc`` (etc.) to restrict the run to a subset.
+    By default this generates all registered dataset profiles (NSCLC, CRC,
+    breast, prostate, AML, and the CRISPR/DepMap profile), each into its own
+    subfolder of ``--out``. Pass ``--cancer-types nsclc,crc`` (etc.) to
+    restrict the run to a subset.
     The base ``dataset_id`` from the YAML is auto-suffixed with the cancer
     type so each bundle's manifest carries a distinct identifier.
     """
@@ -255,9 +255,7 @@ def synth_generate(
             )
     else:
         anonymize = variant is DatasetVariant.anonymized
-        written = write_multi_bundle(
-            bundles, out, anonymize=anonymize, anon_seed=anon_seed
-        )
+        written = write_multi_bundle(bundles, out, anonymize=anonymize, anon_seed=anon_seed)
         label = "anonymized" if anonymize else "named"
         for ct, out_path in written.items():
             bundle = bundles[ct]
@@ -324,9 +322,7 @@ def harness_build_task(
     written per discovered bundle, mirroring the input tree under ``--out``.
     """
     if (dataset / MANIFEST_FILENAME).is_file():
-        task = build_task(
-            dataset, out, max_iterations=max_iterations, python_env=python_env
-        )
+        task = build_task(dataset, out, max_iterations=max_iterations, python_env=python_env)
         console.print(
             f"[green]Wrote[/green] task bundle to {task.task_dir}\n"
             f"  instructions: {task.instructions_path}\n"
@@ -338,19 +334,14 @@ def harness_build_task(
         return
 
     try:
-        tasks = build_tasks(
-            dataset, out, max_iterations=max_iterations, python_env=python_env
-        )
+        tasks = build_tasks(dataset, out, max_iterations=max_iterations, python_env=python_env)
     except ValueError as exc:
         raise typer.BadParameter(
-            f"{exc} Point --dataset at a bundle directory, or run "
-            f"`ocs synth generate` first."
+            f"{exc} Point --dataset at a bundle directory, or run `ocs synth generate` first."
         ) from exc
     for task in tasks:
         console.print(f"[green]Wrote[/green] task bundle to {task.task_dir}")
-    console.print(
-        f"[green]Built {len(tasks)} task bundle(s)[/green] under {out}"
-    )
+    console.print(f"[green]Built {len(tasks)} task bundle(s)[/green] under {out}")
 
 
 def _build_judge(
@@ -368,12 +359,8 @@ def _build_judge(
         raw = json.loads(stub_config_path.read_text(encoding="utf-8"))
         novel_phrases = frozenset(raw.get("novel_phrases", []))
         match_phrases_raw = raw.get("match_phrases", {})
-        match_phrases = {
-            key: frozenset(values) for key, values in match_phrases_raw.items()
-        }
-        return StubJudge(
-            novel_phrases=novel_phrases, match_phrases=match_phrases
-        )
+        match_phrases = {key: frozenset(values) for key, values in match_phrases_raw.items()}
+        return StubJudge(novel_phrases=novel_phrases, match_phrases=match_phrases)
     cache = JudgeCache(cache_dir=cache_dir)
     if backend is JudgeBackend.codex_cli:
         return CodexCliJudge(
@@ -476,8 +463,7 @@ CacheDirOption = Annotated[
     Path | None,
     typer.Option(
         "--cache-dir",
-        help="Disk cache directory for judge responses. Default "
-        "~/.cache/onc-co-scientist/judge.",
+        help="Disk cache directory for judge responses. Default ~/.cache/onc-co-scientist/judge.",
     ),
 ]
 NoJudgeCacheOption = Annotated[
@@ -499,9 +485,7 @@ StubConfigOption = Annotated[
 ]
 
 
-def _resolve_cache_dir(
-    cache_dir: Path | None, no_cache: bool
-) -> Path | None:
+def _resolve_cache_dir(cache_dir: Path | None, no_cache: bool) -> Path | None:
     if no_cache:
         return None
     return cache_dir if cache_dir is not None else default_cache_dir()
@@ -515,9 +499,7 @@ def _load_transcript(path: Path) -> Transcript:
         detail = "; ".join(str(err.get("msg", err)) for err in errors[:3])
         raise typer.BadParameter(f"Invalid transcript JSON at {path}: {detail}") from exc
     except UnicodeError as exc:
-        raise typer.BadParameter(
-            f"Transcript is not valid UTF-8 at {path}: {exc}"
-        ) from exc
+        raise typer.BadParameter(f"Transcript is not valid UTF-8 at {path}: {exc}") from exc
 
 
 @score_app.command("run")
@@ -540,9 +522,7 @@ def score_run(
             help="Path to the transcript.json emitted by the external harness.",
         ),
     ],
-    out: Annotated[
-        Path, typer.Option("--out", help="Directory for the scoring report.")
-    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for the scoring report.")],
     judge_backend: JudgeOption = JudgeBackend.claude_cli,
     judge_cli: JudgeCliOption = "auto",
     judge_model: JudgeModelOption = None,
@@ -653,8 +633,7 @@ def score_batch(
         transcript_paths = sorted(runs_dir.glob("run_*/transcript.json"))
         if not transcript_paths:
             console.print(
-                f"[yellow]warning:[/yellow] no transcripts under {runs_dir}; "
-                f"skipping bundle {rel}"
+                f"[yellow]warning:[/yellow] no transcripts under {runs_dir}; skipping bundle {rel}"
             )
             continue
         manifest = read_manifest(bundle_dir)
@@ -715,10 +694,7 @@ def caa_write_pairs(
     by_concept: dict[str, int] = {}
     for pair in pairs:
         by_concept[pair.concept] = by_concept.get(pair.concept, 0) + 1
-    console.print(
-        f"[green]Wrote[/green] {len(pairs)} contrast pairs to {out} "
-        f"({by_concept})"
-    )
+    console.print(f"[green]Wrote[/green] {len(pairs)} contrast pairs to {out} ({by_concept})")
 
 
 @caa_app.command("derive")
@@ -945,9 +921,7 @@ def caa_generate(
         device_map=device_map,
         trust_remote_code=trust_remote_code,
     )
-    selected_layers = (
-        parse_layers(layers, n_layers=infer_num_layers(model)) if layers else None
-    )
+    selected_layers = parse_layers(layers, n_layers=infer_num_layers(model)) if layers else None
     effective_scale = scale
     if effective_scale is None:
         effective_scale = -1.0 if mode is SteeringMode.add else 1.0

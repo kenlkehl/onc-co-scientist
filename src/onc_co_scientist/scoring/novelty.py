@@ -57,9 +57,7 @@ def score_novelty(transcript: Transcript, judge: Judge) -> NoveltyScore:
     texts = [h.text for _, h in flat]
     judgments = judge.judge_novelty(texts)
     if len(judgments) != len(flat):
-        raise ValueError(
-            f"Judge returned {len(judgments)} judgments for {len(flat)} hypotheses."
-        )
+        raise ValueError(f"Judge returned {len(judgments)} judgments for {len(flat)} hypotheses.")
 
     records: list[NoveltyJudgmentRecord] = []
     n_novel = 0

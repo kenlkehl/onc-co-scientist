@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 from typer.testing import CliRunner
 
-from onc_co_scientist.cli import app, _parse_cancer_types
+from onc_co_scientist.cli import _parse_cancer_types, app
 from onc_co_scientist.synthetic.cancer_types import CancerType, all_cancer_types
 
 
@@ -48,7 +48,7 @@ def test_parse_cancer_types_rejects_unknown() -> None:
         raise AssertionError("expected BadParameter for unknown cancer type")
 
 
-def test_default_cli_writes_all_five_cancer_types(tmp_path: Path) -> None:
+def test_default_cli_writes_all_registered_dataset_profiles(tmp_path: Path) -> None:
     runner = CliRunner()
     cfg = _write_minimal_config(tmp_path / "synth.yaml")
     out_dir = tmp_path / "ds"
@@ -68,7 +68,7 @@ def test_default_cli_writes_all_five_cancer_types(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.stdout
 
-    # Each cancer type gets its own subfolder containing named/+anonymized/.
+    # Each dataset profile gets its own subfolder containing named/+anonymized/.
     expected = {ct.value for ct in all_cancer_types()}
     assert {p.name for p in out_dir.iterdir() if p.is_dir()} == expected
 

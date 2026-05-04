@@ -58,13 +58,11 @@ def test_extract_json_array_handles_code_fence():
         ```
         """
     )
-    assert _extract_json_array(payload) == [
-        {"is_novel": False, "rationale": "standard"}
-    ]
+    assert _extract_json_array(payload) == [{"is_novel": False, "rationale": "standard"}]
 
 
 def test_extract_json_array_handles_preamble():
-    payload = "Reasoning... [{\"matches\": true, \"rationale\": \"yes\"}] done."
+    payload = 'Reasoning... [{"matches": true, "rationale": "yes"}] done.'
     assert _extract_json_array(payload) == [{"matches": True, "rationale": "yes"}]
 
 
@@ -88,9 +86,7 @@ def test_resolve_cli_argv_prefers_windows_cmd_shim(monkeypatch):
 
 def test_resolve_cli_argv_wraps_windows_ps1_shim(monkeypatch):
     codex_ps1 = "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.ps1"
-    powershell = (
-        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-    )
+    powershell = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
 
     def fake_which(candidate: str) -> str | None:
         return {
@@ -341,9 +337,7 @@ def test_claude_cli_judge_batches_when_n_exceeds_size(tmp_path: Path, monkeypatc
 
 
 @pytestmark_shell
-def test_codex_cli_judge_invokes_exec_with_stdin_and_schema(
-    tmp_path: Path, monkeypatch
-):
+def test_codex_cli_judge_invokes_exec_with_stdin_and_schema(tmp_path: Path, monkeypatch):
     bin_dir = tmp_path / "bin"
     response = '{"judgments": [{"is_novel": true, "rationale": "uses obscure subgroup"}]}'
     _write_fake_codex(bin_dir, response)

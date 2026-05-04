@@ -259,24 +259,12 @@ def aggregate_batch(bundle_scores: list[BundleScore]) -> BatchPipelineScore:
     frac_novel = _mean_of_present([b.frac_novel_mean for b in named])
     buried_score_named = _mean_of_present([b.buried_score_mean for b in named])
     buried_score_anon = _mean_of_present([b.buried_score_mean for b in anon])
-    fraction_uncovered_named = _mean_of_present(
-        [b.fraction_uncovered for b in named]
-    )
-    fraction_uncovered_anon = _mean_of_present(
-        [b.fraction_uncovered for b in anon]
-    )
-    fraction_near_named = _mean_of_present(
-        [b.fraction_near_or_better for b in named]
-    )
-    fraction_near_anon = _mean_of_present(
-        [b.fraction_near_or_better for b in anon]
-    )
-    fraction_component_named = _mean_of_present(
-        [b.fraction_component_or_better for b in named]
-    )
-    fraction_component_anon = _mean_of_present(
-        [b.fraction_component_or_better for b in anon]
-    )
+    fraction_uncovered_named = _mean_of_present([b.fraction_uncovered for b in named])
+    fraction_uncovered_anon = _mean_of_present([b.fraction_uncovered for b in anon])
+    fraction_near_named = _mean_of_present([b.fraction_near_or_better for b in named])
+    fraction_near_anon = _mean_of_present([b.fraction_near_or_better for b in anon])
+    fraction_component_named = _mean_of_present([b.fraction_component_or_better for b in named])
+    fraction_component_anon = _mean_of_present([b.fraction_component_or_better for b in anon])
     return BatchPipelineScore(
         n_bundles=len(bundle_scores),
         n_replicates_total=sum(b.n_replicates for b in bundle_scores),

@@ -28,7 +28,6 @@ from onc_co_scientist.synthetic.io import (
     write_bundle_pair,
 )
 
-
 _FEATURE_TOKEN = re.compile(r"^feature_\d{3,}$")
 
 
@@ -92,8 +91,8 @@ def test_anonymize_bundle_renames_frame_and_manifest():
         assert _FEATURE_TOKEN.match(col), col
 
     # Mapping covers exactly the renamed columns.
-    expected_renamed = set(bundle.frame.columns) - {"patient_id"} - set(
-        bundle.manifest.outcome_columns
+    expected_renamed = (
+        set(bundle.frame.columns) - {"patient_id"} - set(bundle.manifest.outcome_columns)
     )
     assert set(mapping.keys()) == expected_renamed
 
@@ -108,17 +107,14 @@ def test_anonymize_bundle_renames_association_variables_and_predicate():
 
     # Variables: outcomes preserved, everything else renamed via mapping.
     expected_vars = [
-        v if v in bundle.manifest.outcome_columns else mapping[v]
-        for v in original.variables
+        v if v in bundle.manifest.outcome_columns else mapping[v] for v in original.variables
     ]
     assert renamed.variables == expected_vars
 
     # Subgroup predicate keys are renamed; values are preserved verbatim.
     assert original.subgroup is not None
     assert renamed.subgroup is not None
-    expected_predicate = {
-        mapping.get(k, k): v for k, v in original.subgroup.predicate.items()
-    }
+    expected_predicate = {mapping.get(k, k): v for k, v in original.subgroup.predicate.items()}
     assert renamed.subgroup.predicate == expected_predicate
 
 

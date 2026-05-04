@@ -85,9 +85,7 @@ def test_discover_bundles_walks_paired_layout(tmp_path):
 
     found = discover_bundles(tmp_path / "ds")
     expected = sorted(
-        tmp_path / "ds" / ct.value / variant
-        for ct in chosen
-        for variant in ("named", "anonymized")
+        tmp_path / "ds" / ct.value / variant for ct in chosen for variant in ("named", "anonymized")
     )
     assert found == expected
 

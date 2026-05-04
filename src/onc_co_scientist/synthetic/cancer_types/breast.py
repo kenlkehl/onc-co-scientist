@@ -143,10 +143,7 @@ def hidden_novel_catalog() -> list[AssociationSpec]:
             subgroup=SubgroupSpec(
                 name="pik3ca_mutant_subgroup",
                 predicate={"pik3ca_mutation": 1},
-                description=(
-                    "Patients whose tumors harbor an activating PIK3CA "
-                    "mutation."
-                ),
+                description=("Patients whose tumors harbor an activating PIK3CA mutation."),
             ),
             natural_language_description=(
                 "Sacituzumab govitecan, a TROP2-directed antibody-drug "
@@ -219,8 +216,7 @@ def buried_signature_catalog() -> list[AssociationSpec]:
                     "node_positive": 0,
                 },
                 description=(
-                    "BRCA2-mutant, BRCA1-wildtype, premenopausal, node-"
-                    "negative patients."
+                    "BRCA2-mutant, BRCA1-wildtype, premenopausal, node-negative patients."
                 ),
             ),
             natural_language_description=(
@@ -258,7 +254,7 @@ DEFAULT_PREVALENCES: dict[str, float] = {
 }
 
 
-def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
+def base_frame_fn(config: GeneratorConfig) -> pd.DataFrame:
     rng = np.random.default_rng(config.seed)
     n = config.patient_n
     overrides = config.covariate_prevalences
@@ -282,14 +278,18 @@ def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
     her2_positive = marginal_bernoulli(
         rng, "her2_positive", DEFAULT_PREVALENCES["her2_positive"], n, overrides
     )
-    her2_low_base = rng.binomial(1, float(overrides.get("her2_low", DEFAULT_PREVALENCES["her2_low"])), size=n)
+    her2_low_base = rng.binomial(
+        1, float(overrides.get("her2_low", DEFAULT_PREVALENCES["her2_low"])), size=n
+    )
     her2_low = np.where(her2_positive == 1, 0, her2_low_base).astype(int)
 
     # BRCA1/2: mutually exclusive (very rare to co-occur).
     brca1_mutation = marginal_bernoulli(
         rng, "brca1_mutation", DEFAULT_PREVALENCES["brca1_mutation"], n, overrides
     )
-    brca2_base = rng.binomial(1, float(overrides.get("brca2_mutation", DEFAULT_PREVALENCES["brca2_mutation"])), size=n)
+    brca2_base = rng.binomial(
+        1, float(overrides.get("brca2_mutation", DEFAULT_PREVALENCES["brca2_mutation"])), size=n
+    )
     brca2_mutation = np.where(brca1_mutation == 1, 0, brca2_base).astype(int)
 
     pik3ca_mutation = marginal_bernoulli(
@@ -302,22 +302,16 @@ def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
     node_positive = marginal_bernoulli(
         rng, "node_positive", DEFAULT_PREVALENCES["node_positive"], n, overrides
     )
-    stage_iv = marginal_bernoulli(
-        rng, "stage_iv", DEFAULT_PREVALENCES["stage_iv"], n, overrides
-    )
+    stage_iv = marginal_bernoulli(rng, "stage_iv", DEFAULT_PREVALENCES["stage_iv"], n, overrides)
     has_brain_mets = marginal_bernoulli(
         rng, "has_brain_mets", DEFAULT_PREVALENCES["has_brain_mets"], n, overrides
     )
 
     # Ki67 percentage (continuous, 0-100%): mean ~20% with right-skew.
-    ki67_pct = np.round(
-        np.clip(rng.lognormal(2.5, 0.7, size=n), 1.0, 100.0), 1
-    )
+    ki67_pct = np.round(np.clip(rng.lognormal(2.5, 0.7, size=n), 1.0, 100.0), 1)
 
     # Tumor size in cm (right-skewed lognormal).
-    tumor_size_cm = np.round(
-        np.clip(rng.lognormal(0.8, 0.6, size=n), 0.3, 20.0), 1
-    )
+    tumor_size_cm = np.round(np.clip(rng.lognormal(0.8, 0.6, size=n), 0.3, 20.0), 1)
 
     treatments = {
         col: marginal_bernoulli(rng, col, DEFAULT_PREVALENCES[col], n, overrides)
@@ -362,9 +356,7 @@ def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
 # buried-signature predicate, and the disjointness invariant requires that
 # buried-predicate columns are not also driven by the unscored prognostic
 # layer. ``stage_iv`` and ``has_brain_mets`` carry the disease-burden signal.
-BREAST_BACKGROUND_PROGNOSTIC_VARIABLES: frozenset[str] = frozenset(
-    {"stage_iv", "has_brain_mets"}
-)
+BREAST_BACKGROUND_PROGNOSTIC_VARIABLES: frozenset[str] = frozenset({"stage_iv", "has_brain_mets"})
 
 
 def prognostic_contribution(frame: pd.DataFrame, outcome: str) -> np.ndarray:

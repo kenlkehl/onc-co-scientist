@@ -75,9 +75,7 @@ def test_aggregate_replicates_mean_and_sd():
 
 
 def test_aggregate_replicates_single_run_sd_none():
-    bundle = aggregate_replicates(
-        [_replicate(frac_novel=0.4, buried_score=3, uncovered=True)]
-    )
+    bundle = aggregate_replicates([_replicate(frac_novel=0.4, buried_score=3, uncovered=True)])
     assert bundle.n_replicates == 1
     assert bundle.frac_novel_mean == 0.4
     assert bundle.frac_novel_sd is None
@@ -87,9 +85,7 @@ def test_aggregate_replicates_single_run_sd_none():
 
 def test_aggregate_replicates_rejects_mixed_dataset_ids():
     a = _replicate(frac_novel=0.5, buried_score=3, uncovered=True)
-    b = _replicate(
-        dataset_id="ds_b", frac_novel=0.6, buried_score=4, uncovered=False
-    )
+    b = _replicate(dataset_id="ds_b", frac_novel=0.6, buried_score=4, uncovered=False)
     try:
         aggregate_replicates([a, b])
     except ValueError as exc:
@@ -134,9 +130,7 @@ def test_aggregate_batch_means_of_bundle_means():
 def test_aggregate_batch_named_and_anonymized_split():
     """Anonymized bundles emit None novelty; their buried score lands in
     the dedicated _anonymized headline field."""
-    named_a = aggregate_replicates(
-        [_replicate(frac_novel=0.5, buried_score=1, uncovered=True)]
-    )
+    named_a = aggregate_replicates([_replicate(frac_novel=0.5, buried_score=1, uncovered=True)])
     anon_a = aggregate_replicates(
         [_replicate(variant="anonymized", frac_novel=None, buried_score=4, uncovered=False)]
     )
@@ -163,9 +157,7 @@ def test_aggregate_replicates_rejects_mixed_variants():
 
 
 def test_aggregate_batch_to_dict_round_trips():
-    bundle = aggregate_replicates(
-        [_replicate(frac_novel=0.4, buried_score=3, uncovered=True)]
-    )
+    bundle = aggregate_replicates([_replicate(frac_novel=0.4, buried_score=3, uncovered=True)])
     payload = aggregate_batch([bundle]).to_dict()
     assert payload["n_bundles"] == 1
     assert payload["n_replicates_total"] == 1

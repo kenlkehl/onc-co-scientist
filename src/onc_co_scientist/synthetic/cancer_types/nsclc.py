@@ -187,8 +187,7 @@ def hidden_novel_catalog() -> list[AssociationSpec]:
                 name="brca2_mutant_subgroup",
                 predicate={"brca2_mutation": 1},
                 description=(
-                    "Patients harboring a germline or somatic BRCA2 "
-                    "loss-of-function mutation."
+                    "Patients harboring a germline or somatic BRCA2 loss-of-function mutation."
                 ),
             ),
             natural_language_description=(
@@ -209,9 +208,7 @@ def hidden_novel_catalog() -> list[AssociationSpec]:
             subgroup=SubgroupSpec(
                 name="alk_rearranged_subgroup",
                 predicate={"alk_fusion": 1},
-                description=(
-                    "Patients whose tumors harbor an ALK gene rearrangement."
-                ),
+                description=("Patients whose tumors harbor an ALK gene rearrangement."),
             ),
             natural_language_description=(
                 "Osimertinib, a third-generation EGFR tyrosine kinase "
@@ -403,7 +400,7 @@ def _bernoulli_by_stratum(
     return (rng.random(len(stratum)) < probs).astype(int)
 
 
-def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
+def base_frame_fn(config: GeneratorConfig) -> pd.DataFrame:
     rng = np.random.default_rng(config.seed)
     n = config.patient_n
     overrides = config.covariate_prevalences
@@ -418,9 +415,7 @@ def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
     squamous_flag = _bernoulli_by_stratum(rng, smoking_status, _SQUAMOUS_BY_SMOKING)
     histology = np.where(squamous_flag == 1, "squamous", "adenocarcinoma")
 
-    def _draw_conditional(
-        column: str, rates: dict[str, float]
-    ) -> np.ndarray:
+    def _draw_conditional(column: str, rates: dict[str, float]) -> np.ndarray:
         if column in overrides:
             return rng.binomial(1, float(overrides[column]), size=n)
         return _bernoulli_by_stratum(rng, smoking_status, rates)
@@ -447,32 +442,16 @@ def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
     pdl1_mean = float(overrides.get("pdl1_tps", DEFAULT_PREVALENCES["pdl1_tps"]))
     pdl1_tps = np.clip(rng.beta(2, 2, size=n) + (pdl1_mean - 0.5), 0.0, 1.0)
 
-    albumin_g_dl = np.round(
-        np.clip(rng.normal(3.8, 0.5, size=n), 1.5, 5.5), 1
-    )
-    ldh_u_l = np.round(
-        np.clip(rng.lognormal(5.35, 0.35, size=n), 0.0, 2000.0), 2
-    )
-    weight_loss_pct_6mo = np.round(
-        np.clip(rng.normal(3.0, 5.0, size=n), 0.0, 40.0), 1
-    )
-    crp_mg_l = np.round(
-        np.clip(rng.lognormal(1.20, 1.10, size=n), 0.0, 300.0), 2
-    )
+    albumin_g_dl = np.round(np.clip(rng.normal(3.8, 0.5, size=n), 1.5, 5.5), 1)
+    ldh_u_l = np.round(np.clip(rng.lognormal(5.35, 0.35, size=n), 0.0, 2000.0), 2)
+    weight_loss_pct_6mo = np.round(np.clip(rng.normal(3.0, 5.0, size=n), 0.0, 40.0), 1)
+    crp_mg_l = np.round(np.clip(rng.lognormal(1.20, 1.10, size=n), 0.0, 300.0), 2)
     nlr = np.round(np.clip(rng.lognormal(1.10, 0.55, size=n), 0.0, 40.0), 2)
 
-    t_pembro = _marginal(
-        "treatment_pembrolizumab", DEFAULT_PREVALENCES["treatment_pembrolizumab"]
-    )
-    t_soto = _marginal(
-        "treatment_sotorasib", DEFAULT_PREVALENCES["treatment_sotorasib"]
-    )
-    t_olap = _marginal(
-        "treatment_olaparib", DEFAULT_PREVALENCES["treatment_olaparib"]
-    )
-    t_osim = _marginal(
-        "treatment_osimertinib", DEFAULT_PREVALENCES["treatment_osimertinib"]
-    )
+    t_pembro = _marginal("treatment_pembrolizumab", DEFAULT_PREVALENCES["treatment_pembrolizumab"])
+    t_soto = _marginal("treatment_sotorasib", DEFAULT_PREVALENCES["treatment_sotorasib"])
+    t_olap = _marginal("treatment_olaparib", DEFAULT_PREVALENCES["treatment_olaparib"])
+    t_osim = _marginal("treatment_osimertinib", DEFAULT_PREVALENCES["treatment_osimertinib"])
 
     frame = pd.DataFrame(
         {

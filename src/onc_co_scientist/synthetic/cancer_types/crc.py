@@ -140,9 +140,7 @@ def hidden_novel_catalog() -> list[AssociationSpec]:
             subgroup=SubgroupSpec(
                 name="ntrk_fusion_subgroup",
                 predicate={"ntrk_fusion": 1},
-                description=(
-                    "Patients whose tumors harbor an NTRK gene fusion."
-                ),
+                description=("Patients whose tumors harbor an NTRK gene fusion."),
             ),
             natural_language_description=(
                 "Pembrolizumab, broadly inactive in microsatellite-stable "
@@ -252,7 +250,7 @@ DEFAULT_PREVALENCES: dict[str, float] = {
 }
 
 
-def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
+def base_frame_fn(config: GeneratorConfig) -> pd.DataFrame:
     rng = np.random.default_rng(config.seed)
     n = config.patient_n
     overrides = config.covariate_prevalences
@@ -271,9 +269,13 @@ def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
     )
     # NRAS and BRAF V600E are mutually exclusive with KRAS in most tumors;
     # we enforce that approximately by drawing them only for KRAS-WT rows.
-    nras_base = rng.binomial(1, float(overrides.get("nras_mutation", DEFAULT_PREVALENCES["nras_mutation"])), size=n)
+    nras_base = rng.binomial(
+        1, float(overrides.get("nras_mutation", DEFAULT_PREVALENCES["nras_mutation"])), size=n
+    )
     nras_mutation = np.where(kras_mutation == 1, 0, nras_base).astype(int)
-    braf_base = rng.binomial(1, float(overrides.get("braf_v600e", DEFAULT_PREVALENCES["braf_v600e"])), size=n)
+    braf_base = rng.binomial(
+        1, float(overrides.get("braf_v600e", DEFAULT_PREVALENCES["braf_v600e"])), size=n
+    )
     braf_v600e = np.where((kras_mutation == 1) | (nras_mutation == 1), 0, braf_base).astype(int)
     msi_high = marginal_bernoulli(rng, "msi_high", DEFAULT_PREVALENCES["msi_high"], n, overrides)
     her2_amplified = marginal_bernoulli(
@@ -284,9 +286,7 @@ def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
     )
 
     # CEA is right-skewed; lognormal centered around 3-10 ng/mL with a long tail.
-    cea_ng_ml = np.round(
-        np.clip(rng.lognormal(1.5, 1.2, size=n), 0.0, 5000.0), 2
-    )
+    cea_ng_ml = np.round(np.clip(rng.lognormal(1.5, 1.2, size=n), 0.0, 5000.0), 2)
 
     # Treatments (independent of biomarkers — randomized-like).
     treatments = {
@@ -324,9 +324,7 @@ def base_frame_fn(config: "GeneratorConfig") -> pd.DataFrame:
 # CRC-specific prognostic contribution.
 # ---------------------------------------------------------------------------
 
-CRC_BACKGROUND_PROGNOSTIC_VARIABLES: frozenset[str] = frozenset(
-    {"stage_iv"}
-)
+CRC_BACKGROUND_PROGNOSTIC_VARIABLES: frozenset[str] = frozenset({"stage_iv"})
 
 
 def prognostic_contribution(frame: pd.DataFrame, outcome: str) -> np.ndarray:

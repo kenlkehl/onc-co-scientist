@@ -56,9 +56,7 @@ def _profile_pool(
 
 
 # Backward-compatible NSCLC pool. Constructed once at import time.
-DEFAULT_POOL: dict[ParadigmClass, list[AssociationSpec]] = _profile_pool(
-    get_profile("nsclc")
-)
+DEFAULT_POOL: dict[ParadigmClass, list[AssociationSpec]] = _profile_pool(get_profile("nsclc"))
 
 
 def select_associations(
@@ -103,14 +101,11 @@ def select_associations(
         available = pool[klass]
         if n > len(available):
             raise ValueError(
-                f"Requested {n} {klass.value} associations but pool only has "
-                f"{len(available)}."
+                f"Requested {n} {klass.value} associations but pool only has {len(available)}."
             )
         chosen.extend(available[:n])
     if n_buried_signatures < 0:
-        raise ValueError(
-            f"n_buried_signatures must be >= 0, got {n_buried_signatures}."
-        )
+        raise ValueError(f"n_buried_signatures must be >= 0, got {n_buried_signatures}.")
     if n_buried_signatures > len(buried_pool):
         raise ValueError(
             f"Requested {n_buried_signatures} buried-signature associations "
