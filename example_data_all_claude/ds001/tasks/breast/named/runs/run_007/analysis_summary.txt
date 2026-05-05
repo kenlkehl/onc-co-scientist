@@ -1,0 +1,219 @@
+Analysis summary — ds001_breast (N=50,000)
+Outcome: pfs_months (progression-free survival, months)
+Model: claude-opus-4-7.  Iterations used: 25.
+
+============================================================
+1. OVERALL APPROACH
+============================================================
+The dataset is an EHR-derived breast-cancer-cohort table with 38 features and one
+continuous outcome (pfs_months). I ran the propose-test-refine loop in five
+phases: (a) main effects of demographics/staging (iter 1), tumor biology (iter 2),
+labs (iter 3), and treatments (iter 4); (b) mechanism-driven treatment-by-receptor
+interactions for each of the six treatments (iter 5–10); (c) a multivariable
+prognostic OLS model (iter 11) and confirmation of canonical-indication
+subgroups (iter 12); (d) a systematic treatment-effect heterogeneity scan over
+all six treatments × 19 binary modifiers and 6 continuous modifiers (iter 13–14)
+followed by drill-down subgroup analyses for each treatment (iter 15–20); and
+(e) confirmatory regression with explicit subgroup × treatment interactions and
+covariate adjustment for the leading subgroup hypotheses (iter 21–25).
+Statistical methods: Welch t-tests for binary contrasts, Pearson correlation
+for continuous main effects, one-way ANOVA for ECOG, OLS with multiplicative
+interaction terms for treatment-effect heterogeneity, and stratified t-tests
+for joint subgroups.
+
+============================================================
+2. PROGNOSTIC MAIN-EFFECT FINDINGS
+============================================================
+Strong, expected adverse prognostics for shorter PFS (all p<1e-100):
+  - ECOG performance status (PFS 5.64 / 4.44 / 3.29 mo for ECOG 0/1/2; F=2861)
+  - Stage IV disease (-1.54 mo)
+  - Brain metastases (-1.05 mo)
+  - HER2-positive (-0.46 mo)  [in absence of effective HER2-targeted treatment]
+  - PIK3CA mutation (-0.56 mo)
+  - Higher Ki-67% (r=-0.09)
+  - Greater 6-month weight loss % (r=-0.12)
+
+Strong favorable prognostics for longer PFS:
+  - ER-positive (+0.57 mo, p=4e-143)
+  - PR-positive (+0.36 mo, p=6e-59)
+  - Higher serum albumin (r=+0.10, p=9e-112)
+
+Notable surprise: AGE is STRONGLY POSITIVELY correlated with PFS (Pearson
+r = +0.70, p≈0). Older patients have far longer PFS than younger ones in this
+cohort. This direction is the OPPOSITE of the biological default; it most
+likely reflects the population mix — older breast-cancer patients are
+preferentially HR-positive, slow-growing, and assigned to endocrine + CDK4/6
+therapy, while younger patients in this cohort skew toward more aggressive
+biology. The full multivariable model retains a +0.18 mo per year coefficient
+on age after adjustment for ECOG, stage, biology, labs, and treatment.
+
+Null or near-null main effects: sex_female, postmenopausal, node_positive,
+tumor_size_cm, BRCA1, BRCA2 (alone), CRP, NLR, and most chemistry labs
+(hemoglobin, AST, ALT, BUN, sodium, potassium, calcium); these contribute
+only trivially after adjustment.
+
+Multivariable model R² = 0.792, dominated by ECOG, stage_iv, brain_mets,
+ER, HER2, PIK3CA, age, ki67, albumin, weight_loss, and palbociclib.
+
+============================================================
+3. TREATMENT MAIN EFFECTS (UNADJUSTED)
+============================================================
+  - Palbociclib:  +1.10 mo overall (p≈0)  ← dominant signal
+  - Tamoxifen:    +0.04 mo, p=0.077  (NS)
+  - Trastuzumab: -0.06 mo, p=0.029  (negative; reflects confounding by HER2+ assignment)
+  - Olaparib:    -0.04 mo, p=0.33  (NS)
+  - Sacituzumab: -0.01 mo, p=0.85  (NS)
+  - Pembrolizumab: -0.07 mo, p=0.018  (slightly negative)
+
+After full multivariable adjustment, palbociclib retains a +1.10 mo
+coefficient (p≈0); tamoxifen, trastuzumab, olaparib, pembrolizumab become
+non-significant; sacituzumab is borderline +0.034 (p=0.05).
+
+============================================================
+4. TREATMENT-EFFECT HETEROGENEITY — KEY FINDINGS
+============================================================
+A systematic interaction scan (treatment × 19 binary modifiers) and continuous-
+modifier scan revealed that PALBOCICLIB has by far the strongest effect-modifier
+structure, with five interactions exceeding p<1e-100:
+
+  - palbociclib × PIK3CA mutation:  β=-1.62, p=4e-255 (strongest)
+  - palbociclib × ER-positive:      β=+1.59, p=9e-229
+  - palbociclib × Ki67-high(≥20%):  β=-1.47, p=6e-169
+  - palbociclib × triple-negative:  β=-1.39, p=3e-136
+  - palbociclib × HER2-positive:    β=-1.36, p=2e-118
+
+Drill-down stratified analyses:
+
+  Palbociclib effect on PFS (mean diff vs. control), by subgroup
+  ----------------------------------------------------------
+  ER+                         +1.58 mo (p≈0)
+  ER-                         -0.02 (NS)
+  ER+/HER2-                   +1.92 mo (p≈0)
+  ER+/HER2-/postmeno          +1.87 mo (p≈0)
+  ER+/HER2-/premeno           +2.01 mo (p≈3e-249)
+  ER+/HER2-/postmeno/PIK3CA-  +2.82 mo (p≈0)   <-- core responsive subgroup
+  ER+/HER2-/postmeno/PIK3CA+  +0.03 mo, p=0.65   <-- benefit ABOLISHED
+  ER+/HER2-/PIK3CA-           +2.91 mo (p≈0, n_tx=6571)
+  ER+/HER2-/PIK3CA+           +0.02 mo (NS,    n_tx=3400)
+  HER2+                       -0.01 (NS)
+  PIK3CA+ overall             +0.04 (NS)
+  PIK3CA- overall             +1.66 mo (p≈0)
+
+Continuous Ki-67 modulation: each 1-point increase in Ki67% reduces palbociclib
+benefit by 0.052 mo (p=1.5e-174). The benefit is largest in low-proliferation
+tumors and shrinks toward zero by Ki67 ≈ 30–40%.
+
+Other prognostic features (age, stage_iv, has_brain_mets, ECOG, albumin,
+weight_loss) do NOT meaningfully modulate palbociclib effect once the core
+biology subgroup is fixed (ER+/HER2-/postmeno: +1.85–1.95 mo across all ECOG
+levels and all stage strata; iter 20).
+
+----------------
+OLAPARIB
+----------------
+The pre-specified mechanism (PARP inhibition in BRCA-mutated tumors) was
+detectable but only when BRCA1 and BRCA2 were combined and ER status was
+restricted:
+  Olaparib in BRCA-any+              +0.35 mo, p=0.041 (n_tx=239)
+  Olaparib in BRCA-any+/ER-          +0.83 mo, p=0.0012 (n_tx=55)
+  Olaparib in BRCA-any+/TNBC         +0.75 mo, p=0.022 (n_tx=35)
+  Olaparib in BRCA-WT                -0.06 mo (NS)
+  Olaparib × BRCA-any × ER-positive interaction: β=-0.67, p=0.099 (borderline
+    attenuation by ER+).
+
+----------------
+PEMBROLIZUMAB
+----------------
+Qualitative interaction with TNBC was significant (interaction p=0.015):
+  Pembro in non-TNBC: -0.11 mo (p=0.0017) — slight harm, driven by ER+
+  Pembro in ER+:      -0.11 mo (p=0.005)
+  Pembro in TNBC:     +0.07 mo (p=0.22)  — null/positive trend, NS
+No TNBC sub-stratum (×PIK3CA, ×Ki67, ×brain-mets, ×stage_iv, ×BRCA) reached
+significance individually. The TNBC interaction is driven mainly by removal
+of the small non-TNBC harm rather than discovery of a positive benefit
+sub-phenotype.
+
+----------------
+TAMOXIFEN, TRASTUZUMAB, SACITUZUMAB GOVITECAN — NULL ACROSS ALL SUBGROUPS
+----------------
+None of these three drugs produced a positive effect in their canonical
+indication subgroup or any other tested subgroup:
+  Tamoxifen in ER+/postmeno:           +0.010 mo (p=0.81)
+  Trastuzumab in HER2+:                -0.079 mo (p=0.15)
+  Trastuzumab in HER2+/ER+:            -0.087 mo (p=0.18)
+  Trastuzumab in HER2+/non-stage-IV:   -0.042 mo (p=0.50)
+  Sacituzumab in TNBC:                 -0.085 mo (p=0.22)
+  Sacituzumab in HER2-low:             -0.031 mo (p=0.64)
+  Sacituzumab in HER2-low/TNBC:        -0.072 mo (p=0.49)
+This is unexpected versus external real-world evidence for tamoxifen in
+ER+/postmeno, trastuzumab in HER2+, and sacituzumab in TNBC/HER2-low; in
+this dataset, treatment assignment for these drugs appears non-informative
+(consistent with a synthetic-data construction in which only palbociclib,
+olaparib, and pembrolizumab carry true biology-conditional effects).
+
+============================================================
+5. FINAL BEST-SUPPORTED SUBGROUP HYPOTHESES (per-treatment)
+============================================================
+PALBOCICLIB (best-supported, very strong):
+  Patients with er_positive=1 AND her2_positive=0 AND pik3ca_mutation=0
+  experience an adjusted +2.92-month longer PFS on palbociclib than controls
+  (p≈0, N=18,681, R²-stable to adjustment for age, ECOG, stage_iv, brain_mets,
+  Ki67, albumin, weight_loss, LDH). Outside this subgroup, palbociclib effect
+  is +0.0002 (p=0.91).
+
+OLAPARIB (well-supported, smaller, smaller n):
+  Patients with (brca1_mutation=1 OR brca2_mutation=1) AND er_positive=0
+  experience +0.83-month longer PFS on olaparib (p=0.0012, n_tx=55). Pooling
+  to BRCA-any with no ER restriction yields a smaller +0.35 mo (p=0.041,
+  n_tx=239); ER+ status appears to attenuate olaparib benefit (3-way
+  interaction p=0.10).
+
+PEMBROLIZUMAB (qualitative interaction, no positive sub-phenotype reaches
+significance individually):
+  pfs_months difference (pembro vs. no pembro) is +0.07 in TNBC (NS) and -0.11
+  in ER+ (p=0.005); the TNBC interaction term is significant (p=0.015) and
+  reflects a qualitative reversal rather than a strongly responsive
+  sub-phenotype within TNBC.
+
+TRASTUZUMAB / TAMOXIFEN / SACITUZUMAB GOVITECAN:
+  No subgroup analysis identifies a credible positive effect on PFS in this
+  dataset; all three are well-modeled as PFS-inert.
+
+============================================================
+6. HYPOTHESES SUPPORTED vs. REFUTED (summary)
+============================================================
+Supported:
+  ECOG↑ → PFS↓ (h1); stage IV → PFS↓ (h2); brain mets → PFS↓ (h3); ER+ → PFS↑
+  (h8); PR+ → PFS↑ (h9); HER2+ → PFS↓ (h10); PIK3CA+ → PFS↓ (h14); Ki67↑ →
+  PFS↓ (h15); albumin↑ → PFS↑ (h17); weight loss↑ → PFS↓ (h21); palbociclib
+  benefit concentrated in ER+ (h32) and abolished by HER2+ (h33) and PIK3CA+
+  (h34); palbociclib subgroup ER+/HER2-/postmeno (h49) and ER+/HER2-/PIK3CA-
+  (h63, h67); palbociclib effect modulated by continuous Ki67 (h53); olaparib
+  benefit in BRCA-any (h40) and especially BRCA-any/ER- (h64, h68); pembro ×
+  TNBC interaction (h43, h69); trastuzumab/tamoxifen/sacituzumab inert across
+  all subgroups (h59, h60, h61, h70).
+
+Refuted (or not supported):
+  Older age → shorter PFS (h4): direction REVERSED (older → longer).
+  Female sex differs (h5); node+ → PFS↓ (h6); postmeno main effect (h7);
+  tumor_size_cm → PFS↓ (h16); BRCA1 alone → PFS↓ (h12); BRCA2 alone → PFS↓
+  (h13); CRP, NLR effects (h19, h20); tamoxifen × ER (h29) and × postmeno
+  (h30); trastuzumab × HER2+ (h36); sacituzumab × TNBC (h41) and × HER2-low
+  (h42); pembro × Ki67 (h44).
+
+============================================================
+7. CONCLUSIONS
+============================================================
+Of the six treatments in this cohort, only PALBOCICLIB shows a large,
+statistically robust, biology-restricted PFS benefit, fully captured by
+the conjunction ER+ AND HER2- AND PIK3CA-WILD-TYPE (~+2.9 months,
+extremely strong adjusted effect). OLAPARIB shows a smaller but mechanistically
+plausible benefit confined to BRCA-mutated/ER-negative tumors. PEMBROLIZUMAB
+shows a qualitative TNBC interaction (favorable trend in TNBC, harmful in
+ER+) but no sub-phenotype within TNBC reaches significance individually.
+TAMOXIFEN, TRASTUZUMAB, and SACITUZUMAB GOVITECAN are PFS-inert across all
+plausible subgroups examined here. The dominant prognostic axis for PFS is
+ECOG / stage / brain_mets / receptor biology / PIK3CA / cachexia (R²≈0.79
+in the full model), and age is paradoxically positively correlated with
+PFS in this cohort (likely reflecting the older / HR-positive enrichment
+in the palbociclib-eligible population).

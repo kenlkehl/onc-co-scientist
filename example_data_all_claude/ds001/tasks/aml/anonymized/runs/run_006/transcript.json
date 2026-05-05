@@ -1,0 +1,435 @@
+{
+  "dataset_id": "ds001_aml",
+  "model_id": "claude-opus-4-7",
+  "harness_id": "claude-code@native-2026-05",
+  "max_iterations": 25,
+  "iterations": [
+    {
+      "index": 1,
+      "proposed_hypotheses": [
+        {"id": "h1", "text": "At least one of the binary patient features in the dataset has a non-null marginal association with objective_response (i.e., its prevalence among responders differs from its prevalence among non-responders).", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h1"],
+          "code": "for f in binary_feats: stats.chi2_contingency(pd.crosstab(df[f], df['objective_response']))",
+          "result_summary": "Chi-square scan of all 17 binary/categorical features vs objective_response. Three binary features (feature_001, feature_014, feature_021) show large positive associations (ORR diff +5.4 to +6.7 percentage points, p ~ 1e-50 to 1e-70). One 3-level feature (feature_004) shows a strong monotonic gradient (ORR 23.1% / 17.4% / 12.9% across levels 0/1/2, chi2 p = 1.79e-90). feature_026 (-2.3 pp, p = 3.31e-06) and feature_009 (-2.4 pp, p = 3.51e-05) are negatively associated. All other binary features (feature_010, 005, 016, 025, 019, 015, 018, 008, 006, 032, 030) are null (p > 0.1).",
+          "p_value": 1.79e-90,
+          "effect_estimate": -0.102,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "proposed_hypotheses": [
+        {"id": "h2", "text": "At least one continuous laboratory/demographic feature has a different mean between objective responders and non-responders (i.e., a non-zero point-biserial association with objective_response).", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h2"],
+          "code": "for c in cont_feats: stats.ttest_ind(df.loc[y==1, c], df.loc[y==0, c]); auc(df[c], y)",
+          "result_summary": "Welch t-tests for each of 18 continuous features. Strongest associations are for feature_020 (mean 3.44 in responders vs 3.95 in non-responders, diff -0.51, p = 1.69e-33, AUC 0.465), feature_024 (58.5 vs 60.3, diff -1.80, p = 2.02e-16, AUC 0.472), feature_022 (19.3 vs 20.4, p = 1.49e-04), feature_029 (3.82 vs 3.79, p = 2.73e-07), feature_027 (5.69 vs 6.17, p = 1.62e-06). Notably, feature_011 (likely age, mean 68) has essentially zero marginal association (p = 0.88, AUC 0.499). All AUCs are 0.46-0.52 (small effects per variable).",
+          "p_value": 1.69e-33,
+          "effect_estimate": -0.510,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "proposed_hypotheses": [
+        {"id": "h3", "text": "feature_001, feature_014, and feature_021 are mutually statistically independent (their pairwise and three-way joint frequencies match the products of their marginal prevalences), consistent with their being independently assigned interventions rather than correlated biomarkers.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h3"],
+          "code": "df[['feature_001','feature_014','feature_021']].corr(method='spearman'); cross-counts vs marginal products",
+          "result_summary": "Pairwise Spearman correlations among feature_001, feature_014, feature_021 are all between -0.003 and 0.001 (essentially zero). Observed joint counts vs expected under independence: feature_001 & feature_021 = 8013 (expected 8000), feature_001 & feature_014 = 5986 (6000), feature_014 & feature_021 = 6025 (6000), all three = 2401 (2400). All four match the products of marginal prevalences within ~0.5%, strongly supporting full statistical independence.",
+          "p_value": null,
+          "effect_estimate": 0.001,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "proposed_hypotheses": [
+        {"id": "h4", "text": "In a multivariable logistic regression of objective_response on all 35 features, feature_001, feature_014, and feature_021 each retain large positive coefficients (log-odds > 0.3), and feature_004 (treated as a 3-level ordered factor) retains a strong negative gradient.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h4"],
+          "code": "sm.Logit(y, sm.add_constant(X_full)).fit() with 35 features (feature_004 one-hot, continuous standardized)",
+          "result_summary": "All three suspected-treatment features remain strongly positive: feature_001 beta = +0.374 (p < 1e-50), feature_014 beta = +0.436 (p < 1e-50), feature_021 beta = +0.362 (p < 1e-50). feature_004 dummies show large negative effects (level 1 vs 0: beta = -0.359; level 2 vs 0: beta = -0.726). feature_026 (-0.169, p = 6e-7) and feature_009 (-0.188, p = 4e-6) are independently negative. Among continuous variables, only feature_020 (-0.142/SD), feature_024 (-0.100/SD), feature_029 (+0.061/SD), feature_022 (-0.048/SD), feature_027 (-0.060/SD) reach significance. feature_011 (age) coefficient is essentially zero (-0.005/SD, p = 0.67).",
+          "p_value": 1e-71,
+          "effect_estimate": 0.436,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "proposed_hypotheses": [
+        {"id": "h5", "text": "The marginal favorable effect of feature_014 on objective_response is heterogeneous across feature_026 strata: the response benefit of feature_014=1 is much larger when feature_026=0 than when feature_026=1 (negative interaction term)."},
+        {"id": "h6", "text": "The marginal favorable effect of feature_014 is similarly suppressed when feature_009=1 vs feature_009=0 (negative interaction)."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h5"],
+          "code": "Logit(y ~ feature_014 + feature_026 + feature_014:feature_026)",
+          "result_summary": "Stratified ORR for feature_014: in feature_026=0 patients (n=42538), ORR rises from 16.6% to 24.8% with feature_014=1 (RD = +8.2 pp); in feature_026=1 patients (n=7462), ORR shifts from 17.2% to 15.8% (RD = -1.4 pp). Logistic interaction coef = -0.604, p = 1.14e-16. The treatment-effect heterogeneity is striking: feature_026=1 essentially abolishes the feature_014 benefit.",
+          "p_value": 1.14e-16,
+          "effect_estimate": -0.604,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h6"],
+          "code": "Logit(y ~ feature_014 + feature_009 + feature_014:feature_009)",
+          "result_summary": "In feature_009=0 (n=45015): ORR 16.7% → 24.2% with feature_014=1 (RD = +7.5 pp). In feature_009=1 (n=4985): ORR 16.6% → 16.5% (RD = -0.05 pp). Interaction coef = -0.468, p = 6.78e-08. feature_009=1 also fully abolishes feature_014 benefit.",
+          "p_value": 6.78e-08,
+          "effect_estimate": -0.468,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "proposed_hypotheses": [
+        {"id": "h7", "text": "The same effect-modification pattern holds for feature_001: its favorable effect on objective_response is largely abolished when feature_026=1 (negative interaction term), and similarly when feature_009=1."},
+        {"id": "h8", "text": "The same effect-modification pattern holds for feature_021: its favorable effect on objective_response is largely abolished when feature_009=1 (negative interaction), and similarly when feature_026=1."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h7"],
+          "code": "Logit(y ~ feature_001 + feature_026 + feature_001:feature_026); same with feature_009",
+          "result_summary": "feature_001 x feature_026: in feature_026=0, RD = +6.5 pp (16.5% → 23.0%); in feature_026=1, RD = +0.5 pp (16.6% → 17.1%). Interaction coef = -0.375, p = 3.28e-08. feature_001 x feature_009: in feature_009=0, RD = +6.1 pp; in feature_009=1, RD = +1.5 pp. Interaction coef = -0.281, p = 4.97e-04. Both modifiers similarly suppress the feature_001 benefit.",
+          "p_value": 3.28e-08,
+          "effect_estimate": -0.375,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h8"],
+          "code": "Logit(y ~ feature_021 + feature_009 + feature_021:feature_009); same with feature_026",
+          "result_summary": "feature_021 x feature_009: in feature_009=0, RD = +6.0 pp; in feature_009=1, RD = -0.4 pp. Interaction coef = -0.409, p = 4.67e-07. feature_021 x feature_026: in feature_026=0, RD = +6.1 pp; in feature_026=1, RD = +1.2 pp. Interaction coef = -0.306, p = 6.00e-06. Same pattern.",
+          "p_value": 4.67e-07,
+          "effect_estimate": -0.409,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "proposed_hypotheses": [
+        {"id": "h9", "text": "Defining mod_neg = (feature_026==1 OR feature_009==1), the within-stratum treatment effects of feature_001, feature_014, and feature_021 are all positive in mod_neg=0 and approximately zero in mod_neg=1."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h9"],
+          "code": "df['mod_neg'] = ((df['feature_026']==1)|(df['feature_009']==1)).astype(int); stratified chi2 for each treatment",
+          "result_summary": "mod_neg=0 (n=38321): feature_001 RD = +7.1 pp (chi2 p = 5e-67); feature_014 RD = +9.1 pp (p = 3e-94); feature_021 RD = +6.8 pp (p = 3e-61). mod_neg=1 (n=11679): feature_001 RD = +0.6 pp (p = 0.41); feature_014 RD = -0.9 pp (p = 0.25); feature_021 RD = +0.7 pp (p = 0.37). Treatment benefits are confined to mod_neg=0.",
+          "p_value": 3e-94,
+          "effect_estimate": 0.091,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "proposed_hypotheses": [
+        {"id": "h10", "text": "Within mod_neg=0 patients, ORR is essentially constant (~16-17%) across all combinations of feature_001, feature_014, feature_021 EXCEPT the cell where all three equal 1, where ORR is markedly elevated. This implies a 3-way synergistic interaction (positive triple-interaction term) rather than additive treatment effects."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h10"],
+          "code": "df.groupby(['feature_001','feature_014','feature_021'])['objective_response'].mean() within mod_neg=0; logistic with all 2-way and 3-way interactions",
+          "result_summary": "Within mod_neg=0, ORR by treatment combination: (0,0,0)=17.2%, (0,0,1)=16.0%, (0,1,0)=16.2%, (0,1,1)=15.8%, (1,0,0)=16.4%, (1,0,1)=16.6%, (1,1,0)=15.8%, (1,1,1)=78.6%. Logistic with full interactions yields: feature_001 coef = -0.058 (NS), feature_014 = -0.078 (NS), feature_021 = -0.092 (p = 0.034), all 2-way interactions NS (p = 0.12-0.66), and the 3-way interaction t1*t2*t3 = +2.892, z = 23.4, p << 1e-50. The benefit is concentrated entirely in the all-three-positive cell.",
+          "p_value": 1e-121,
+          "effect_estimate": 2.892,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "proposed_hypotheses": [
+        {"id": "h11", "text": "Within mod_neg=1 patients, none of the same 8 treatment combinations shows a meaningful ORR difference from baseline (~17%); in particular, the all-three-positive cell does NOT show elevated ORR. The 3-way treatment interaction is therefore null in mod_neg=1."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h11"],
+          "code": "Same logistic with all interactions, restricted to mod_neg=1 patients (n=11679)",
+          "result_summary": "Within mod_neg=1, ORR by treatment combination ranges 15.3% to 18.5%. (1,1,1) cell ORR = 18.5% (n=611), barely above baseline. All main effects, 2-way, and 3-way interaction terms have p > 0.20 (3-way coef = +0.064, p = 0.78). The triple-treatment synergy is fully suppressed in mod_neg=1.",
+          "p_value": 0.78,
+          "effect_estimate": 0.064,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "proposed_hypotheses": [
+        {"id": "h12", "text": "In a single whole-cohort logistic model containing the triple-treatment indicator and its interactions with feature_026 and feature_009, the triple-treatment main effect is large and positive while both modifier interactions are large and negative of similar magnitude, such that triple_effect + triple*m26 ≈ 0 and triple_effect + triple*m9 ≈ 0."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h12"],
+          "code": "Logit(y ~ t1 + t2 + t3 + m26 + m9 + all 2-way + triple + triple:m26 + triple:m9)",
+          "result_summary": "Whole-cohort joint model: triple coef = +2.861 (z=25.7), triple*feature_026 = -2.660 (z=-17.7), triple*feature_009 = -2.550 (z=-14.9). Sum of triple + triple*m26 = +0.20 (~null effect when m26=1); sum of triple + triple*m9 = +0.31 (~null when m9=1). Both modifiers individually nearly fully neutralize the triple-treatment effect on the log-odds scale.",
+          "p_value": 1e-145,
+          "effect_estimate": 2.861,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "proposed_hypotheses": [
+        {"id": "h13", "text": "Defining intact_triple = 1 iff (feature_001==1 AND feature_014==1 AND feature_021==1 AND feature_026==0 AND feature_009==0), this single indicator has a very large positive coefficient in logistic regression (OR > 10) and the cell n=1790 (~3.6% of cohort) has ORR around 78-79%, vs ~16-17% in everyone else."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h13"],
+          "code": "df['intact_triple'] = ((df['feature_001']==1)&(df['feature_014']==1)&(df['feature_021']==1)&(df['feature_026']==0)&(df['feature_009']==0)).astype(int); chi2",
+          "result_summary": "intact_triple cell: n=1790 (3.58% of cohort), ORR = 78.60%. Rest of cohort: n=48210, ORR = 16.53%. Risk difference = +62.1 pp, OR ≈ 18.6. Chi-square p effectively 0 (>200 sigma). This single 5-condition rule captures the entire treatment-effect heterogeneity finding.",
+          "p_value": 1e-300,
+          "effect_estimate": 0.621,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "proposed_hypotheses": [
+        {"id": "h14", "text": "The 3-way interaction triple*feature_026*feature_009 is positive (representing a 'floor' effect: when both modifiers are positive, suppression cannot exceed full nullification), but the marginal ORR among triple-positive, m26=1, m9=1 patients remains at baseline (~17-20%), confirming both modifiers act independently to suppress the synergy."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h14"],
+          "code": "Logit(y ~ triple + m26 + m9 + triple:m26 + triple:m9 + m26:m9 + triple:m26:m9)",
+          "result_summary": "Coefficients: triple = +2.926 (z=49.3), triple:m26 = -2.830 (z=-18.0), triple:m9 = -2.776 (z=-15.2), triple:m26:m9 = +2.935 (z=6.3); m26 main +0.027 (NS), m9 main +0.007 (NS), m26:m9 = -0.081 (NS). Predicted ORR for triple=1, m26=1, m9=1: 19.5% (matches observed); for triple=1, m26=1, m9=0: 18.0% (matches 18.2% observed); triple=1, m26=0, m9=1: 18.6% (matches 18.7%); triple=1, m26=0, m9=0: 78.6% (matches). Either modifier alone suffices to suppress the synergy; the positive 3-way term is purely a logistic floor effect.",
+          "p_value": 1e-50,
+          "effect_estimate": 2.935,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 13,
+      "proposed_hypotheses": [
+        {"id": "h15", "text": "In untreated patients (feature_001=feature_014=feature_021=0), feature_026 and feature_009 have no main effect on objective_response, indicating these markers are NOT general adverse prognostic factors but rather treatment-specific modifiers."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h15"],
+          "code": "df[(t1==0)&(t2==0)&(t3==0)].groupby('feature_026')['objective_response'].mean(); same for feature_009",
+          "result_summary": "Among untreated (n=12533): feature_026=0 ORR = 17.24% (n=10664), feature_026=1 ORR = 16.85% (n=1869), diff = -0.4 pp (NS); feature_009=0 ORR = 17.19% (n=11315), feature_009=1 ORR = 17.08% (n=1218), diff = -0.1 pp (NS). Both 'modifiers' have essentially zero baseline prognostic effect; their adverse effect appears only in the presence of the triple combination.",
+          "p_value": 0.74,
+          "effect_estimate": -0.004,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 14,
+      "proposed_hypotheses": [
+        {"id": "h16", "text": "Within the intact_triple subgroup, response rate is monotonically modified by feature_004 (3-level): ORR is highest at feature_004=0, intermediate at feature_004=1, and lowest at feature_004=2."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h16"],
+          "code": "df[intact_triple==1].groupby('feature_004')['objective_response'].mean(); ordered logistic",
+          "result_summary": "Within intact_triple (n=1790): feature_004=0 ORR = 85.9% (n=617), feature_004=1 ORR = 77.2% (n=902), feature_004=2 ORR = 66.8% (n=271). Monotonic gradient. Linear logistic on feature_004 within this subgroup: coef = -0.556, p = 9.63e-11. The triple-treatment benefit is preserved in all 3 strata but the absolute response rate is graded by feature_004.",
+          "p_value": 9.63e-11,
+          "effect_estimate": -0.556,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 15,
+      "proposed_hypotheses": [
+        {"id": "h17", "text": "Within the mod_neg=0 (feature_026=0 AND feature_009=0) subset, the triple-treatment risk difference is large in every feature_004 stratum (RD > 0.5), so feature_004 modifies absolute response level but not the qualitative existence of treatment benefit."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h17"],
+          "code": "Stratified RD/OR computation within mod_neg=0 by feature_004",
+          "result_summary": "Within mod_neg=0: feature_004=0 (n=13448): triple-tx ORR 85.9% vs 20.8% (RD = +65.1 pp, OR = 23.2, p ~ 0). feature_004=1 (n=19102): 77.2% vs 15.1% (RD = +62.1 pp, OR = 19.0, p ~ 0). feature_004=2 (n=5771): 66.8% vs 10.8% (RD = +56.0 pp, OR = 16.6, p ~ 0). Treatment benefit is consistent across cytogenetic-risk-like strata; feature_004 does not abolish the synergy.",
+          "p_value": 1e-200,
+          "effect_estimate": 0.651,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 16,
+      "proposed_hypotheses": [
+        {"id": "h18", "text": "All pairwise treatment combinations (feature_001+feature_014 only, feature_001+feature_021 only, feature_014+feature_021 only) within mod_neg=0 yield ORR ~16% (no benefit), confirming that all three treatments are required simultaneously for the synergy."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h18"],
+          "code": "df[mod_neg==0].groupby(['feature_001','feature_014','feature_021'])['objective_response'].agg(['mean','count'])",
+          "result_summary": "Within mod_neg=0: 0-tx ORR 17.2% (n=9626); 1-tx (any) average 16.2% (n=17087); 2-tx (any pair) average 16.2% (n=9818); 3-tx 78.6% (n=1790). Specific pairs: (1,1,0)=15.8% n=2741; (1,0,1)=16.6% n=4288; (0,1,1)=15.8% n=2789. None of the pairwise combinations exceeds the no-treatment baseline. Triple combination is strictly required.",
+          "p_value": null,
+          "effect_estimate": -0.010,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 17,
+      "proposed_hypotheses": [
+        {"id": "h19", "text": "Within the intact_triple subgroup, no other binary feature (apart from feature_004) shows a strong modifier effect on ORR (Fisher exact p < 0.01 for any single binary)."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h19"],
+          "code": "Fisher exact test for each binary feature within intact_triple subgroup (n=1790)",
+          "result_summary": "Within intact_triple (n=1790, ORR 78.6%), Fisher exact p-values for binary features: feature_010 p=0.91, feature_005 p=0.74, feature_016 p=0.15, feature_025 p=0.62, feature_019 p=0.11, feature_015 p=0.12, feature_018 p=0.41, feature_008 p=0.69, feature_006 p=1.0, feature_032 p=0.11, feature_030 p=0.45. None reach p<0.01. feature_004 (3-level) is the only categorical modifier of within-subgroup ORR.",
+          "p_value": 0.11,
+          "effect_estimate": -0.036,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 18,
+      "proposed_hypotheses": [
+        {"id": "h20", "text": "Within the intact_triple subgroup, higher feature_020 values are associated with lower ORR (negative association on the natural scale), suggesting feature_020 is a continuous modifier of the treatment effect or of intrinsic chemo-sensitivity."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h20"],
+          "code": "Multivariable logistic within intact_triple subgroup with all features (continuous standardized)",
+          "result_summary": "Multivariable logistic within intact_triple (n=1790): feature_020 standardized coef = -0.209, p = 2.7e-04 (responders mean 3.77 vs non-responders 4.56). feature_004 dummies remain significant (level 1: -0.584, p<0.001; level 2: -1.150, p<0.001). Other continuous features (feature_022 p=0.08, feature_029 p=0.05) only borderline. feature_011 (age) coef = -0.086 per SD, NS (p = 0.15). Within-responder subgroup heterogeneity is dominated by feature_004 and feature_020.",
+          "p_value": 2.7e-04,
+          "effect_estimate": -0.209,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 19,
+      "proposed_hypotheses": [
+        {"id": "h21", "text": "The remaining ~50%-prevalence binary features that are uncorrelated with treatment (feature_010, feature_030, feature_005) show no main or modifier effect on ORR either marginally or within the intact_triple subgroup, ruling them out as additional treatments or modifiers."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h21"],
+          "code": "for c in ['feature_010','feature_030','feature_005']: ORR(0) vs ORR(1) overall and within intact_triple",
+          "result_summary": "Marginal ORRs for feature_010 (0/1 = 18.6/18.9%), feature_030 (18.6/18.9%), feature_005 (18.7/18.8%) — all null. Within intact_triple: feature_010 (78.5/78.8%), feature_030 (79.3/77.8%), feature_005 (78.4/79.2%) — all within sampling noise. None act as either treatments or effect modifiers.",
+          "p_value": 0.91,
+          "effect_estimate": 0.003,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 20,
+      "proposed_hypotheses": [
+        {"id": "h22", "text": "An exhaustive scan of 2-binary-feature joint cells (excluding the known treatments and modifiers) reveals NO further subgroup with extreme ORR (>30% or <6%) at meaningful sample size (n>=50), confirming that the intact_triple rule is the unique strong predictor of ORR in this cohort."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h22"],
+          "code": "for a,b in itertools.combinations(other_binaries, 2): groupby([a,b]).mean(); filter cell ORR < 0.06 or > 0.30 with n>=50",
+          "result_summary": "Among 12 other binary/categorical features, 66 pairs yielding 4-way cells were scanned. Zero cells with ORR > 0.30 (sample size >= 50) and zero cells with ORR < 0.06 were found. The intact_triple rule (5-feature conjunction) is the unique high-ORR subgroup discovery in this dataset.",
+          "p_value": null,
+          "effect_estimate": 0.0,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 21,
+      "proposed_hypotheses": [
+        {"id": "h23", "text": "Continuous laboratory features within the intact_triple subgroup show only weak associations with within-subgroup ORR; in particular, age (feature_011, mean ~68 in this AML-like cohort) has no statistically significant within-subgroup or whole-cohort effect on objective_response."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h23"],
+          "code": "Welch t-tests for each continuous feature within intact_triple subgroup",
+          "result_summary": "Within intact_triple (n=1790), responders (n=1407) vs non-responders (n=383) mean differences: feature_011 -0.90 (p=0.15), feature_020 -0.79 (p=8.2e-04, sole significant), feature_022 -2.57 (p=0.10), feature_024 +0.29 (p=0.79), feature_028 -0.09 (p=0.39), feature_007 -0.19 (p=0.95), feature_029 +0.05 (p=0.10). All clinical labs other than feature_020 (and weakly feature_022) lack power within this subgroup. Age (feature_011) does not predict within this subgroup or in the whole cohort.",
+          "p_value": 8.2e-04,
+          "effect_estimate": -0.791,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 22,
+      "proposed_hypotheses": [
+        {"id": "h24", "text": "The number of distinct 'treatment' columns assigned (sum of feature_001+feature_014+feature_021) shows a distinctly non-monotonic relation with ORR: ORR is roughly 16-17% for 0, 1, or 2 treatments, but jumps sharply only at 3 treatments (in mod_neg=0)."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h24"],
+          "code": "df.groupby([mod_neg, n_tx])['objective_response'].mean()",
+          "result_summary": "ORR by # treatments x mod_neg: mod_neg=0: 0-tx 17.2% (9626), 1-tx 16.2% (17087), 2-tx 16.2% (9818), 3-tx 78.6% (1790). mod_neg=1: 0-tx 17.0% (2907), 1-tx 16.4% (5158), 2-tx 16.7% (3003), 3-tx 18.5% (611). The relationship is sharply threshold-like at n_tx=3 and only when mod_neg=0; this is incompatible with any additive or saturating dose-response and confirms a strict 3-way synergy.",
+          "p_value": 1e-150,
+          "effect_estimate": 0.624,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 23,
+      "proposed_hypotheses": [
+        {"id": "h25", "text": "feature_004 has a strong negative monotonic effect on whole-cohort ORR (level 0 highest, level 2 lowest), independent of treatment assignment, consistent with a baseline prognostic risk-stratification variable (e.g., cytogenetic / ELN risk in AML).", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h25"],
+          "code": "Logit(y ~ feature_004 with one-hot); also unadjusted ORR by level",
+          "result_summary": "Whole-cohort ORR by feature_004: level 0 = 23.1% (17592), level 1 = 17.4% (24971), level 2 = 12.9% (7437). Logistic linear coef on feature_004 = -0.42 (p < 1e-50). The gradient persists in untreated subset and within intact_triple subset, confirming feature_004 is a baseline prognostic factor independent of treatment assignment.",
+          "p_value": 1e-90,
+          "effect_estimate": -0.420,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 24,
+      "proposed_hypotheses": [
+        {"id": "h26", "text": "feature_018 and feature_008 (which have identical marginal prevalence of 7545/50000) are correlated but not identical; in any case, neither modifies the triple-treatment effect.", "kind": "novel"},
+        {"id": "h27", "text": "feature_022 (likely WBC), feature_024 (likely BM blast %), feature_020 (likely peripheral blast %), and feature_027 are each weakly negatively associated with ORR in the whole cohort but do not act as strong effect modifiers of the triple-treatment subgroup.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h26"],
+          "code": "pd.crosstab(df['feature_018'], df['feature_008']); subgroup tx-effect within intact_triple",
+          "result_summary": "feature_018==feature_008 in 74.6% of patients; cross-tab: (0,0)=36103, (0,1)=6352, (1,0)=6352, (1,1)=1193. Symmetric off-diagonal counts. Neither modifies triple-tx effect (within intact_triple feature_018 ORR 78.3 vs 80.7%; feature_008 78.8 vs 77.6%; both NS).",
+          "p_value": 0.41,
+          "effect_estimate": 0.025,
+          "significant": false
+        },
+        {
+          "hypothesis_ids": ["h27"],
+          "code": "Standardized continuous features in multivariable logistic; subgroup analysis within intact_triple",
+          "result_summary": "Whole-cohort multivariable: feature_020 -0.142/SD (p<1e-25), feature_024 -0.100/SD (p<1e-15), feature_027 -0.060/SD (p<1e-5), feature_022 -0.048/SD (p=0.0001). All weak negative main effects but none changes sign by treatment subgroup. Within intact_triple, only feature_020 retains a clear modest association.",
+          "p_value": 1e-25,
+          "effect_estimate": -0.142,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 25,
+      "proposed_hypotheses": [
+        {"id": "h28", "text": "FINAL SUBGROUP HYPOTHESIS: The complete subgroup with maximal objective_response benefit is defined by the 5-feature conjunction { feature_001=1 AND feature_014=1 AND feature_021=1 AND feature_026=0 AND feature_009=0 }, which yields ORR ≈ 78.6% (n=1790) versus ≈ 16.5% (n=48,210) in everyone else (RD = +0.621). Either feature_026=1 or feature_009=1 alone is sufficient to suppress the triple-treatment benefit back to baseline. Within the qualifying subgroup, ORR is further graded by feature_004 (~86% / 77% / 67% across levels 0/1/2), but feature_004 status does not change the qualitative existence of the treatment benefit.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h28"],
+          "code": "intact_triple ORR vs rest; stratified RD by feature_004; combined model with 3-way and modifier interactions",
+          "result_summary": "Final 5-condition rule: intact_triple ORR = 78.60% (n=1790) vs 16.53% (n=48210) in remainder; RD = +62.07 pp; OR = 18.6; chi-square p effectively 0. Stratified by feature_004, RDs are +65.1 pp (level 0), +62.1 pp (level 1), +56.0 pp (level 2). Whole-cohort logistic with triple x m26 and triple x m9 interactions: triple coef +2.86, triple*m26 -2.66, triple*m9 -2.55 (each ~fully neutralizes the +2.86 main effect). Either modifier alone abolishes the synergy. The triple effect requires all three of feature_001, feature_014, feature_021 simultaneously (any 2-of-3 yields ORR ~16%). This is the complete and best-supported treatment-effect subgroup definition for this cohort.",
+          "p_value": 1e-300,
+          "effect_estimate": 0.621,
+          "significant": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,186 @@
+Analysis summary for dataset ds001_crc (n=50,000 patients; outcome = pfs_months)
+=================================================================================
+
+OVERVIEW
+--------
+The cohort contains 50,000 colorectal cancer patients with 33 anonymized features
+and one outcome, pfs_months (progression-free survival in months). PFS is roughly
+symmetric on the natural scale (mean 4.31, sd 2.29, range 0-16.25), so OLS on the
+raw scale was used throughout.
+
+Of the 33 features: 15 are binary (0/1), one is a 3-level ordinal (feature_001),
+and 17 are continuous. There are no missing values. After exploration, only ~10 of
+the 33 features carry meaningful information for PFS; the remainder behave as
+uncorrelated noise (lab values whose coefficients are indistinguishable from zero
+in a full multivariable model).
+
+
+PROGNOSTIC FACTORS (treatment-independent predictors of PFS)
+------------------------------------------------------------
+A joint OLS on all 33 features (R^2 = 0.86) and a parsimonious model on the
+significant subset (R^2 = 0.82) identified the following independent prognostic
+predictors of pfs_months. Sign and magnitude are stable across specifications.
+
+- feature_015 (continuous, range 30-90, mean 65): +0.176 months PFS per unit
+  (t = +454). DOMINANT predictor; Spearman rho = +0.785. Decile mean PFS rises
+  monotonically from 1.33 mo (lowest decile of feature_015) to 7.45 mo (highest
+  decile). Linear and roughly homoscedastic.
+- feature_001 (ordinal 0/1/2): -1.18 months PFS per level (t = -206). Mean PFS
+  by level: 5.27 / 4.05 / 2.91. Behaves like a stage- or performance-status-like
+  severity scale.
+- feature_014 (binary, 55% prev): -1.36 months PFS (t = -176).
+- feature_019 (continuous, mean 3.8, sd 0.5): +0.46 months PFS per unit (t = 61).
+- feature_025 (continuous, mean 3.84, sd 3.86): -0.08 months PFS per unit
+  (t = -76).
+- feature_021 (continuous, mean 224, sd 81): tiny -4e-4 per unit (t = -9).
+
+The remaining binary features (feature_031, _010, _012, _016, _018, _020, _024,
+_028, _002) and the remaining lab features (feature_032, _017, _003, _030, _008,
+_004, _013, _026, _029, _007, _033, _009) were not independently associated with
+PFS in adjusted models (all |t|<2). They appear to be uninformative noise
+variables in this cohort.
+
+
+CANDIDATE TREATMENT
+-------------------
+feature_027 (binary, 20% prevalence) is the only feature with a large positive
+marginal effect on PFS. Unadjusted mean PFS 5.09 vs 4.12 (diff +0.97 mo,
+p ~ 1e-216). Adjusted for prognostic factors, coef = +0.94 (t = +98). It was
+treated as the candidate treatment for heterogeneity analyses. No other binary
+or continuous feature shows a credible "treatment-like" main effect.
+
+feature_011 (binary, 3% prevalence) had a small positive marginal effect (+0.22
+mo, p = 7e-4) but adjusted effect collapses to +0.02 (p = 0.36). The
+'interaction' with feature_027 is explained by feature_011 being mutually
+exclusive with feature_023 and feature_022, putting feature_011=1 patients into
+the wild-type subgroup where feature_027 works.
+
+
+TREATMENT-EFFECT HETEROGENEITY (KEY FINDING)
+-------------------------------------------
+The +1 month average effect of feature_027 is dramatically heterogeneous. A
+systematic interaction screen of feature_027 against every other feature
+identified four credible modifiers (interaction p < 1e-20):
+
+- feature_023 (binary, 42% prev): interaction coef -1.63 (p ~ 8e-226). Within
+  feature_023=0, f027 effect = +1.66 mo (p ~ 0). Within feature_023=1, f027
+  effect = +0.03 mo (p = 0.46). feature_023=1 ABOLISHES treatment benefit.
+- feature_006 (binary, 35% prev): interaction coef -1.45 (p ~ 4e-168). Within
+  feature_006=0, f027 effect = +1.48 mo. Within feature_006=1, +0.03 mo
+  (p = 0.52). ABOLISHES benefit.
+- feature_022 (binary, 4.5% prev): interaction coef -1.18 (p ~ 6e-23). Within
+  feature_022=0, f027 = +1.03 mo. Within feature_022=1, -0.16 mo (p = 0.13).
+  ABOLISHES (and slightly reverses) benefit.
+- feature_005 (continuous, right-skewed, 0.02-777): interaction coef -0.025 per
+  unit (p ~ 9e-58). f027 benefit declines monotonically across feature_005
+  quintiles: +1.84, +1.75, +1.23, +0.04, +0.01 months. Notably, feature_005
+  has NO main effect on PFS once the f027 interaction is included
+  (within-wild-type main effect coef = -3e-5, p = 0.95) — it acts purely as a
+  TREATMENT-EFFECT MODIFIER, not as a baseline prognostic factor.
+
+feature_023 and feature_022 are EXACTLY mutually exclusive in the data
+(0 patients with both = 1). feature_011 is also mutually exclusive with both.
+This pattern is consistent with biologically alternative driver mutations.
+
+Within the wild-type-like subgroup (feature_006 = 0 AND feature_023 = 0 AND
+feature_022 = 0; n = 17,372 = 34.7% of cohort), the f027 effect is +2.76 mo
+(p ~ 0). In the complementary 'mutated' subgroup (n = 32,628), the f027 effect
+is +0.03 mo (p = 0.29) — statistically indistinguishable from zero despite
+n > 30,000.
+
+A T-learner CATE estimate (separate OLS in treated and untreated arms) followed
+by a depth-4 regression tree on the predicted CATE recovers exactly the same
+splitters: feature_023, feature_006, feature_022, feature_005, in that order.
+The best leaf (feature_023=0, feature_006=0, feature_022=0, feature_005<=37.9)
+has CATE = +2.34; the worst leaf (feature_023=1, feature_006=1, feature_005>28)
+has CATE = -2.06. The tree analysis adds no new modifier beyond the four
+already identified.
+
+
+OPTIMAL RESPONDER SUBGROUP
+--------------------------
+Adding the low-feature_005 predicate yields an even more concentrated benefit.
+
+  Subgroup: feature_006 = 0 AND feature_023 = 0 AND feature_022 = 0 AND
+            feature_005 <= median (4.44)
+  n = 8,656 (17.3% of cohort), n_treated = 1,784
+  feature_027 effect: +5.03 months PFS (mean 9.12 with treatment vs 4.08 without;
+  p < 1e-300).
+
+Outside this subgroup (n = 41,344): feature_027 effect = +0.09 months
+(p = 4e-4 due to large n; magnitude trivially small).
+
+Threshold sensitivity within the wild-type subgroup: f027 benefit is preserved
+(+5 mo) up to feature_005 ~ 5, then declines smoothly: +4.0 mo at f005<=7.5,
++3.6 at f005<=10, +3.3 at f005<=15, +2.9 at f005<=30. The continuous slope is
+-0.063 mo of treatment benefit per unit feature_005 within the wild-type group,
+with treatment benefit reaching zero around feature_005 ~ 47.
+
+Each of the four predicates is INDEPENDENTLY required:
+- Removing the feature_006=0 requirement: benefit drops to ~0
+- Removing the feature_023=0 requirement: benefit drops to ~0
+- Removing the feature_022=0 requirement: small impact (because f022 is rare)
+- Removing the feature_005<=median requirement: benefit drops from +5 mo to
+  +2.76 mo (still substantial but not concentrated)
+
+No other binary feature (feature_010, _012, _018, _020, _024, _011, _016, _028,
+_031) modifies the f027 effect within the responsive subgroup. No additional
+continuous feature beyond feature_005 modifies the f027 effect (all other
+treatment-by-continuous interactions p > 0.01 with negligible magnitudes).
+
+
+HYPOTHESES SUPPORTED vs REFUTED
+-------------------------------
+Supported (direction confirmed at p < 1e-10):
+- feature_015 is a strong positive prognostic factor (+0.176 mo per unit).
+- feature_001 is an ordinal negative prognostic factor (-1.18 mo per level).
+- feature_014 is a binary negative prognostic factor (-1.36 mo).
+- feature_019 is a positive prognostic factor (+0.46 mo per unit).
+- feature_025 is a negative prognostic factor (-0.08 mo per unit).
+- feature_027 is a treatment with average +1 mo PFS benefit.
+- feature_006, feature_023, feature_022 are RESISTANCE markers that abolish
+  the feature_027 benefit.
+- feature_005 is a quantitative dose-dependent attenuator of feature_027 benefit.
+- feature_023 and feature_022 (and feature_011) are mutually exclusive.
+
+Refuted / null:
+- feature_001 does NOT importantly modify the feature_027 treatment effect
+  (interaction p = 0.067; effect is essentially constant across severity levels).
+- feature_015 does NOT modify the feature_027 treatment effect (interaction
+  p = 0.24).
+- feature_011 has no independent prognostic effect after adjustment, and no
+  unique treatment-effect-modifier role beyond its mutual exclusivity with
+  feature_023/feature_022.
+- No continuous feature beyond feature_005 modifies the feature_027 effect.
+- No binary feature outside {feature_006, feature_023, feature_022} modifies
+  the feature_027 effect.
+- 22 of the 33 features (most of the lab values and the rare binary features
+  feature_002, _016, _028) are uninformative noise for both prognosis and
+  treatment-effect modification.
+
+
+FINAL TREATMENT-EFFECT HETEROGENEITY HYPOTHESIS
+-----------------------------------------------
+TREATMENT: feature_027
+OUTCOME: pfs_months (higher is better)
+DIRECTION: POSITIVE within subgroup
+SUBGROUP: feature_006 = 0 AND feature_023 = 0 AND feature_022 = 0 AND
+          feature_005 <= ~5 (low)
+EFFECT: +5.03 months PFS within subgroup vs +0.09 mo outside.
+
+All four predicates are required to define the subgroup of maximal benefit. The
+three mutation predicates each independently abolish the treatment effect when
+violated; the low-feature_005 predicate sharpens an otherwise +2.76-mo benefit
+that persists across the wild-type subgroup. Final integrated OLS model with
+this treatment-interaction block achieves R^2 = 0.90, up from R^2 = 0.86 for
+the main-effects-only specification.
+
+Clinically, this pattern is highly reminiscent of anti-EGFR therapy
+(cetuximab/panitumumab) in metastatic colorectal cancer, where benefit is
+restricted to RAS/RAF wild-type patients and is enhanced by lower baseline
+tumor burden / lower CEA. The opaque labels in this dataset are consistent
+with: feature_027 = anti-EGFR therapy; feature_006/_023/_022 = mutually-
+informative driver mutations (KRAS / NRAS / BRAF or analogs); feature_005 =
+a tumor-burden marker (CEA-like); feature_001 = stage or performance status;
+feature_015 = a strong baseline prognostic continuous (e.g., earlier diagnosis
+date or some indolent-disease indicator).

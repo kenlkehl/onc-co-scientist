@@ -1,0 +1,168 @@
+ds001_prostate — Analysis Summary
+=====================================
+
+Cohort: 50,000 prostate-cancer patients aggregated from electronic health records.
+Outcome: objective_response (binary; 24.0% positive overall, 12,011/50,000).
+Features: 32 de-identified covariates (one of which, feature_030, is constant and was dropped).
+
+Approach
+--------
+We used a propose-test-refine loop. In each iteration we (a) named one or
+more hypotheses about marginal effects, subgroup heterogeneity, or treatment
+modification, (b) tested them with logistic regression, stratified
+risk-difference analysis, chi-square tests, and decision-tree subgroup
+discovery, and (c) used the results to refine the next iteration. After
+characterising main effects we ran systematic treatment-by-feature
+interaction screens for every binary covariate with a null marginal
+association (the natural "candidate randomized treatment" set) plus the one
+binary covariate with the largest positive marginal effect, and we
+followed every signal up with stratified RDs, joint multivariable models,
+and a CART tree.
+
+Main effects
+------------
+* Strong positive marginal predictor of response:
+  - feature_008: response 36.1% on vs 15.9% off, RD +0.20 (OR 2.99, p<1e-300).
+
+* Strong negative marginal predictors of response (adverse prognostic flags):
+  - feature_013: 15.4% vs 34.6%, RD -0.19 (OR 0.34, p<1e-300).
+  - feature_015: 16.0% vs 26.0%, RD -0.10 (OR 0.54, p=2e-98).
+  - feature_021: 15.0% vs 25.0%, RD -0.10 (OR 0.53, p=5e-56).
+  - feature_027: 17.6% vs 24.2%, RD -0.07 (OR 0.67, p=3e-9).
+  - feature_001 (ordinal 0/1/2): rates 28.2%/22.8%/18.2%, monotone trend p=1e-72.
+  - feature_022 (right-skewed continuous, PSA-like): inverse, p=2e-94.
+  - feature_020 (range 0-24.6): inverse, p=3e-29.
+  - feature_024: inverse, p=6e-8.
+  - feature_002: positive, p=4e-6.
+
+* No marginal association: feature_005, feature_006, feature_004, feature_011,
+  feature_017, feature_019, feature_023 (all binary, all RD ~ 0, p > 0.3),
+  and feature_010 (Gleason-like 6-10), feature_016 (age), feature_018,
+  feature_026, feature_009, feature_029, feature_003, feature_012,
+  feature_025, feature_028, feature_007, feature_014, feature_032, feature_031.
+
+Treatment identification
+-----------------------
+feature_008 has the largest positive marginal effect on objective_response
+and was treated as the candidate treatment indicator. Its marginal effect
+(OR ~ 3) is large enough that an interaction screen was warranted before any
+subgroup conclusion.
+
+Treatment-effect heterogeneity (the headline result)
+---------------------------------------------------
+Pairwise multiplicative-interaction logistic regression of feature_008
+against every other covariate identified four binary modifiers, each
+strongly significant after Bonferroni correction across ~150 tests:
+
+  feature_008 x feature_013  beta_int = -1.98  (p effectively 0)
+  feature_008 x feature_015  beta_int = -1.24  (p = 1.4e-93)
+  feature_008 x feature_021  beta_int = -1.14  (p = 3.3e-42)
+  feature_008 x feature_027  beta_int = -1.28  (p = 1.8e-19)
+
+Stratified risk differences confirm the size of each modifier:
+
+           treated  control   RD       p
+  feature_013=0  61.0%   16.9%   +0.440   ~0
+  feature_013=1  15.8%   15.0%   +0.008   0.09
+  feature_015=0  41.1%   16.0%   +0.251   ~0
+  feature_015=1  16.5%   15.7%   +0.008   0.27
+  feature_021=0  38.5%   16.0%   +0.225   ~0
+  feature_021=1  15.3%   14.7%   +0.006   0.57
+  feature_027=0  36.7%   15.8%   +0.209   ~0
+  feature_027=1  16.2%   18.4%   -0.022   0.30
+
+The four flags are statistically INDEPENDENT of each other (all pairwise
+phi correlations ~0; all chi-square p-values > 0.37), so they cannot be
+explained as redundant codings of a single underlying state.
+
+Joint subgroup
+--------------
+Because the four flags are independent and each individually suppresses
+the feature_008 effect, we tested the joint definition
+
+    fav := (feature_013=0 AND feature_015=0 AND feature_021=0 AND feature_027=0)
+
+which selects 15,681 patients (31.4% of the cohort).
+
+           N      treated  control   RD       OR
+  fav=1   15,681  79.78%   17.21%   +0.626   18.98   p < 1e-300
+  fav=0   34,319  16.06%   15.30%   +0.008    1.06   p = 0.10
+
+A logistic regression with feature_008 x fav interaction gives an OR for
+treatment of 18.98 in the favorable subgroup and 1.06 elsewhere. The
+interaction term is the largest single explanatory term in any model we
+fit. A shallow CART decision tree (max_depth=5) trained on the full feature
+set independently selects exactly the same split structure: feature_008
+first; then within feature_008=1, sequential splits on feature_013,
+feature_015, feature_021. The only leaf predicting "response" is the path
+feature_008=1, feature_013=0, feature_015=0, feature_021=0. (feature_027
+is rare enough that it falls below the tree's leaf-size threshold but its
+suppressive effect is captured by the regression analyses.)
+
+Counts of flags ("any flag" governs the heterogeneity, not a graded count):
+  n_flags=0: RD = +0.626  (n=15,681)
+  n_flags=1: RD = +0.009  (n=25,372)
+  n_flags=2: RD = +0.008  (n= 8,186)
+  n_flags=3: RD = -0.022  (n=   745)
+  n_flags=4: RD = -0.091  (n=    16)
+The drop is essentially complete at the first flag — adding more flags does
+not further attenuate the (already null) treatment effect.
+
+Tests for additional modifiers
+------------------------------
+* Within the favorable subgroup the feature_008 RD is essentially constant
+  across age tertiles (0.626, 0.619, 0.632), feature_010 levels 6-10
+  (0.629, 0.621, 0.635, 0.615, 0.634), feature_022 quartiles (0.633,
+  0.628, 0.624, 0.618), and other continuous lab features. A weak trend
+  across feature_001 levels (0.646, 0.622, 0.590) does not reach
+  significance (interaction p = 0.069 within the subgroup).
+* The apparent modification of feature_008 by continuous feature_022 in
+  the marginal data is fully mediated by feature_013 (median feature_022
+  is 7.4 in feature_013=0 vs 32.9 in feature_013=1). In a joint model that
+  includes the four flag interactions, feature_008 x feature_022, x
+  feature_020, x feature_002, and x feature_001 are all non-significant
+  (p >= 0.22).
+* Pairwise interaction screens of the seven null-marginal binaries
+  (feature_005, _006, _004, _011, _017, _019, _023) against the four
+  flags and against each other found no significant heterogeneity after
+  Bonferroni. These features appear to be true noise / neutral
+  demographic indicators with respect to objective_response.
+
+Hypotheses supported
+--------------------
+* feature_008 raises objective_response (large marginal effect).
+* feature_013, feature_015, feature_021, feature_027 are independent
+  adverse prognostic flags and independent suppressors of the feature_008
+  effect.
+* feature_001 has a monotone inverse association with response.
+* feature_022, feature_020, feature_024 have inverse associations;
+  feature_002 has a positive association.
+* The favorable joint predicate (all four flags absent) fully
+  characterises the responsive subgroup.
+
+Hypotheses refuted
+------------------
+* The treatment effect is heterogeneous on continuous feature_022 — refuted
+  after adjustment (mediated by feature_013).
+* The treatment effect is heterogeneous on age, Gleason-like
+  feature_010, or feature_001 — refuted (RDs essentially flat).
+* feature_005, _006, _004, _011, _017, _019, _023 contain hidden
+  treatment-like effects in some subgroup — refuted on systematic
+  pairwise screens.
+* The number of flags governs the heterogeneity in a graded fashion —
+  refuted; the suppression is essentially complete at the first flag.
+
+Final, best-supported treatment-effect-heterogeneity hypothesis
+--------------------------------------------------------------
+Treatment: feature_008.
+Outcome: objective_response (binary).
+Direction: positive (treatment raises response).
+Subgroup definition (must hold in entirety): feature_013 = 0
+AND feature_015 = 0 AND feature_021 = 0 AND feature_027 = 0.
+In that subgroup (n=15,681; 31.4% of the cohort) the response rate
+is 79.8% on feature_008 vs 17.2% off feature_008 (RD = +62.6
+percentage points; OR = 18.98). In any patient with at least one
+of the four flags set (n=34,319; 68.6% of the cohort) feature_008 has
+no clinically meaningful effect (RD = +0.8 percentage points;
+OR = 1.06). Each of the four flags suppresses the effect
+independently and essentially completely.

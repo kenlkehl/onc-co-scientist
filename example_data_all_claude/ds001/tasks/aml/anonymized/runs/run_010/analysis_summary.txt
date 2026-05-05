@@ -1,0 +1,197 @@
+Analysis summary — ds001_aml (50,000 patients, 35 anonymized features, binary outcome `objective_response`)
+=================================================================================================================
+
+Overview
+--------
+The cohort contains 50,000 AML patient records with 16 binary features (e.g., presumed mutations or
+treatment indicators) and 19 continuous features (e.g., presumed labs and performance status). The outcome
+`objective_response` is binary, with an overall response rate of 0.1875 (9,375 / 50,000). The analysis
+proceeded through 18 iterations of hypothesis generation, testing, and refinement, focused first on
+identifying main-effect predictors and then on systematically searching for treatment-effect heterogeneity.
+
+1. Univariable main-effect screen (iteration 1)
+-----------------------------------------------
+A chi-square screen of all 16 binary features identified five with p < 1e-4:
+  - feature_014: response 0.235 (feature=1, prevalence 0.300) vs 0.167 (feature=0); OR 1.53; p = 5.8e-70
+  - feature_001: 0.221 vs 0.165 (prevalence 0.401); OR 1.43; p = 1.9e-55
+  - feature_021: 0.220 vs 0.166 (prevalence 0.400); OR 1.41; p = 6.6e-51
+  - feature_026: 0.168 vs 0.191 (prevalence 0.149); OR 0.86; p = 3.3e-6
+  - feature_009: 0.166 vs 0.190 (prevalence 0.100); OR 0.85; p = 3.5e-5
+The remaining 11 binary features were non-significant (p > 0.1).
+
+Among continuous features, two-sample t-tests showed feature_004 (range 0–2; likely ECOG performance status)
+as by far the strongest discriminator: mean 0.669 in responders vs 0.826 in non-responders (p = 1.0e-91).
+Other significant continuous main effects: feature_024 (mean diff -1.80, p = 2.3e-16; lower in responders),
+feature_020 (-0.51, p = 8.0e-31; lower in responders), feature_029 (+0.029, p = 2.8e-7; higher in
+responders), feature_027 (-0.48, p = 6.0e-6), feature_022 (-1.11, p = 1.8e-4). Their AUCs are 0.43–0.52,
+i.e., individually weak discriminators.
+
+2. Multivariable adjustment (iteration 2)
+-----------------------------------------
+A logistic regression of `objective_response` on all 35 features (continuous standardized) confirmed and
+ranked the same independent predictors. After mutual adjustment:
+  feature_014   OR 1.55  z = +17.9
+  feature_001   OR 1.45  z = +16.0
+  feature_021   OR 1.44  z = +15.4
+  feature_009   OR 0.83  z = -4.6
+  feature_026   OR 0.85  z = -5.0
+  feature_004   OR 0.78 per SD  z = -20.4
+  feature_020   OR 0.87 per SD  z = -11.6
+  feature_024   OR 0.91 per SD  z =  -8.6
+  feature_029   OR 1.06 per SD  z =  +5.3
+  feature_027   OR 0.94 per SD  z =  -4.5
+  feature_022   OR 0.95 per SD  z =  -3.8
+All remaining features (sex-like feature_010, age-like feature_011, hemoglobin-like feature_028, sodium-
+like feature_023, potassium-like feature_002, calcium-like feature_017, etc.) were non-significant
+(p > 0.05) after adjustment.
+
+3. Independence of the three top binary predictors (iteration 3)
+----------------------------------------------------------------
+feature_001, feature_014, and feature_021 were pairwise independent (all |phi| < 0.005, p > 0.4),
+suggesting they index distinct constructs (one likely a treatment indicator, the other two likely
+biomarkers — though they are exchangeable in the data).
+
+4. Pairwise treatment-by-feature interactions (iteration 4)
+------------------------------------------------------------
+Pairwise logistic models with interaction revealed huge positive interactions among the three:
+  feature_001 x feature_014: beta_int = +1.060, z = +21.5
+  feature_001 x feature_021: beta_int = +0.883, z = +18.8
+  feature_014 x feature_021: beta_int = +1.055, z = +21.4
+In each pairwise model the main effects of the two binary terms collapse to near zero, so essentially
+all of their joint effect is captured by the interaction.
+
+5. Three-way interaction model (iteration 5)
+--------------------------------------------
+A saturated three-way logit yielded:
+  feature_001*feature_014*feature_021 beta = +2.126, OR = 8.38, z = +20.4, p < 1e-90
+None of the three main effects nor any of the three pairwise interactions remained significant in the
+same model (largest residual p = 0.085 for feature_001*feature_021). The empirical 8-cell tabulation
+showed:
+  (f001, f014, f021)        n      response
+  (0,0,0)               12,533     0.172
+  (0,0,1)                8,383     0.162
+  (0,1,0)                5,404     0.160
+  (0,1,1)                3,624     0.157
+  (1,0,0)                8,458     0.164
+  (1,0,1)                5,612     0.169
+  (1,1,0)                3,585     0.160
+  (1,1,1)                2,401     0.633
+Response is essentially flat at ~0.16 in every cell except the triple-positive cell, where it jumps to
+0.63 — a clear three-way pattern with no lower-order signal.
+
+6. Adverse-marker suppressors (iteration 6)
+-------------------------------------------
+Within the (f001=1, f014=1, f021=1) cell, both feature_026 and feature_009 are powerful suppressors:
+  feature_026 = 1 (n=376):    response 0.184
+  feature_026 = 0 (n=2,025):  response 0.717
+  feature_009 = 1 (n=276):    response 0.188
+  feature_009 = 0 (n=2,125):  response 0.691
+A joint logit with HOT indicator and HOT*suppressor terms confirmed:
+  HOT * feature_026 beta = -2.66, OR = 0.07, z = -17.7
+  HOT * feature_009 beta = -2.55, OR = 0.078, z = -14.9
+
+7. Five-feature responder subgroup (iteration 7)
+------------------------------------------------
+The cleanest definition of the responder subgroup is:
+    feature_001 = 1  AND  feature_014 = 1  AND  feature_021 = 1
+                     AND  feature_026 = 0  AND  feature_009 = 0
+Within this subgroup: n = 1,790 (3.6% of cohort), response rate = 0.786.
+Outside this subgroup: n = 48,210, response rate = 0.165.
+Risk difference +0.621; odds ratio 18.55; chi-square p effectively 0.
+
+8. Treatment-effect heterogeneity, treating each of the trio as 'treatment' (iterations 8–9, 13–14)
+---------------------------------------------------------------------------------------------------
+Because feature_001, feature_014, and feature_021 are statistically exchangeable in this dataset
+(the pattern is symmetric under any relabeling), each was tested as a candidate treatment indicator:
+
+  - As treatment = feature_001: within (f014=1, f021=1, f026=0, f009=0), feature_001 effect is +0.628
+    absolute (response 0.786 vs 0.158, OR ~21). Outside this subgroup, the feature_001 effect is +0.011
+    (essentially null).
+  - As treatment = feature_014: within (f001=1, f021=1, f026=0, f009=0), feature_014 effect is +0.630
+    absolute. Outside, near zero.
+  - As treatment = feature_021: within (f001=1, f014=1, f026=0, f009=0), feature_021 effect is +0.628
+    absolute. Outside, near zero.
+
+In each direction the heterogeneity is overwhelming and is dominated by the same five-feature subgroup.
+Continuous-feature interaction screens with feature_001 as treatment found only feature_020 reaching
+p < 0.01 (beta = +0.075/SD, p = 2.0e-3) — a far weaker modifier than the binary biomarker terms.
+
+9. Suppressor effects are pure interactions (iteration 12)
+----------------------------------------------------------
+Outside the (f001=1, f014=1, f021=1) cell, feature_026 and feature_009 each show no association with
+response (chi-square p ~ 0.86–0.95). Their negative main effects in the unstratified data are therefore
+entirely attributable to suppressing the favorable subgroup; in the absence of the favorable triple they
+are clinically inert in this dataset.
+
+10. Within-subgroup heterogeneity (iteration 11, 15)
+----------------------------------------------------
+Within the favorable subgroup (n=1,790, response 0.786), the only meaningful residual modifiers are
+continuous:
+  - feature_004 (ECOG-like, 0/1/2): graded response 0.859, 0.772, 0.668 across f004 = 0, 1, 2
+    (t-test within HOT: m_resp 0.752 vs m_nonr 1.008, p = 4.4e-11). However, the global HOT*feature_004
+    interaction is not significant (z = -1.15, p = 0.25), suggesting feature_004 is a generally-applied
+    risk factor rather than a treatment-effect modifier.
+  - feature_020 (peripheral-blast-like): m_resp 3.77 vs m_nonr 4.56 within HOT (p = 4.0e-4).
+No additional binary feature outside {f001, f014, f021, f026, f009} reached p < 0.05 within the
+favorable subgroup.
+
+11. Suppressor synergy (iteration 16)
+-------------------------------------
+Both suppressors together did not push response further below baseline:
+  (f026=0, f009=0): 0.786
+  (f026=0, f009=1): 0.187
+  (f026=1, f009=0): 0.182
+  (f026=1, f009=1): 0.195
+Either suppressor alone is sufficient to abolish the favorable subgroup effect; their effects are not
+synergistic.
+
+12. Final best-supported treatment-effect subgroup hypothesis (iteration 18)
+----------------------------------------------------------------------------
+Best-supported summary hypothesis for `objective_response` in this AML cohort:
+
+  Among patients with feature_014 = 1 AND feature_021 = 1 AND feature_026 = 0 AND feature_009 = 0,
+  the binary indicator feature_001 raises the probability of objective_response from ~0.16 to ~0.79
+  (absolute treatment effect ~+0.63, OR ~21). Outside this biomarker-positive subgroup the absolute
+  effect of feature_001 is at most ~+0.01 and not clinically meaningful.
+
+The same conclusion holds symmetrically when feature_014 or feature_021 is taken as the 'treatment'
+indicator and the other two of {feature_001, feature_014, feature_021} are folded into the biomarker
+subgroup along with feature_026 = 0 and feature_009 = 0. Without external annotation it is not possible
+from the data alone to determine which of feature_001, feature_014, feature_021 is the assigned therapy
+versus the predictive biomarker; clinically, the AML pattern is most consistent with one of them being a
+regimen indicator (e.g., venetoclax-containing therapy) and the other two being favorable predictive
+biomarkers (e.g., NPM1, IDH1/2 mutations), with feature_026 and feature_009 plausibly acting as adverse
+markers (e.g., TP53, FLT3-ITD) that are known to suppress response to that regimen. This is a hypothesis
+about labels, not a finding from the data; the finding is the exact 5-feature subgroup definition above.
+
+Hypotheses supported vs refuted
+-------------------------------
+Supported:
+  - feature_014, feature_001, feature_021 each have strong, replicating, independent positive
+    associations with response.
+  - feature_009 and feature_026 each have negative associations.
+  - feature_004 is the dominant continuous predictor of non-response.
+  - Three-way interaction f001*f014*f021 dominates the response signal.
+  - Two-way interactions f001*f014, f001*f021, f014*f021 each strongly positive in pairwise models.
+  - HOT * feature_026 and HOT * feature_009 each strongly negative.
+  - Five-feature predicate (f001=1 ∧ f014=1 ∧ f021=1 ∧ f026=0 ∧ f009=0) gives ~0.79 response vs ~0.17.
+  - feature_004 (ECOG-like) is a generally-applied risk factor, with graded effect within HOT.
+Refuted / not supported:
+  - feature_026 and feature_009 do not have independent main effects outside of their interaction with
+    the favorable subgroup.
+  - No continuous feature meaningfully modifies the binary treatment-effect terms after correction.
+  - feature_004 does not significantly modify the HOT subgroup treatment effect (HOT*f004 p = 0.25).
+  - feature_026 and feature_009 are not synergistic suppressors.
+  - No additional binary predicate beyond the five-feature subgroup contributes within HOT.
+
+Overall conclusions
+-------------------
+The dataset is governed by a single, very crisp predictive structure: a five-feature subgroup defined by
+three favorable binary indicators (feature_001, feature_014, feature_021 all = 1) and the absence of two
+adverse binary markers (feature_026 = 0, feature_009 = 0) achieves an objective response rate near 0.79,
+whereas all other patients respond near the cohort baseline of ~0.17. Continuous features contribute
+secondary, generally-applied prognostic information (most prominently a graded ECOG-like effect via
+feature_004 and a peripheral-blast-like effect via feature_020), but they do not materially modify the
+binary treatment-by-biomarker structure. The AML clinical narrative most consistent with this data is a
+biomarker-targeted regimen whose benefit is gated by joint biomarker eligibility and is abrogated by
+either of two adverse markers.

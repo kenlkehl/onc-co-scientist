@@ -1,0 +1,163 @@
+ANALYSIS SUMMARY — ds001_crc (50,000 patients, outcome pfs_months)
+================================================================================
+
+OVERVIEW
+--------
+The dataset contains 33 anonymized features (mix of binary/ordinal/continuous)
+and one outcome, pfs_months (progression-free survival in months). I ran 21
+iterations of propose-test-refine, beginning with univariate screening, moving
+through a multivariable model, then to systematic treatment-effect heterogeneity
+analyses (stratified differences, formal interactions, threshold search,
+leave-one-out validation, and tree-based virtual-twin subgroup discovery).
+
+IDENTIFICATION OF THE TREATMENT
+-------------------------------
+feature_027 (binary, prevalence ~20%) was the only binary feature in the cohort
+with a positive univariate association with pfs_months (+0.97 months,
+p<1e-300) and a positive multivariable-adjusted coefficient (+0.94, p<1e-300).
+Treatment assignment was essentially balanced across every candidate baseline
+feature (treatment rate 19.7%-20.6% across all binary strata; |Pearson r| < 0.01
+for treatment vs every continuous feature). I therefore treated feature_027 as
+the treatment indicator, with the cohort effectively serving as a randomized
+or quasi-randomized design.
+
+MAIN-EFFECT FINDINGS (multivariable OLS on pfs_months, R^2 = 0.86)
+--------------------------------------------------------------------------------
+Direction confirmed for all major predictors. Largest effects (signed beta, p):
+
+  feature_015 (continuous, 30-90):   +0.176 per unit         p < 1e-300
+  feature_001 (ordinal 0/1/2):       -1.171 per level        p < 1e-300
+  feature_014 (binary):              -1.362                  p < 1e-300
+  feature_027 (binary, treatment):   +0.943 (unadjusted avg) p < 1e-300
+  feature_025 (continuous):          -0.076 per unit         p < 1e-300
+  feature_019 (continuous, 1.5-5.5): +0.469 per unit         p < 1e-300
+  feature_023 (binary):              -0.354                  p < 1e-300
+  feature_022 (binary):              -0.357                  p < 1e-78
+  feature_006 (binary):              -0.287                  p < 1e-300
+  feature_005 (continuous):          -0.005 per unit         p ~ 1e-97
+  feature_021 (continuous):          -0.0004 per unit        p ~ 1e-19
+
+Of these, feature_015 dominates the continuous variation (its 30-90 range maps
+to ~10 months PFS). feature_001, feature_014, feature_023, feature_022, and
+feature_006 are the major adverse binary/ordinal prognostic factors.
+feature_011 had a small positive univariate effect (~+0.22 mo, p=2e-4) that
+was largely explained away in the adjusted model (+0.02, p=0.37).
+
+TREATMENT-EFFECT HETEROGENEITY (the main finding)
+--------------------------------------------------------------------------------
+Three binary features and one continuous feature each independently abolished
+the treatment benefit when "unfavorable":
+
+  feature_006:  off (=0) tx_eff=+1.48; on (=1) tx_eff=+0.03 (NS)
+  feature_023:  off (=0) tx_eff=+1.66; on (=1) tx_eff=+0.03 (NS)
+  feature_022:  off (=0) tx_eff=+1.03; on (=1) tx_eff=-0.16 (NS)
+  feature_005:  whole-cohort tx*feature_005 interaction beta = -0.0253
+                (p=8.7e-58); within (006=0,023=0,022=0) the interaction is
+                even sharper (-0.065, p=7.4e-136), with a clean threshold at
+                feature_005 = 5.0.
+
+A formal joint regression of pfs_months on tx + feature_006 + feature_023 +
+tx:feature_006 + tx:feature_023 yielded tx*feature_006 = -1.47 (p~1e-178)
+and tx*feature_023 = -1.64 (p~1e-235): each unfavorable binary biomarker
+subtracts roughly 1.5 months of treatment benefit. Adding feature_022
+removes another ~3 months of benefit when on, even within the (006=0,023=0)
+cell. Adding the continuous feature_005 with threshold 5 sharpens the rule
+further:
+
+  Decile of feature_005 (within triple-negative subgroup):
+    Decile 1 (<=0.96):  tx_eff = +4.89
+    Decile 2 (<=1.61):  +5.13
+    Decile 3 (<=2.37):  +5.02
+    Decile 4 (<=3.27):  +5.09
+    Decile 5 (<=4.47):  +5.02
+    Decile 6 (<=6.02):  +1.81  <-- transition zone
+    Decile 7 (<=8.25):  -0.05
+    Deciles 8-10:       all within +/-0.08
+
+Thus the treatment is sharply effective up to feature_005=~5 and then
+abruptly stops working.
+
+THE FINAL TREATMENT-EFFECT SUBGROUP
+--------------------------------------------------------------------------------
+The full responder rule that emerged is:
+
+  RESPONDER  =  feature_006 = 0
+                AND feature_023 = 0
+                AND feature_022 = 0
+                AND feature_005 <= 5
+
+Within this subgroup (n = 9,338; 18.7% of the cohort, with 1,905 treated and
+7,433 untreated), feature_027 (treatment) increases pfs_months by:
+
+  Unadjusted:   tx_eff = +5.014 months (mean PFS 9.10 treated vs 4.09 control;
+                p < 1e-300)
+  Adjusted (multivariable OLS within the subgroup): +4.980 months
+                (p < 1e-300)
+
+Outside this subgroup (n = 40,662) the unadjusted treatment effect is
++0.024 months (p = 0.36, NOT significant). The interaction term
+tx*responder in the simple two-way model is +4.99 (p < 1e-300).
+
+NECESSITY OF EACH PREDICATE (leave-one-out validation)
+--------------------------------------------------------------------------------
+Dropping any one of the four predicates from the responder definition
+re-admits non-responders and dilutes the within-subgroup tx effect:
+
+  Drop feature_005<=5 (n=17,372): tx_eff drops to +2.76
+  Drop feature_006=0  (n=14,492): tx_eff drops to +3.30
+  Drop feature_023=0  (n=16,612): tx_eff drops to +2.85
+  Drop feature_022=0  (n=10,117): tx_eff drops to +4.62
+
+The full 4-predicate rule (n=9,338, +5.01) outperforms every leave-one-out
+version, so each predicate is necessary.
+
+INDEPENDENT REPLICATION VIA TREE-BASED DISCOVERY (virtual twins)
+--------------------------------------------------------------------------------
+I trained two random-forest regressors (treated arm, control arm; max_depth=8,
+n=200), predicted counterfactual outcomes for every patient, computed an
+individual treatment effect tau_i, and fit a depth-4 regression tree to those
+tau values. The top-of-tree splits, in order, were:
+
+  feature_005 <= 4.95
+    feature_023 <= 0.5
+      feature_006 <= 0.5
+        feature_022 <= 0.5  -> predicted tx effect +4.89
+        feature_022 >  0.5  -> predicted tx effect -0.09
+
+Every other leaf in the tree had predicted tx effect within +/-0.30 of zero.
+The data-driven discovery exactly reproduces the manually-derived 4-feature
+rule, providing independent corroboration.
+
+WHAT I ALSO RULED OUT
+--------------------------------------------------------------------------------
+- Within the responder subgroup, none of the remaining 29 features further
+  modifies the treatment effect by more than 0.3 months (e.g., feature_011
+  =0/1: +5.00/+5.24; feature_019 quartiles all in [+4.94, +5.12]).
+- No combination of feature_006, feature_023, feature_022, feature_005>5
+  defines a treatment-responsive subpopulation outside the main rule
+  (largest cell tx effect outside the responder rule was +0.11, p=0.12).
+- Among continuous features, only feature_005 has a meaningful treatment-effect
+  interaction (whole-cohort tx*f interaction p<1e-50). All others have
+  interaction p > 0.10.
+- feature_005 <= 5 alone (whole cohort, ignoring binary biomarkers) is NOT
+  enough: it gives a diluted +1.79 month tx effect because most non-responder
+  cells also have feature_005 <= 5.
+
+CONCLUSIONS
+--------------------------------------------------------------------------------
+1. feature_027 is the treatment.
+2. feature_015 (positive), feature_001 (negative), and feature_014 (negative)
+   are the dominant prognostic factors; the multivariable model explains 86%
+   of variance in pfs_months.
+3. The treatment is highly effective (~+5 months PFS) but ONLY within a
+   precisely defined 4-feature biomarker subgroup:
+
+       feature_006 = 0  AND  feature_023 = 0  AND  feature_022 = 0
+       AND  feature_005 <= 5
+
+   Outside this subgroup the treatment provides no detectable benefit
+   (estimate +0.02, p=0.36). Each of the four predicates is independently
+   necessary, and the rule is independently rediscovered by virtual-twin
+   tree-based subgroup discovery. This is the best-supported treatment-effect
+   subgroup hypothesis in the cohort and should be the final answer for the
+   pfs_months outcome.

@@ -1,0 +1,166 @@
+ANALYSIS SUMMARY — ds001_aml (n=50,000 AML patients, EHR-derived)
+==================================================================
+
+OVERVIEW
+--------
+The dataset contains 50,000 AML patients with 35 baseline features
+(demographics, ECOG, AML mutational status, labs, treatments) and a single
+binary outcome `objective_response` (overall rate 18.75%). Six treatments
+are recorded: midostaurin, gilteritinib, ivosidenib, enasidenib,
+venetoclax+azacitidine (ven/aza), and 7+3 induction. Patients can carry
+multiple treatment flags (likely sequential lines).
+
+The analytic plan walked main effects → multivariable adjustment → formal
+treatment-by-modifier interaction screening → progressive refinement of the
+best-supported subgroup hypothesis.
+
+MAIN EFFECTS ON OBJECTIVE RESPONSE
+-----------------------------------
+Binary features (chi-square):
+- npm1_mutation=1: 23.46% vs 16.73% (p=5.8e-70, Δ=+6.7%)
+- unfit_for_intensive=1: 22.10% vs 16.51% (p=1.9e-55, Δ=+5.6%)
+- treatment_venetoclax_azacitidine=1: 21.96% vs 16.61% (p=6.6e-51, Δ=+5.4%)
+- complex_karyotype=1: 16.81% vs 19.09% (p=3.3e-6, Δ=-2.3%)
+- tp53_mutation=1: 16.57% vs 18.99% (p=3.5e-5, Δ=-2.4%)
+- All four other targeted therapies (midostaurin, gilteritinib,
+  ivosidenib, enasidenib) and 7+3 showed no main-effect difference (all
+  p>0.10). FLT3-ITD, FLT3-TKD, IDH1, IDH2, secondary_aml, and sex_female
+  were also not associated with response on their own.
+
+Continuous features (univariate logistic):
+- ecog_ps: -0.353 per point (p=1.6e-90) — by far the strongest performance
+  predictor.
+- weight_loss_pct_6mo: -0.036 per percent (p=1.1e-30).
+- blast_pct_marrow: -0.005 per percent (p=2.4e-16).
+- albumin_g_dl: +0.118 per g/dL (p=2.9e-7).
+- crp_mg_l: -0.006 per mg/L (p=6.1e-6).
+- wbc_k_per_ul: -0.0018 per K/uL (p=1.9e-4).
+- age_years: no detectable association (p=0.88) — its contribution is
+  fully captured by `unfit_for_intensive` and `ecog_ps`.
+
+MULTIVARIABLE LOGISTIC REGRESSION
+----------------------------------
+Adjusting for all 35 features simultaneously preserved the directions:
+positive predictors npm1_mutation (+0.44), unfit_for_intensive (+0.37),
+ven/aza (+0.36), albumin (+0.12); negative predictors ecog_ps (-0.36),
+weight_loss (-0.037), tp53 (-0.19), complex_karyotype (-0.17),
+blast_pct_marrow (-0.005), crp (-0.007), wbc (-0.002). All other treatments
+remained null after adjustment. Pseudo-R² = 0.032.
+
+TREATMENT-EFFECT HETEROGENEITY (FORMAL INTERACTION SCREEN)
+-----------------------------------------------------------
+For each of the 6 treatments, I fit a logistic regression with each of 9
+binary modifiers, recording the interaction coefficient and p-value
+(54 tests). After also screening continuous-feature interactions (60 tests)
+and 2-way subgroup combinations, only one treatment showed strong
+heterogeneity: venetoclax+azacitidine.
+
+  - ven/aza × npm1_mutation:    +1.055, p = 5.5e-102
+  - ven/aza × unfit_for_intensive: +0.883, p = 1.1e-78
+  - ven/aza × tp53_mutation:    -0.409, p = 4.7e-7  (suppressor)
+  - ven/aza × complex_karyotype: -0.306, p = 6.0e-6 (suppressor)
+
+Targeted therapies that should canonically interact with their cognate
+biomarker (midostaurin/gilteritinib with FLT3, ivosidenib with IDH1,
+enasidenib with IDH2) showed no such interaction in this dataset:
+
+  - midostaurin × flt3_itd: coef -0.106, p=0.19; in FLT3-ITD+ patients,
+    response 18.0% on midostaurin vs 19.4% off (TE=-0.015).
+  - gilteritinib × flt3_itd: coef +0.079, p=0.32; in FLT3-ITD+, 18.7% vs
+    18.6% (TE=+0.002).
+  - ivosidenib × idh1_mutation: coef -0.304, p=0.077; in IDH1+, 15.4% on
+    ivosidenib vs 19.5% off (point estimate goes the *wrong* direction).
+  - enasidenib × idh2_mutation: coef +0.039, p=0.79; in IDH2+, 19.5% vs
+    19.1% (TE=+0.004).
+
+These cognate interactions are not detectable in the cohort; the recorded
+`objective_response` outcome appears insensitive to them.
+
+DRILLING INTO THE VEN/AZA SIGNAL
+---------------------------------
+A 2x2 stratification by NPM1 × unfit revealed that the ven/aza effect
+lives almost entirely in a single cell:
+
+  NPM1=0, unfit=0: TE = -0.010 (n_t=8383, n_c=12533)
+  NPM1=0, unfit=1: TE = +0.005 (n_t=5612, n_c=8458)
+  NPM1=1, unfit=0: TE = -0.003 (n_t=3624, n_c=5404)
+  NPM1=1, unfit=1: TE = +0.474 (n_t=2401, n_c=3585; 63.3% vs 16.0%)
+
+A logistic model with the three-way ven*npm1*unfit interaction term
+yielded a coefficient of +2.13 (z=20.4, p<<1e-90) for the triple
+interaction; the lower-order ven, ven:npm1, ven:unfit terms were null.
+This shows that the effect is *not* additive over NPM1 and unfit — it
+requires both simultaneously.
+
+REFINING WITH SUPPRESSORS (TP53, COMPLEX KARYOTYPE)
+----------------------------------------------------
+Within the NPM1=1 & unfit=1 cell, further stratification by TP53 and CK
+showed each independently abolishes the effect:
+
+  TP53=0, CK=0:  TE=+0.628 (n=4531; 78.6% vs 15.8%, Fisher p≈0)
+  TP53=0, CK=1:  TE=+0.033 (n=818; 18.2% vs 14.9%, p=0.21)
+  TP53=1, CK=0:  TE=+0.004 (n=546; 18.7% vs 18.3%)
+  TP53=1, CK=1:  TE=+0.015 (n=91)
+
+Either an unfavorable mutation (TP53) or an unfavorable cytogenetic
+finding (complex karyotype) is sufficient to neutralize the response,
+even on top of an otherwise favorable NPM1+/unfit profile.
+
+FINAL FOUR-WAY SUBGROUP DEFINITION
+-----------------------------------
+The final best-supported treatment-effect subgroup is:
+
+  npm1_mutation = 1   AND
+  unfit_for_intensive = 1   AND
+  tp53_mutation = 0   AND
+  complex_karyotype = 0
+
+This subgroup (n=4531; 9.1% of the cohort) accounts for essentially the
+entirety of the ven/aza effect. Within it, response is 78.6% on ven/aza
+vs 15.8% off (Δ=+0.628, subgroup-by-treatment interaction
+coefficient = +2.99, p < 1e-300). Outside it, ven/aza TE = -0.003.
+
+Each of the four predicates is non-dispensable: violating any one drops
+the treatment effect to ≈0 (NPM1=0 violation: TE=+0.002; unfit=0:
+TE=-0.004; TP53=1: TE=+0.004; CK=1: TE=+0.033).
+
+Within the favorable subgroup, none of the other five treatments
+(midostaurin, gilteritinib, ivosidenib, enasidenib, 7+3) shows any
+meaningful effect (TEs between -0.019 and +0.059), so the ven/aza
+signal cannot be explained by treatment confounding.
+
+CONCLUSIONS
+-----------
+1. The strongest baseline predictors of objective_response are NPM1
+   mutation, fitness/ECOG, performance/cachexia/inflammation markers
+   (albumin, weight loss, CRP, blast %), and adverse genetics (TP53,
+   complex karyotype). Age per se carries no signal once fitness is
+   accounted for.
+
+2. Of the six treatments recorded, only venetoclax+azacitidine has a
+   clear effect on objective_response, and that effect is highly
+   localized: it requires patients to be NPM1-mutated, unfit for
+   intensive therapy, AND free of TP53 mutation and complex karyotype.
+   In this 9% subgroup the response rate is approximately 5x baseline
+   (~79% vs ~16%).
+
+3. The cognate biomarker-targeted therapies (FLT3 inhibitors midostaurin
+   and gilteritinib; IDH inhibitors ivosidenib and enasidenib) do not
+   demonstrate enhanced response in their respective biomarker-positive
+   populations in this dataset. This may reflect that
+   `objective_response` is a short-term endpoint that under-captures
+   their clinical benefit, or that the cohort's targeted-therapy
+   exposure is insufficiently differentiated from the standard arm
+   to reveal the effect.
+
+4. 7+3 induction shows no detectable response benefit overall and a
+   modestly negative interaction with complex karyotype (coef -0.21,
+   p=0.0015), which is consistent with the well-known refractoriness of
+   adverse-cytogenetic AML to intensive chemotherapy — though without a
+   main effect of 7+3 the practical interpretation is limited.
+
+5. The clean four-way subgroup result (NPM1+, unfit, TP53-, CK-) is
+   biologically coherent: it mirrors the patient population in which
+   ven/aza was originally developed (older/unfit, NPM1-mutant) and
+   matches the well-described resistance phenotypes (TP53,
+   complex/monosomal karyotype) reported in the trial literature.

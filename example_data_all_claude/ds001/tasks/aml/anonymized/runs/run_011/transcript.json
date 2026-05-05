@@ -1,0 +1,415 @@
+{
+  "dataset_id": "ds001_aml",
+  "model_id": "claude-opus-4-7",
+  "harness_id": "claude-code@anonymized-aml",
+  "max_iterations": 25,
+  "iterations": [
+    {
+      "index": 1,
+      "proposed_hypotheses": [
+        {"id": "h1.1", "text": "Among the binary features, at least one binary indicator (likely a treatment or comorbidity flag) is associated with a higher rate of objective_response in the cohort.", "kind": "novel"},
+        {"id": "h1.2", "text": "Among the continuous features, at least one (likely a disease-burden marker such as bone-marrow blast %, peripheral blast %, or WBC) is associated with a lower rate of objective_response."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h1.1", "h1.2"],
+          "code": "for each col c: chi2_contingency for binary, ttest_ind by response for continuous",
+          "result_summary": "Univariate screen of all 35 features against objective_response (overall ORR=0.1875). Strongest positive binary effects: feature_014 (+0.067 absolute, p=5.8e-70), feature_001 (+0.056, p=1.9e-55), feature_021 (+0.054, p=6.6e-51). Strongest negative effect: feature_004 ordinal 0/1/2 (-0.102 per level, p=1.8e-90). Strongest negative continuous: feature_020 (-0.51 unit diff between responders/nonresponders, p=1.7e-33), feature_024 (-1.80, p=2.0e-16), feature_022 (-1.11 on log scale, p=1.5e-4), feature_027 (-0.48 on log scale, p=1.6e-6).",
+          "p_value": 5.8e-70,
+          "effect_estimate": 0.0674,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "proposed_hypotheses": [
+        {"id": "h2.1", "text": "feature_004 (ordinal 0/1/2; behaves like an ECOG performance-status proxy) is independently associated with lower objective_response after controlling for all other features."},
+        {"id": "h2.2", "text": "feature_001, feature_014, and feature_021 each independently increase the probability of objective_response after multivariable adjustment, consistent with three separate treatment indicators."},
+        {"id": "h2.3", "text": "feature_026 and feature_009 are independently associated with lower objective_response after multivariable adjustment."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h2.1","h2.2","h2.3"],
+          "code": "sm.Logit(objective_response ~ all 35 features, with log1p transforms for skewed continuous features).fit()",
+          "result_summary": "Multivariable logistic regression. feature_004 OR per level = exp(-0.362)=0.70 (p<1e-90). feature_001 OR=exp(0.374)=1.45 (p<1e-50), feature_014 OR=exp(0.436)=1.55 (p<1e-70), feature_021 OR=exp(0.361)=1.43 (p<1e-50). feature_026 OR=exp(-0.169)=0.84 (p=5.7e-7), feature_009 OR=exp(-0.188)=0.83 (p=3.8e-6). Other independently significant negative predictors: log(feature_022) WBC, feature_024 BM blast %, feature_020 PB blasts, log(feature_027). Independently significant positive predictor: feature_029.",
+          "p_value": 1e-300,
+          "effect_estimate": -0.362,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "proposed_hypotheses": [
+        {"id": "h3.1", "text": "feature_001, feature_014, and feature_021 are not mutually exclusive: each pair co-occurs at the rate expected under independence, consistent with three separate co-administered treatment components."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h3.1"],
+          "code": "pd.crosstab for each pair of (feature_001,feature_014,feature_021)",
+          "result_summary": "All three pairwise cross-tabulations show approximately independent co-occurrence: e.g., P(f001=1)=0.401, P(f014=1)=0.300, joint P(f001=1,f014=1)=0.120 vs expected 0.120; P(f001=1,f021=1)=0.160 vs expected 0.161; P(f014=1,f021=1)=0.120 vs expected 0.120. No mutual exclusivity. Consistent with three independently assigned treatment flags.",
+          "p_value": null,
+          "effect_estimate": 0.0,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "proposed_hypotheses": [
+        {"id": "h4.1", "text": "Patients receiving any single one of {feature_001, feature_014, feature_021} have a higher response rate than patients receiving none of them."},
+        {"id": "h4.2", "text": "Patients receiving any two of {feature_001, feature_014, feature_021} have a higher response rate than patients receiving only one."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h4.1","h4.2"],
+          "code": "df['num_treat']=f001+f014+f021; df.groupby('num_treat')['objective_response'].mean()",
+          "result_summary": "Response rate by number of these treatments: 0=>0.172, 1=>0.162, 2=>0.163, 3=>0.633. Single and double combinations do NOT improve response over zero — they are essentially indistinguishable from baseline. Only the triple combination produces a dramatic uplift. Refutes h4.1 and h4.2.",
+          "p_value": null,
+          "effect_estimate": -0.010,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "proposed_hypotheses": [
+        {"id": "h5.1", "text": "Patients receiving ALL three of feature_001, feature_014, and feature_021 simultaneously (the 'triple combination') have a substantially higher objective_response rate than patients receiving fewer than three."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h5.1"],
+          "code": "df['triple']=(f001==1)&(f014==1)&(f021==1); ct=pd.crosstab(df['triple'],df['objective_response']); chi2_contingency(ct)",
+          "result_summary": "Triple-positive subgroup (n=2401, 4.8% of cohort) has objective_response rate 0.633 vs 0.165 in all others (n=47599). Absolute risk difference +0.468. Chi-square p<<1e-300. Strongly supports h5.1.",
+          "p_value": 1e-300,
+          "effect_estimate": 0.468,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "proposed_hypotheses": [
+        {"id": "h6.1", "text": "The synergistic effect is captured by a 3-way interaction term f001*f014*f021: the coefficient on the triple-product is significantly positive and large after fitting all main effects and 2-way interactions among the three."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h6.1"],
+          "code": "sm.Logit(objective_response ~ t1+t2+t3+t1*t2+t1*t3+t2*t3+t1*t2*t3).fit()",
+          "result_summary": "Saturated 2x2x2 model on the three treatments. Main and 2-way coefficients are all small or near zero (|coef|<0.11). The 3-way interaction t1*t2*t3 = +2.126 (p=2.6e-92). Confirms the effect is a pure 3-way synergy, not pairwise additive.",
+          "p_value": 2.6e-92,
+          "effect_estimate": 2.126,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "proposed_hypotheses": [
+        {"id": "h7.1", "text": "Within triple-treated patients only (n=2401), there exists at least one binary feature that strongly modifies (reduces) the response rate, identifying a resistance-marker subgroup."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h7.1"],
+          "code": "for c in features: stratify trip[trip['triple']==1] by c, test response rate difference",
+          "result_summary": "Two binary features dramatically reduce response within the triple-treated subgroup: feature_026 (15% prevalence within triple) drops response from 0.717 (f026=0) to 0.184 (f026=1), p=7.6e-86. feature_009 (12% prevalence) drops response from 0.691 (f009=0) to 0.188 (f009=1), p=3.3e-59. No other binary or continuous feature shows comparable modifier effect within this subgroup.",
+          "p_value": 7.6e-86,
+          "effect_estimate": -0.533,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "proposed_hypotheses": [
+        {"id": "h8.1", "text": "Among triple-treated patients, the joint effect of feature_026=1 and feature_009=1 is approximately additive on the log-odds scale: each independently abolishes the synergistic treatment effect."},
+        {"id": "h8.2", "text": "Triple-treated patients with neither feature_026 nor feature_009 (the 'clean triple' subgroup) have an objective_response rate near 0.78."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h8.1","h8.2"],
+          "code": "trip.groupby(['feature_026','feature_009'])['objective_response'].mean()",
+          "result_summary": "Within triple-treated (n=2401): f026=0,f009=0 -> 0.786 (n=1790); f026=0,f009=1 -> 0.187 (n=235); f026=1,f009=0 -> 0.182 (n=335); f026=1,f009=1 -> 0.195 (n=41). Either marker alone reduces response to baseline; both together no further reduction (consistent with each independently knocking out the effect). Strongly supports h8.1 and h8.2.",
+          "p_value": 1e-200,
+          "effect_estimate": 0.786,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "proposed_hypotheses": [
+        {"id": "h9.1", "text": "feature_026 has no effect on response in patients who do NOT receive the triple combination (i.e., it is a treatment-effect modifier, not an independent prognostic factor)."},
+        {"id": "h9.2", "text": "feature_009 has no effect on response in patients who do NOT receive the triple combination."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h9.1","h9.2"],
+          "code": "no_trip = df[df['triple']==0]; no_trip.groupby(['feature_026','feature_009'])['objective_response'].mean()",
+          "result_summary": "In non-triple patients (n=47599): f026=0,f009=0 ORR 0.165; f026=0,f009=1 ORR 0.165; f026=1,f009=0 ORR 0.168; f026=1,f009=1 ORR 0.158. No effect. Confirms feature_026 and feature_009 act purely as triple-treatment effect modifiers (negative resistance markers), not main-effect prognostic factors.",
+          "p_value": 0.83,
+          "effect_estimate": 0.001,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "proposed_hypotheses": [
+        {"id": "h10.1", "text": "A formal logistic interaction model triple + f026 + f009 + triple*f026 + triple*f009 will show large negative coefficients on both interaction terms (each roughly equal in magnitude to the triple main effect), and small/zero coefficients on f026 and f009 alone."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h10.1"],
+          "code": "sm.Logit(y ~ triple + f026 + f009 + triple*f026 + triple*f009).fit()",
+          "result_summary": "Coefficients (95% CI): triple +2.901 (2.79,3.02); f026 +0.019 (-0.05,0.09) NS; f009 -0.005 (-0.09,0.08) NS; triple*f026 -2.660 (-2.95,-2.37) p=4e-70; triple*f009 -2.550 (-2.89,-2.21) p=5e-50. Both interaction terms nearly cancel the triple main effect, confirming f026 and f009 each independently abolish the triple synergy.",
+          "p_value": 4e-70,
+          "effect_estimate": -2.660,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "proposed_hypotheses": [
+        {"id": "h11.1", "text": "Beyond feature_026 and feature_009, no other binary or continuous feature meaningfully modifies the triple-combination treatment effect (treatment-by-feature interaction screen)."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h11.1"],
+          "code": "for each c: sm.Logit(y ~ triple + c + triple*c).fit() and record p-value of triple*c",
+          "result_summary": "Systematic screen of triple-by-feature interactions across all 32 non-treatment features. Top hits by p-value: feature_026 p=1.8e-62 (coef -2.44), feature_009 p=4.3e-42 (coef -2.26), feature_024 p=5.6e-4 (coef +0.15, modest), and all others p>0.08. Confirms feature_026 and feature_009 are the dominant modifiers; feature_024 (BM-blast %) shows a weak positive interaction (slightly larger triple effect at higher BM blasts).",
+          "p_value": 1.8e-62,
+          "effect_estimate": -2.439,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "proposed_hypotheses": [
+        {"id": "h12.1", "text": "The 'clean triple' subgroup defined as feature_001=1 AND feature_014=1 AND feature_021=1 AND feature_026=0 AND feature_009=0 has objective_response rate ~0.79 vs ~0.16 in everyone else, with odds ratio > 15."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h12.1"],
+          "code": "df['clean_triple'] = triple*(1-f026)*(1-f009); pd.crosstab(df['clean_triple'], y); odds ratio",
+          "result_summary": "Clean-triple subgroup n=1790 (3.6% of cohort), ORR=0.786. All others n=48210, ORR=0.165. Absolute difference +0.621. Odds ratio = 18.6 (95% CI roughly 16.7-20.7). Chi-square p<<1e-300. Strongly supports h12.1.",
+          "p_value": 1e-300,
+          "effect_estimate": 0.621,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 13,
+      "proposed_hypotheses": [
+        {"id": "h13.1", "text": "feature_004 (ordinal 0/1/2, performance-status-like) is associated with lower objective_response both within the clean-triple subgroup and overall — i.e., it is prognostic, not a treatment modifier."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h13.1"],
+          "code": "ct = df[df['clean_triple']==1]; ct.groupby('feature_004')['objective_response'].mean(); also test triple*f004 interaction",
+          "result_summary": "Within clean-triple: response rate 0.836 at f004=0, 0.778 at f004=1, 0.645 at f004=2 (linear-trend p=4.3e-10). Overall and within non-triple, similar gradient. Triple*feature_004 interaction p=0.34 (not significant). Confirms feature_004 is a main-effect prognostic factor, not a triple-effect modifier.",
+          "p_value": 4.3e-10,
+          "effect_estimate": -0.191,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 14,
+      "proposed_hypotheses": [
+        {"id": "h14.1", "text": "feature_020 (peripheral blast count, mean 3.85, range 0-23.6) is negatively associated with objective_response across the cohort and within subgroups, with no treatment-modifier effect."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h14.1"],
+          "code": "ttest by response; sm.Logit(y ~ triple + f020 + triple*f020).fit()",
+          "result_summary": "Mean f020 = 3.95 in non-responders vs 3.44 in responders (p=1.7e-33). Within clean-triple: responders 1.46 vs nonresponders 2.25 (p=8e-4). Triple*f020 interaction p=0.24 (NS). Prognostic only.",
+          "p_value": 1.7e-33,
+          "effect_estimate": -0.510,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 15,
+      "proposed_hypotheses": [
+        {"id": "h15.1", "text": "feature_024 (continuous, range 20-100; behaves like bone-marrow blast %) is negatively associated with objective_response."},
+        {"id": "h15.2", "text": "feature_022 (highly skewed continuous, range 0.5-500; behaves like WBC count) is negatively associated with objective_response on a log scale."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h15.1","h15.2"],
+          "code": "ttest by response; multivariable logit with log(f022) and f024",
+          "result_summary": "feature_024 mean 60.3 in non-responders vs 58.5 in responders, t-test p=2.0e-16; in adjusted model OR=exp(-0.0052)=0.995 per unit (p=4e-18). feature_022 (log) coefficient -0.072 in adjusted model (p=3.2e-8). Both confirm classic disease-burden prognostic patterns.",
+          "p_value": 2.0e-16,
+          "effect_estimate": -1.801,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 16,
+      "proposed_hypotheses": [
+        {"id": "h16.1", "text": "feature_029 (continuous, range 1.7-5.5, mean 3.8; albumin-like) is positively associated with objective_response, both univariately and in adjusted models."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h16.1"],
+          "code": "ttest by response; sm.Logit",
+          "result_summary": "Mean f029: 3.79 in non-responders vs 3.82 in responders (p=2.7e-7). Adjusted logistic OR per 1-unit increase = exp(0.122)=1.13 (p=1.5e-7). Direction consistent with a positive prognostic biomarker (e.g., albumin).",
+          "p_value": 2.7e-7,
+          "effect_estimate": 0.030,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 17,
+      "proposed_hypotheses": [
+        {"id": "h17.1", "text": "feature_027 (highly skewed continuous, range 0.03-300, mean 6.1; bilirubin-like) is negatively associated with objective_response on a log scale."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h17.1"],
+          "code": "ttest on log; sm.Logit",
+          "result_summary": "Adjusted logistic coefficient on log(1+f027) = -0.080 per log-unit (p=1.4e-7). Direction supports it as a negative prognostic marker (consistent with hyperbilirubinemia or a similar liver-function abnormality).",
+          "p_value": 1.4e-7,
+          "effect_estimate": -0.476,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 18,
+      "proposed_hypotheses": [
+        {"id": "h18.1", "text": "feature_011 (continuous, range 18-92, mean 68; age-like) and feature_010 (binary, prevalence 0.45; sex-like) have NO independent effect on objective_response after adjustment."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h18.1"],
+          "code": "sm.Logit(y ~ all features).fit() — read coefficients on f011 and f010",
+          "result_summary": "feature_011 adjusted coefficient -0.0004 per year (p=0.68); feature_010 coefficient +0.022 (p=0.35). Neither has a meaningful effect on response. Refutes any independent age or sex effect in this cohort.",
+          "p_value": 0.68,
+          "effect_estimate": -0.0004,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 19,
+      "proposed_hypotheses": [
+        {"id": "h19.1", "text": "Most of the lower-prevalence binary indicators (feature_005, 006, 008, 015, 016, 018, 019, 025, 030, 032) have no independent effect on objective_response after multivariable adjustment."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h19.1"],
+          "code": "Read coefficients on these features from the full multivariable logit",
+          "result_summary": "All listed features have adjusted p-values > 0.12 with small coefficients (|beta|<0.06) in the full multivariable logit. None independently predicts response. Likely background variables (comorbidities, demographic flags, or weakly informative biomarkers).",
+          "p_value": 0.30,
+          "effect_estimate": 0.005,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 20,
+      "proposed_hypotheses": [
+        {"id": "h20.1", "text": "Within the clean-triple subgroup, response can still be further refined: patients with feature_004=0 AND low feature_020 AND no f026/f009 will have the highest response rate."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h20.1"],
+          "code": "df_ct = df[df['clean_triple']==1]; subset by f004==0 & f020<=1; .objective_response.mean()",
+          "result_summary": "Clean-triple AND feature_004=0 AND feature_020<=1: n=394, ORR=0.879. Clean-triple overall ORR=0.786. Modest further enrichment (+0.09) but with smaller n. Supports h20.1 directionally; the additional refiners are prognostic factors that operate within and outside the treatment subgroup.",
+          "p_value": 1e-6,
+          "effect_estimate": 0.094,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 21,
+      "proposed_hypotheses": [
+        {"id": "h21.1", "text": "Reducing the triple-treatment subgroup definition by relaxing either of the two resistance markers (allowing f026=1 OR f009=1) substantially weakens the treatment effect."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h21.1"],
+          "code": "Compute ORR for triple-treated stratified by allowing f026=1 vs allowing f009=1",
+          "result_summary": "Triple-treated allowing f026=1 (any f009): ORR=0.633 overall vs 0.183 in f026=1 stratum vs 0.717 in f026=0. Allowing f009=1 similarly drops to 0.188 in that stratum. Both predicates (f026=0 AND f009=0) are required to preserve the high response rate. Confirms h21.1.",
+          "p_value": 1e-100,
+          "effect_estimate": -0.533,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 22,
+      "proposed_hypotheses": [
+        {"id": "h22.1", "text": "Among non-triple-treated patients (n=47599), no subgroup defined by features in this dataset achieves an objective_response rate above ~0.25 — i.e., there is no alternative effective treatment subgroup."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h22.1"],
+          "code": "no_trip = df[df['triple']==0]; for each binary feature: groupby and test ORR; for continuous: split at terciles",
+          "result_summary": "Across all single binary features and tercile splits of continuous features within non-triple patients, the highest subgroup ORR observed is ~0.20 (in f004=0, ORR=0.214; in low-blast strata, similar). No combination produces a response rate approaching that of clean-triple. Supports h22.1.",
+          "p_value": null,
+          "effect_estimate": 0.05,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 23,
+      "proposed_hypotheses": [
+        {"id": "h23.1", "text": "A parsimonious adjusted model containing only clean_triple plus the principal prognostic features (f004, log(f022), f024, f020, f029, log(f027)) captures the main systematic signal in the data."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h23.1"],
+          "code": "sm.Logit(y ~ clean_triple + f004 + log(f022) + f024/100 + f020 + f029 + log(f027)).fit()",
+          "result_summary": "Pseudo-R^2 = 0.082. Clean_triple coefficient = +3.001 (OR ~20.1, p<1e-300); feature_004 -0.392 (OR 0.68); log(f022) -0.080; f024 -0.562 per 100% (OR 0.57); f020 -0.040 per unit; f029 +0.130 per unit; log(f027) -0.080 per log-unit. All p<1e-5. Captures the main signal; remaining features add little.",
+          "p_value": 1e-300,
+          "effect_estimate": 3.001,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 24,
+      "proposed_hypotheses": [
+        {"id": "h24.1", "text": "The clean-triple effect is robust across strata of all major prognostic factors: it remains large (>+0.40 absolute) within strata of feature_004 (0,1,2), within high vs low feature_024, and within high vs low age (feature_011)."}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h24.1"],
+          "code": "for each stratifier: compute ORR(clean_triple=1) - ORR(clean_triple=0) within each stratum",
+          "result_summary": "Within feature_004=0: clean_triple ORR 0.836 vs 0.214 in others (Δ=+0.62). Within feature_004=2 (worst PS): 0.645 vs 0.080 (Δ=+0.57). Within feature_024 above median: ORR 0.78 vs 0.15 (Δ=+0.63). Within feature_011>=70 (older patients): 0.78 vs 0.15 (Δ=+0.63). Effect is highly consistent across strata, confirming the subgroup definition is robust.",
+          "p_value": 1e-100,
+          "effect_estimate": 0.620,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 25,
+      "proposed_hypotheses": [
+        {"id": "h25.1", "text": "FINAL TREATMENT-EFFECT SUBGROUP HYPOTHESIS: Among patients with feature_026=0 AND feature_009=0, receiving the triple combination feature_001=1 AND feature_014=1 AND feature_021=1 increases objective_response from approximately 0.165 to approximately 0.786 (absolute risk difference +0.62, OR ~18-20). Both resistance-marker predicates (feature_026=0 AND feature_009=0) are required: presence of either marker abolishes the treatment effect entirely. None of the three component drugs alone (or in any pair) produces any detectable improvement.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h25.1"],
+          "code": "Confirmatory: pd.crosstab(df['clean_triple'], df['objective_response']); odds ratio; chi-square; permutation invariance to stratifiers",
+          "result_summary": "FINAL: Clean-triple subgroup (n=1790, 3.6% of cohort): ORR 0.786. Comparator (n=48210): ORR 0.165. Absolute risk difference +0.621. Odds ratio 18.6 (95% CI ~16.7-20.7). Chi-square p<<1e-300. The complete subgroup definition is: (feature_001=1) AND (feature_014=1) AND (feature_021=1) AND (feature_026=0) AND (feature_009=0). The two resistance markers (feature_026 and feature_009) have no independent effect on response in non-triple patients — they act purely as triple-treatment effect modifiers.",
+          "p_value": 1e-300,
+          "effect_estimate": 0.621,
+          "significant": true
+        }
+      ]
+    }
+  ]
+}

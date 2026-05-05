@@ -1,0 +1,437 @@
+{
+  "dataset_id": "ds001_prostate",
+  "model_id": "claude-opus-4-7",
+  "harness_id": "claude-code@manual-2026-05-03",
+  "max_iterations": 25,
+  "iterations": [
+    {
+      "index": 1,
+      "proposed_hypotheses": [
+        {"id": "h1.1", "text": "feature_030 has only one observed value across all 50,000 patients and therefore carries no information about objective_response.", "kind": "novel"},
+        {"id": "h1.2", "text": "Across all 50,000 patients the marginal rate of objective_response is approximately 24%, providing a non-trivial baseline against which feature effects can be estimated.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h1.1", "h1.2"],
+          "code": "df['feature_030'].nunique(); df['objective_response'].mean()",
+          "result_summary": "feature_030 has only 1 unique value (all 0) so it is uninformative and dropped from further analysis. Overall objective_response rate is 0.2402 (12,011/50,000).",
+          "p_value": null,
+          "effect_estimate": 0.2402,
+          "significant": null
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "proposed_hypotheses": [
+        {"id": "h2.1", "text": "Among the 31 informative features, several binary indicators (feature_008, feature_013, feature_015, feature_021, feature_027) and the 3-level feature_001 are individually associated with objective_response in univariate logistic regression.", "kind": "novel"},
+        {"id": "h2.2", "text": "Higher feature_022 (a wide-range continuous biomarker) is associated with lower objective_response in univariate logistic regression.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h2.1"],
+          "code": "for c in feats: sm.Logit(y, sm.add_constant(df[c])).fit()",
+          "result_summary": "Univariate logistic associations with objective_response (signed log-odds coefficients): feature_013 coef=-1.071 (p<1e-300); feature_008 coef=+1.097 (p<1e-300); feature_015 coef=-0.615 (p=2.0e-96); feature_021 coef=-0.640 (p=1.5e-54); feature_027 coef=-0.403 (p=3.1e-09); feature_001 coef=-0.285 per level (p=9.5e-73). Several binary features (feature_005, feature_023, feature_011, feature_017, feature_019, feature_004, feature_006) showed no marginal association (all p>0.3).",
+          "p_value": 1e-300,
+          "effect_estimate": 1.097,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h2.2"],
+          "code": "sm.Logit(y, sm.add_constant(df['feature_022'])).fit()",
+          "result_summary": "feature_022 (continuous, range 0.12-3622) negatively associated with response: coef=-0.0047 per unit (p=1.6e-94). Higher feature_022 corresponds to lower probability of response.",
+          "p_value": 1.6e-94,
+          "effect_estimate": -0.0047,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "proposed_hypotheses": [
+        {"id": "h3.1", "text": "In a multivariable logistic model with all 31 informative features, feature_008 retains the largest positive coefficient and feature_013 retains the largest negative coefficient on objective_response, with both effects highly significant.", "kind": "refined"},
+        {"id": "h3.2", "text": "After adjustment, several initially non-significant continuous variables (e.g. feature_009, feature_018, feature_026, feature_028, feature_007) remain non-predictive of objective_response (p>0.1) and look like noise variables.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h3.1", "h3.2"],
+          "code": "sm.Logit(y, sm.add_constant(X_all_features_z_standardized)).fit()",
+          "result_summary": "Multivariable logistic (continuous z-standardized): feature_013 coef=-1.126 (p<1e-300); feature_008 coef=+1.201 (p<1e-300); feature_015 coef=-0.694 (p=1.1e-108); feature_021 coef=-0.735 (p=5e-64); feature_001 coef=-0.328 per level (p=1.1e-82); feature_022 coef=-0.097/sd (p=3.3e-08); feature_027 coef=-0.431 (p=2.5e-09); feature_020 coef=-0.140/sd (p=1.7e-33); feature_024 coef=-0.068/sd (p=8.6e-08); feature_002 coef=+0.064/sd (p=1.8e-08). All other features p>0.07 — appear to be noise variables.",
+          "p_value": 1e-300,
+          "effect_estimate": 1.201,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "proposed_hypotheses": [
+        {"id": "h4.1", "text": "feature_008 is the assigned treatment in this cohort: it is binary, has the largest single coefficient on objective_response, and is balanced with respect to the other 30 features (i.e. assignment is independent of prognostic variables, consistent with randomization).", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h4.1"],
+          "code": "for c in other_features: chi2 or t-test of c vs feature_008",
+          "result_summary": "feature_008 prevalence is 40.2%. None of the 30 other features differs meaningfully between feature_008=0 and feature_008=1 (all standardized mean differences <0.02; smallest p=0.042 for feature_017, no signal would survive multiple-testing). This balance pattern is exactly what would be expected for a randomized treatment assignment, supporting the interpretation of feature_008 as treatment.",
+          "p_value": 0.042,
+          "effect_estimate": 0.0,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "proposed_hypotheses": [
+        {"id": "h5.1", "text": "feature_008 (treatment) increases objective_response: marginal response rate is approximately 0.36 in feature_008=1 versus 0.16 in feature_008=0 (a ~+20 percentage-point unadjusted effect).", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h5.1"],
+          "code": "df.groupby('feature_008')['objective_response'].mean(); chi2_contingency",
+          "result_summary": "Response rate: 0.159 in feature_008=0 (n=29,924) vs 0.361 in feature_008=1 (n=20,076). Risk difference +0.202 (95% CI +0.194 to +0.210); chi-square p<1e-300. Treatment is highly effective on average.",
+          "p_value": 1e-300,
+          "effect_estimate": 0.202,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "proposed_hypotheses": [
+        {"id": "h6.1", "text": "The treatment effect of feature_008 on objective_response is heavily moderated by feature_013: in feature_013=1 the effect is essentially zero, while in feature_013=0 it is much larger than the marginal effect.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h6.1"],
+          "code": "sm.Logit(y, sm.add_constant(np.column_stack([T, F, T*F]))).fit() # F=feature_013",
+          "result_summary": "Logistic interaction feature_008 x feature_013: coefficient on the interaction term = -1.978 (p<1e-300). Stratified risk differences: in feature_013=0 (n=22,519), response is 0.169 (T=0) vs 0.610 (T=1), delta=+0.440. In feature_013=1 (n=27,481), response is 0.150 (T=0) vs 0.158 (T=1), delta=+0.008 — essentially no effect. feature_013=1 abolishes the treatment effect.",
+          "p_value": 1e-300,
+          "effect_estimate": -1.978,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "proposed_hypotheses": [
+        {"id": "h7.1", "text": "feature_015 also moderates the effect of feature_008: treatment effect on objective_response is large in feature_015=0 and near-zero in feature_015=1.", "kind": "novel"},
+        {"id": "h7.2", "text": "feature_021 also moderates the effect of feature_008: treatment effect is large in feature_021=0 and near-zero in feature_021=1.", "kind": "novel"},
+        {"id": "h7.3", "text": "feature_027 (a rare 3% binary variable) also moderates the effect of feature_008: treatment effect is large in feature_027=0 and absent (or slightly negative) in feature_027=1.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h7.1"],
+          "code": "Logit interaction T x feature_015",
+          "result_summary": "feature_008 x feature_015 interaction coef = -1.237 (p=1.4e-93). Stratified: feature_015=0 (n=39,962): delta = +0.251 (0.160 -> 0.411). feature_015=1 (n=10,038): delta = +0.008 (0.157 -> 0.165). feature_015=1 abolishes the treatment effect.",
+          "p_value": 1.4e-93,
+          "effect_estimate": -1.237,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h7.2"],
+          "code": "Logit interaction T x feature_021",
+          "result_summary": "feature_008 x feature_021 interaction coef = -1.138 (p=3.3e-42). Stratified: feature_021=0 (n=45,004): delta = +0.225 (0.160 -> 0.385). feature_021=1 (n=4,996): delta = +0.006 (0.147 -> 0.153). feature_021=1 abolishes the treatment effect.",
+          "p_value": 3.3e-42,
+          "effect_estimate": -1.138,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h7.3"],
+          "code": "Logit interaction T x feature_027",
+          "result_summary": "feature_008 x feature_027 interaction coef = -1.283 (p=1.8e-19). Stratified: feature_027=0 (n=48,472): delta = +0.209 (0.158 -> 0.367). feature_027=1 (n=1,528): delta = -0.022 (0.184 -> 0.162). feature_027=1 abolishes (and slightly reverses) the treatment effect.",
+          "p_value": 1.8e-19,
+          "effect_estimate": -1.283,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "proposed_hypotheses": [
+        {"id": "h8.1", "text": "feature_001 (3-level ordinal, possibly stage) does NOT meaningfully moderate the treatment effect of feature_008: response improvement is roughly 20 percentage points at all three levels of feature_001.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h8.1"],
+          "code": "Logit interaction T x feature_001 and stratified analysis",
+          "result_summary": "feature_008 x feature_001 interaction coef = +0.141 (p=1.6e-05) — statistically significant given the 50k sample but very small in magnitude. Stratified: feature_001=0 delta=+0.207; feature_001=1 delta=+0.201; feature_001=2 delta=+0.198. Treatment effect is essentially uniform across the three feature_001 levels even though feature_001 is a strong main-effect prognostic marker (response: 0.282 -> 0.228 -> 0.182). feature_001 modifies baseline prognosis but not treatment effect.",
+          "p_value": 1.6e-05,
+          "effect_estimate": 0.141,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "proposed_hypotheses": [
+        {"id": "h9.1", "text": "Patients meeting all four favorable conditions (feature_013=0 AND feature_015=0 AND feature_021=0 AND feature_027=0) form a subgroup in which feature_008 dramatically increases objective_response, while in patients failing any of these conditions feature_008 produces essentially no benefit.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h9.1"],
+          "code": "fav = (f013==0)&(f015==0)&(f021==0)&(f027==0); compare T effect in fav vs ~fav",
+          "result_summary": "Joint subgroup defined by all four favorable values has n=15,681 (31.4% of cohort). Within favorable: response 0.172 (T=0, n=9,356) vs 0.798 (T=1, n=6,325) — risk difference +0.626 (95% CI +0.613 to +0.638; bootstrap CI +0.614 to +0.637). Within unfavorable (n=34,319): response 0.153 (T=0) vs 0.161 (T=1) — risk difference +0.008 (95% CI -0.000 to +0.016, not significant). Logistic model response ~ T + fav + T*fav gives interaction coef +2.885 (p<1e-300).",
+          "p_value": 1e-300,
+          "effect_estimate": 2.885,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "proposed_hypotheses": [
+        {"id": "h10.1", "text": "Each of the four modifiers (feature_013, feature_015, feature_021, feature_027) is individually necessary for the favorable subgroup definition: dropping any one of them from the AND predicate dilutes the within-subgroup treatment effect.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h10.1"],
+          "code": "Compare risk difference under predicates that include 4, 3, 2, 1 of the modifiers",
+          "result_summary": "Sequential dropping of modifiers shrinks the within-subgroup treatment effect: (a) f013=0 & f015=0 & f021=0 & f027=0: delta=+0.626 (n=15,681); (b) drop f027: delta=+0.607 (n=16,175); (c) drop f021 too: delta=+0.546 (n=18,000); (d) drop f015 too (only f013=0): delta=+0.440 (n=22,519). Each modifier contributes; the sharpest cut is at f013, but adding the other three increases the effect from +0.44 to +0.63. Confirms each is necessary.",
+          "p_value": null,
+          "effect_estimate": 0.626,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "proposed_hypotheses": [
+        {"id": "h11.1", "text": "Within feature_013=0 (the strongest single modifier), feature_015=1, feature_021=1, and feature_027=1 each independently abolish the treatment effect; the 015=0 & 021=0 & 027=0 sub-stratum within feature_013=0 reproduces the +0.63 within-subgroup effect.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h11.1"],
+          "code": "Within feature_013=0, cross-tabulate by 015,021,027",
+          "result_summary": "Within feature_013=0: by feature_015 (=0,n=18,000): delta=+0.546; (=1,n=4,519): delta=+0.014. By feature_021 (=0,n=20,247): delta=+0.491; (=1,n=2,272): delta=-0.012. By feature_027 (=0,n=21,830): delta=+0.454; (=1,n=689): delta=-0.012. Joint cell with all four favorable: delta=+0.626 (n=15,681). Joint cell with 013=0, 015=0, 021=1, 027=0: delta=+0.004 (n=1,775). Confirms each modifier independently kills the treatment effect.",
+          "p_value": null,
+          "effect_estimate": 0.626,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "proposed_hypotheses": [
+        {"id": "h12.1", "text": "Within the favorable subgroup, no remaining feature significantly modifies the treatment effect of feature_008 after multiple-testing correction.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h12.1"],
+          "code": "Within favorable subgroup, run Logit T*c interaction for each remaining feature c",
+          "result_summary": "Of 26 features tested for residual T*feature interaction within the favorable subgroup, the smallest p-values are feature_005 p=0.004 (interaction coef -0.246) and feature_017 p=0.033 (coef -0.285). Neither survives Bonferroni correction (alpha 0.05/26 = 0.0019). All others p>0.05. The four-modifier subgroup definition therefore appears complete.",
+          "p_value": 0.004,
+          "effect_estimate": -0.246,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 13,
+      "proposed_hypotheses": [
+        {"id": "h13.1", "text": "Within the favorable subgroup, feature_022 (continuous biomarker) does not further modify the treatment effect of feature_008 across its quartile distribution.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h13.1"],
+          "code": "Within favorable, by feature_022 quartile, compute T effect; logit interaction",
+          "result_summary": "Within favorable subgroup, treatment effect by feature_022 quartile: Q1 +0.633, Q2 +0.628, Q3 +0.624, Q4 +0.618 — essentially flat across quartiles. Logistic T x feature_022 interaction within favorable: coef=-0.011 (p=0.79). feature_022 does not modify treatment within the favorable subgroup.",
+          "p_value": 0.79,
+          "effect_estimate": -0.011,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 14,
+      "proposed_hypotheses": [
+        {"id": "h14.1", "text": "Excluding feature_008, none of the other binary features (feature_005, feature_023, feature_011, feature_017, feature_019, feature_004, feature_006) is plausibly a 'second' treatment: their main effects on objective_response are null and they show no large interactions with other features.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h14.1"],
+          "code": "For each candidate, run interaction screen across all other features",
+          "result_summary": "For each of feature_005, feature_023, feature_011, feature_017, feature_019, feature_004, feature_006, the most extreme T*feature interaction p-value across the 30 candidate moderators ranges from 0.01 to 0.05 in the best case — uniformly weak compared to feature_008's interactions (p<1e-19 with multiple modifiers). Marginal effects on objective_response are also null (all p>0.3 univariate). None looks like a treatment with hidden heterogeneity.",
+          "p_value": null,
+          "effect_estimate": 0.0,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 15,
+      "proposed_hypotheses": [
+        {"id": "h15.1", "text": "A shallow CART decision tree fit to objective_response with all 31 informative features identifies feature_008 as the dominant first split, and within feature_008=1 splits on feature_013, feature_015, and feature_021 in that order, recovering the same modifier set found by the interaction screen.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h15.1"],
+          "code": "DecisionTreeClassifier(max_depth=5, min_samples_leaf=500).fit(X, y)",
+          "result_summary": "Tree splits: root on feature_008 (cutoff 0.5). Left (T=0) sub-tree predicts class 0 in every leaf. Right (T=1) sub-tree splits next on feature_013, then feature_015, then feature_021 — and the only paths terminating in class 1 are feature_008=1, feature_013=0, feature_015=0, feature_021=0. feature_027 was rare enough that its splits did not cross min_samples_leaf=500 but the structure mirrors the interaction-based subgroup definition.",
+          "p_value": null,
+          "effect_estimate": 0.626,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 16,
+      "proposed_hypotheses": [
+        {"id": "h16.1", "text": "feature_001 (3-level, with response 0.282/0.228/0.182 across levels) is a prognostic but non-predictive feature: it shifts baseline response monotonically downward but does not change the absolute treatment benefit.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h16.1"],
+          "code": "Stratify T effect by feature_001 within and outside favorable",
+          "result_summary": "Marginal feature_001 main effect: 28.2%, 22.8%, 18.2% response at levels 0/1/2 (p=9.5e-73 univariate). Treatment effect by level: feature_001=0 delta=+0.207; =1 delta=+0.201; =2 delta=+0.198. Within the favorable subgroup, the within-favorable T*feature_001 interaction has p=0.07 (not significant). feature_001 is a prognostic, not a predictive, marker.",
+          "p_value": 0.07,
+          "effect_estimate": -0.113,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 17,
+      "proposed_hypotheses": [
+        {"id": "h17.1", "text": "feature_022, feature_020, and feature_024 are prognostic for lower response but do not modify the treatment effect of feature_008 in a clinically meaningful way once the four-modifier subgroup is defined.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h17.1"],
+          "code": "Stratified T effect across feature_022/feature_020/feature_024 quartiles within favorable",
+          "result_summary": "Within the favorable subgroup, treatment effect ranges from +0.62 to +0.63 across quartiles of each of feature_022, feature_020, feature_024 — essentially constant. Outside the favorable subgroup, treatment effect remains near zero across these biomarker quartiles. These continuous variables alter baseline response but not treatment efficacy within the favorable subgroup.",
+          "p_value": null,
+          "effect_estimate": 0.0,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 18,
+      "proposed_hypotheses": [
+        {"id": "h18.1", "text": "The four-modifier favorable subgroup is internally consistent with an OR (logical disjunction) characterization of the unfavorable subgroup: any patient with feature_013=1 OR feature_015=1 OR feature_021=1 OR feature_027=1 has near-zero treatment benefit.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h18.1"],
+          "code": "df['unfav'] = (f013|f015|f021|f027).any; group T effect by unfav",
+          "result_summary": "Defining unfav = (feature_013==1) OR (feature_015==1) OR (feature_021==1) OR (feature_027==1). Unfav=0 (n=15,681): delta=+0.626. Unfav=1 (n=34,319): delta=+0.008 (95% CI -0.000 to +0.016). The conjunction of favorable values (and equivalently, the disjunction of unfavorable values) cleanly partitions the cohort into responders-to-treatment and non-responders-to-treatment.",
+          "p_value": null,
+          "effect_estimate": 0.626,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 19,
+      "proposed_hypotheses": [
+        {"id": "h19.1", "text": "Bootstrapping the favorable subgroup yields a tight 95% CI on the within-subgroup risk difference, confirming the +0.63 effect is not a sampling artifact.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h19.1"],
+          "code": "200 bootstrap resamples of favorable subgroup; compute T1 - T0 risk diff",
+          "result_summary": "Bootstrap (200 resamples) of within-favorable risk difference: mean +0.625, 95% percentile interval [+0.614, +0.637]. Analytic Wald 95% CI: [+0.613, +0.638]. The estimate is highly stable.",
+          "p_value": null,
+          "effect_estimate": 0.625,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 20,
+      "proposed_hypotheses": [
+        {"id": "h20.1", "text": "A logistic regression of objective_response on T, fav, and T*fav (with fav = the 4-modifier favorable indicator) shows that the entire treatment effect is captured by the interaction term — the T main effect is nearly zero and the favorable main effect is small, while the T*fav coefficient is +2.89 (OR ~18).", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h20.1"],
+          "code": "sm.Logit(y, sm.add_constant(np.column_stack([T, fav, T*fav]))).fit()",
+          "result_summary": "Logit fit: intercept -1.71; T coef +0.058 (p=0.06, OR 1.06); fav coef +0.141 (p<1e-4, OR 1.15); T*fav coef +2.885 (p<1e-300, OR 17.9). The treatment effect on objective_response is essentially confined to the favorable-modifier subgroup.",
+          "p_value": 1e-300,
+          "effect_estimate": 2.885,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 21,
+      "proposed_hypotheses": [
+        {"id": "h21.1", "text": "Most of the binary features in the dataset (feature_005, feature_023, feature_011, feature_017, feature_019, feature_004, feature_006) and many of the continuous features (feature_018, feature_009, feature_026, feature_028, feature_007, feature_014, feature_032, feature_016, feature_003, feature_029, feature_031, feature_012, feature_025) are noise variables with no association to objective_response either marginally or through interaction.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h21.1"],
+          "code": "Combined screening across main effects and all T*c interactions",
+          "result_summary": "Across both univariate logistic models and treatment-interaction tests, the 19 features listed have univariate p>0.1 AND interaction-with-T p>0.05; their multivariable adjusted coefficients are also small (|coef|<0.05). They appear to be uninformative covariates included in the cohort feature set but unrelated to objective_response.",
+          "p_value": null,
+          "effect_estimate": 0.0,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 22,
+      "proposed_hypotheses": [
+        {"id": "h22.1", "text": "The complete predictive subgroup definition for treatment benefit from feature_008 is the conjunction feature_013=0 AND feature_015=0 AND feature_021=0 AND feature_027=0, with no additional discovered modifiers improving subgroup specificity at conventional significance levels.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h22.1"],
+          "code": "Verify T effect saturation within the favorable subgroup",
+          "result_summary": "Within the favorable subgroup (n=15,681): treatment T=1 response is 79.8%, T=0 response is 17.2%; the relative response ratio is 4.6x. Within unfavorable (n=34,319): T=1 response is 16.1%, T=0 response is 15.3% — essentially equal. Adding any other feature to the subgroup definition (whether by interaction screening or by tree expansion) yields incremental risk-difference changes <0.02 and is not statistically significant after correction. The 4-feature conjunction is the parsimonious complete subgroup.",
+          "p_value": null,
+          "effect_estimate": 0.626,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 23,
+      "proposed_hypotheses": [
+        {"id": "h23.1", "text": "On the log-odds scale, the treatment-effect heterogeneity is substantially larger than on the absolute risk-difference scale: ORs in the favorable subgroup are ~16 (logit coef ~2.83) versus ~1.06 in the unfavorable subgroup.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h23.1"],
+          "code": "Stratified Logit fit T-only within favorable and unfavorable",
+          "result_summary": "Within favorable: Logit response~T gives T coef +2.83 (p<1e-300, OR 16.9). Within unfavorable: Logit response~T gives T coef +0.058 (p=0.06, OR 1.06). The OR ratio (16.9/1.06=15.9) is highly extreme, reinforcing that the treatment is essentially active in the favorable subgroup only.",
+          "p_value": 1e-300,
+          "effect_estimate": 2.83,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 24,
+      "proposed_hypotheses": [
+        {"id": "h24.1", "text": "Tested as a single composite predicate, 'feature_008=1 AND favorable subgroup' has a positive predictive value of approximately 80% for objective_response, compared to 24% population baseline and ~16% in untreated patients (T=0) regardless of subgroup.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h24.1"],
+          "code": "PPV = P(response | T=1 & favorable)",
+          "result_summary": "P(response | feature_008=1 AND favorable) = 5,047 / 6,325 = 0.798. P(response | overall) = 0.240. P(response | T=0, any subgroup) = 0.159. P(response | T=1, unfavorable) = 0.161. The composite predicate (treated AND favorable) lifts response probability ~3.3-fold over the population baseline and ~5x over untreated baseline.",
+          "p_value": null,
+          "effect_estimate": 0.798,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 25,
+      "proposed_hypotheses": [
+        {"id": "h25.1", "text": "FINAL HETEROGENEITY HYPOTHESIS: For the outcome objective_response, treatment with feature_008=1 (vs feature_008=0) increases the probability of response only in the subgroup defined by feature_013=0 AND feature_015=0 AND feature_021=0 AND feature_027=0. Absolute risk difference within this subgroup is +0.63 (response 0.17 -> 0.80); outside this subgroup the risk difference is +0.008 (not significant). Each of the four modifiers is individually necessary: setting any of feature_013, feature_015, feature_021, or feature_027 to 1 abolishes the treatment effect.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h25.1"],
+          "code": "Combined evidence from interaction screen + stratified RDs + Logit T*fav model + bootstrap CI + decision tree",
+          "result_summary": "Final supported subgroup: feature_013=0 AND feature_015=0 AND feature_021=0 AND feature_027=0 (n=15,681; 31.4% of cohort). Within: T=1 vs T=0 risk difference +0.626 (95% CI +0.613 to +0.638; bootstrap CI +0.614 to +0.637); odds ratio 16.9 (logit T coef 2.83). Outside: risk difference +0.008 (95% CI -0.000 to +0.016); OR 1.06. Logit interaction T*fav coef +2.885, p<1e-300. Each individual modifier necessary (all four binary AND predicates required).",
+          "p_value": 1e-300,
+          "effect_estimate": 0.626,
+          "significant": true
+        }
+      ]
+    }
+  ]
+}

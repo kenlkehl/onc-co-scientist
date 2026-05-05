@@ -1,0 +1,218 @@
+Analysis summary - dataset ds001_breast (n=50,000)
+====================================================
+
+Outcome
+-------
+The single outcome was pfs_months (progression-free survival in months;
+mean 4.69, sd 2.50, range 0-16.66). All 50,000 records were complete.
+
+Iterations 1-3: Univariate landscape and multivariable adjustment
+-----------------------------------------------------------------
+A first pass over all 36 candidate features against pfs_months identified
+two large, dose-response continuous predictors and a roster of strong
+binary predictors:
+
+  Continuous, prognostic
+    feature_012   r = +0.702 with PFS (range 30-90, mean 65; behaves like
+                  age but with an unusually positive sign relative to
+                  conventional clinical intuition)
+    feature_005   ordinal 0/1/2; mean PFS 5.64 / 4.44 / 3.29 (consistent
+                  with a performance-status index)
+    feature_004   r = -0.116 (continuous, range 0-24.6, with ~28% zeros;
+                  consistent with prior lines of therapy)
+    feature_024   r = +0.100 (continuous, range 1.5-5.5; consistent with
+                  a serum protein such as albumin)
+    feature_033   r = -0.091 (continuous, range 1-100, mean 15.5; later
+                  shown to be a treatment-effect modifier rather than
+                  a true prognostic factor)
+
+  Binary, large effects
+    feature_006   diff = -1.54 months (n=14,969)
+    feature_001   diff = -1.05 months (n=5,090)
+    feature_028   diff = -0.56 months
+    feature_029   diff = +0.57 months
+    feature_018   diff = -0.46 months
+    feature_023   diff = +0.36 months
+    feature_013   diff = +1.10 months (largest beneficial binary main
+                  effect)
+
+The multivariable OLS fit (R^2 = 0.79) confirmed that feature_012,
+feature_005, feature_006, feature_001, feature_013, feature_029,
+feature_028, feature_018, feature_033, feature_024, and feature_004
+were all independently significant. feature_023 attenuated to non-
+significance once feature_029 was in the model, foreshadowing an
+explicit dependency between those two features.
+
+Iterations 4-5: Treatment-vs-prognostic dissection
+--------------------------------------------------
+Two cross-tabulations clarified the structure of the dataset:
+
+  - feature_023 strongly conditions feature_029 receipt: P(feature_029=1)
+    is 0.29 when feature_023=0 and 0.93 when feature_023=1. This is
+    consistent with feature_023 being a biological marker (e.g.,
+    hormone-receptor status) that determines administration of
+    feature_029.
+  - feature_013, by contrast, is approximately independent of every
+    other feature: P(feature_013=1) varies between 0.341 and 0.363
+    across all subgroups defined by single features. This randomization-
+    like distribution makes feature_013 the cleanest candidate for a
+    causal exposure (i.e., a randomly assigned treatment).
+
+Stratifying feature_006 and feature_001 by feature_013 confirmed that
+their effects are essentially identical in treated and untreated
+patients (-1.54 vs -1.53 for feature_006; -1.03 vs -1.07 for
+feature_001), so they are pure prognostic markers with no treatment
+interaction.
+
+Iterations 6-9: Treatment-effect heterogeneity screen for feature_013
+---------------------------------------------------------------------
+For each of the 36 features I fit pfs_months ~ feature_013 + X +
+feature_013:X. The full sweep revealed a small set of strong treatment-
+effect modifiers, all of which have effectively zero main effect when
+feature_013=0:
+
+    feature_028     interaction = -1.62  (predictive: 1 abolishes benefit)
+    feature_029     interaction = +1.59  (predictive: 1 enables benefit)
+    feature_018     interaction = -1.36  (predictive: 1 abolishes benefit)
+    feature_023     interaction = +1.09  (correlated with feature_029)
+    feature_033     interaction = -0.64 per SD (continuous: high values
+                                 abolish benefit)
+    feature_016     interaction = +0.42 (modest)
+
+Feature-level proofs of the predictive-vs-prognostic distinction:
+
+  feature_028: when feature_013=0, feature_028 effect = +0.008 months
+               (p=0.74); when feature_013=1, feature_028 effect = -1.61
+               months. feature_013 effect when feature_028=0 = +1.66;
+               when feature_028=1 = +0.04 (p=0.29).
+
+  feature_018: when feature_013=0, feature_018 effect = +0.015 (p=0.63);
+               when feature_013=1, feature_018 effect = -1.35 months.
+
+  feature_029: when feature_013=0, feature_029 effect = +0.011 (p=0.68);
+               when feature_013=1, feature_029 effect = +1.61 months.
+
+  feature_033: in feature_013=0 patients, mean PFS is constant 4.30
+               across all four feature_033 quartiles. In feature_013=1
+               patients, mean PFS declines monotonically Q1 6.14 ->
+               Q2 6.25 -> Q3 4.95 -> Q4 4.30.
+
+In contrast, feature_006 and feature_001 had no detectable interaction
+with feature_013 (interaction p = 0.90 and 0.59, respectively).
+
+Iterations 10-13: Joint subgroup discovery
+------------------------------------------
+Combining the binary biomarkers progressively narrowed the responder
+subgroup and increased the within-subgroup treatment effect:
+
+  feature_029=1 only:                effect +1.61 (n=34,886)
+  feature_029=1 AND feature_028=0:   effect +2.38 (n=22,788);
+                                     complement +0.03 (n=27,212)
+  + feature_018=0:                   effect +2.91 (n=18,681)
+  + feature_033<=15:                 effect +4.65 (n=11,575);
+                                     complement +0.006 (n=38,425, p=0.78)
+
+The full eight-cell cross of (feature_029, feature_028, feature_018)
+made the result vivid: only the cell with feature_029=1, feature_028=0,
+feature_018=0 (n=18,681) shows a feature_013 effect (+2.91); all seven
+other cells have |effect| <= 0.12 with p > 0.2.
+
+Iteration 12 swept feature_033 cutpoints from 5 to 34 within the
+three-binary subgroup. The within/outside-cut effect curves crossed
+near cut = 14-15: at cut=14, in-effect = +4.94 and out-effect = +0.02;
+at cut=15, in-effect = +4.65 and out-effect = +0.02. Beyond cut = 15
+the in-effect erodes and the out-of-cut effect remains essentially
+zero, confirming the cutpoint is structural rather than a fluke.
+
+Iterations 14-16: Necessity, redundancy, and non-modifiers
+----------------------------------------------------------
+Each predicate of the four-component subgroup was tested for necessity
+by leaving it out and recomputing the treatment effect on the remaining
+three-predicate cohort. Each removal cost ~0.8 to 1.6 months of effect
+size, so all four predicates contribute and none is redundant.
+
+feature_023, feature_005 (performance status), feature_012 (age-like),
+and feature_004 (prior-lines-like) were tested as additional modifiers
+within the optimal subgroup. None modified the treatment effect:
+feature_023 (within 029=1, 028=0, 018=0): effect +2.69 if 023=0 vs
++2.95 if 023=1 -- redundant with feature_029=1 already required.
+feature_005 (within optimal subgroup): effect +3.80 / +3.83 / +3.93
+across the three performance levels. feature_012: effect +4.63 / +4.62
+/ +4.73 across age tertiles. feature_004: +4.62 if =0, +4.66 if >0.
+The treatment effect is essentially constant in the absolute scale
+across all of these strata, confirming that feature_013's heterogeneity
+is fully captured by the four-component biomarker.
+
+Iterations 17-22: Robustness, persistence of prognostic effects, and absence of detrimental subgroup
+---------------------------------------------------------------------------------------------------
+Within the optimal subgroup, the prognostic effects of feature_006
+and feature_001 persist with their usual magnitudes; feature_013 still
+adds ~+4.5-4.7 months on top of these, in both feature_001=0 and
+feature_001=1 strata. So feature_013's relative benefit is preserved
+even in poor-prognosis patients who fall within the responder subgroup.
+
+The "extreme" responder subgroup tightening feature_033<=10 yields an
+even larger effect of +4.96 months (n=7,362). At the other end, no
+subgroup shows a negative effect of feature_013: across the seven
+non-favorable cells of (029, 028, 018), the diff is at most 0.12 months
+(p > 0.2). feature_013 is null where it is not beneficial, never
+detrimental -- a pattern consistent with a targeted oncology agent
+acting through a biological pathway that is silent in non-responders.
+
+Iteration 23: Formal regression confirmation
+--------------------------------------------
+The final regression pfs_months ~ feature_013 * in_opt yielded:
+Intercept 4.317, feature_013 = +0.006 (n.s.), in_opt = -0.032 (n.s.),
+and feature_013 x in_opt = +4.644 (t=97.3, p~0). The interaction-only
+specification cleanly captures the heterogeneity: outside the optimal
+subgroup, treatment and subgroup membership do nothing; together they
+deliver a near-doubling of PFS.
+
+Iterations 24-25: Threshold robustness and final hypothesis
+-----------------------------------------------------------
+Sensitivity analysis on the feature_033 threshold (12 to 16) gave
+within-subgroup treatment effects between +4.42 and +4.96, with
+complement effects within +/- 0.1 of zero. The hypothesis is robust
+to the exact cutoff chosen.
+
+FINAL TREATMENT-EFFECT HETEROGENEITY HYPOTHESIS
+-----------------------------------------------
+Treatment: feature_013
+Outcome:   pfs_months
+Direction: feature_013 = 1 -> longer PFS within the responder subgroup
+Subgroup:  feature_029 = 1
+           AND feature_028 = 0
+           AND feature_018 = 0
+           AND feature_033 <= 15
+
+Within the subgroup (n=11,575; 23.1% of the cohort): treatment effect =
++4.65 months (4.29 -> 8.94, Welch t-test p ~ 0).
+In the complement (n=38,425): treatment effect = +0.006 months (4.32
+-> 4.32, p = 0.78).
+Formal interaction p ~ 0 (t = 97.3).
+
+Supporting findings
+-------------------
+  - The four predictive predicates above are individually necessary;
+    each contributes ~0.8-1.6 months of within-subgroup effect.
+  - The pure prognostic markers feature_006, feature_001, feature_005,
+    feature_012 are unrelated to feature_013 efficacy and add no
+    information beyond the four-predicate definition.
+  - feature_023 is redundant once feature_029 is required.
+  - feature_013 is approximately randomly assigned in this cohort,
+    supporting a causal interpretation of the within-subgroup effect.
+  - feature_013 is not detrimental in any subgroup; non-responders
+    simply derive no benefit.
+
+Overall conclusion
+------------------
+This cohort behaves like a metastatic breast-cancer trial population
+in which a single, randomly assigned therapy (feature_013) produces a
+large and clinically meaningful PFS benefit confined to a biomarker-
+defined subset (feature_029 = 1, feature_028 = 0, feature_018 = 0,
+and a low-tumor-burden-like feature_033 <= 15). Outside that subset,
+feature_013 has no effect; inside it, PFS roughly doubles. The
+prognostic landscape (driven by feature_006, feature_001, feature_005,
+and feature_012) is independent of and additive to the predictive
+landscape, so even high-risk responders gain the full magnitude of
+treatment benefit on top of their (worse) baseline prognosis.

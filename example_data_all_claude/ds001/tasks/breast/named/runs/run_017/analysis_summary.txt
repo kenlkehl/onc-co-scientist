@@ -1,0 +1,258 @@
+Analysis summary - dataset ds001_breast (n=50,000; outcome pfs_months)
+========================================================================
+
+Approach
+--------
+I worked through 18 iterations of propose-test-refine, building from
+univariate main effects to multivariable adjustment, to clinically
+motivated treatment-by-biomarker interaction tests, to an exhaustive
+two-feature subgroup screen for every treatment. For the one treatment
+that showed strong heterogeneity I then refined the subgroup definition
+along a continuous modifier. For each treatment that showed an apparent
+subgroup signal I checked whether the signal survived adjustment for
+the major prognostic covariates.
+
+Outcome scale
+-------------
+The single outcome pfs_months has mean 4.69, sd 2.50, range 0-16.7.
+Effect estimates throughout are differences in mean PFS in months,
+signed so that positive = longer PFS.
+
+
+1. Main effects of treatments (iter 1)
+--------------------------------------
+Welch t-tests on pfs_months by each treatment indicator:
+  treatment_palbociclib:           +1.098 mo, p<1e-300  (huge)
+  treatment_tamoxifen:             +0.043 mo, p=0.077   (null)
+  treatment_trastuzumab:           -0.060 mo, p=0.029   (tiny, wrong sign)
+  treatment_olaparib:              -0.036 mo, p=0.33    (null)
+  treatment_sacituzumab_govitecan: -0.007 mo, p=0.85    (null)
+  treatment_pembrolizumab:         -0.074 mo, p=0.018   (tiny, wrong sign)
+
+Only palbociclib has a meaningful univariate effect. The negative point
+estimates for trastuzumab and pembrolizumab are clinically negligible
+(-2 to -4 days) and turn null after adjustment.
+
+
+2. Main effects of biomarkers and clinical features (iter 2)
+------------------------------------------------------------
+Strongest prognostic main effects on pfs_months (Welch / ANOVA):
+  stage_iv=1:           -1.54 mo (p<1e-300)
+  has_brain_mets=1:     -1.05 mo (p=1.5e-178)
+  ecog_ps gradient:     5.64 -> 4.44 -> 3.29 across 0/1/2 (~ -1.18 mo per pt)
+  pik3ca_mutation=1:    -0.56 mo (p=6e-144)
+  er_positive=1:        +0.57 mo (p=4e-143)
+  her2_positive=1:      -0.46 mo (p=6e-70)
+  pr_positive=1:        +0.36 mo (p=6e-59)
+  her2_low=1:           +0.11 mo (p=1e-6)
+Null: brca1, brca2, postmenopausal, node_positive, sex_female.
+
+A surprising note for a "breast cancer" cohort: only 44.7% of records
+are sex_female=1, and sex has no PFS association.
+
+
+3. Continuous feature correlations with PFS (iter 3)
+----------------------------------------------------
+The standout finding here is age_years vs pfs_months: Pearson
+r = +0.7015 (p<1e-300), with monotone rise across age deciles
+(decile 0 mean PFS 1.70, decile 9 mean PFS 7.84). The sign is
+opposite to typical clinical expectation. The relationship is
+robust within every ECOG stratum (r 0.73-0.74) and within both
+stage strata (r 0.72-0.74), so it is not a simple confounding
+artifact.
+
+Other meaningful continuous prognostics:
+  albumin_g_dl:         r = +0.100 (longer PFS at higher albumin)
+  weight_loss_pct_6mo:  r = -0.116 (cachexia -> shorter PFS)
+  ki67_pct:             r = -0.091 (high proliferation -> shorter PFS)
+  ldh_u_l:              r = -0.016 (tiny but significant)
+
+Routine labs (hemoglobin, AST, ALT, alk phos, bilirubin, creatinine,
+BUN, sodium, potassium, calcium, tumor_size_cm) had |r|<0.014; CRP and
+NLR had no detectable PFS signal.
+
+
+4. Multivariable OLS (iter 4)
+-----------------------------
+A single OLS model regressing pfs_months on all 37 features achieves
+R^2 = 0.792, indicating that PFS is highly determined by the recorded
+features.  Adjusted coefficients (most influential):
+  age_years              +0.176 / yr
+  ecog_ps                -1.17  / level
+  stage_iv               -1.55
+  has_brain_mets         -0.98
+  albumin_g_dl           +0.48  / g/dL
+  weight_loss_pct_6mo    -0.077 / %
+  ki67_pct               -0.019 / %
+  er_positive            +0.53
+  her2_positive          -0.47
+  pik3ca_mutation        -0.58
+  treatment_palbociclib  +1.10
+All other treatment coefficients are near zero (|coef| < 0.04, all
+non-significant or only marginally so). This already suggests that
+five of the six treatments have no overall PFS effect once
+prognostic covariates are accounted for.
+
+
+5. Treatment x biomarker interactions, clinically motivated (iter 5, 8)
+-----------------------------------------------------------------------
+Interaction terms in OLS pfs_months ~ tx*biomarker + adjusters:
+
+  treatment_palbociclib x er_positive:          +1.559   (p<1e-300)
+  treatment_palbociclib x her2_positive:        -1.338   (p<1e-300)
+  treatment_palbociclib x pik3ca_mutation:      -1.665   (p<1e-300)
+  treatment_palbociclib x pr_positive:          +1.030   (p<1e-300)
+  treatment_palbociclib x her2_low:             +0.383   (p=3e-67)
+  treatment_palbociclib x postmenopausal:       -0.026   (n.s.)
+
+  treatment_tamoxifen x er_positive:            +0.007   (n.s.)
+  treatment_trastuzumab x her2_positive:        +0.009   (n.s.)
+  treatment_olaparib x brca1_mutation:          +0.101   (n.s.)
+  treatment_olaparib x brca2_mutation:          -0.016   (n.s.)
+  treatment_sacituzumab_govitecan x her2_low:   +0.042   (n.s.)
+  treatment_pembrolizumab x pik3ca_mutation:    +0.041   (n.s.)
+
+The biology recovered for palbociclib is clean: large positive
+interaction with ER+, large negative interaction with HER2+, large
+negative interaction with PIK3CA mutation. None of the other five
+treatments show their expected biomarker interaction in this dataset.
+
+
+6. Channeling check (iter 6)
+----------------------------
+Treatment use rates were almost identical across biomarker strata
+(within ~2 percentage points everywhere - e.g., trastuzumab 20.9% in
+HER2+ vs 19.9% in HER2-, olaparib 9.4% in BRCA1+ vs 9.9% in BRCA1-).
+That is, treatments are not preferentially given to biomarker-positive
+patients. The dataset behaves like a randomized assignment with respect
+to biomarkers, so the absence of subgroup effects for the other five
+treatments cannot be blamed on confounding-by-indication.
+
+
+7. Treatments tested in their natural target subgroups (iter 7)
+---------------------------------------------------------------
+  Tamoxifen in ER+ (n=34886):              +0.023, p=0.45
+    in ER+/postmenopausal (n=21081):       +0.010, p=0.81
+    in ER+/PR+ (n=29674):                  +0.031, p=0.35
+    in ER+/HER2- (n=28589):                +0.025, p=0.48
+  Trastuzumab in HER2+ (n=9060):           -0.079, p=0.15
+    in HER2+/ER+ (n=6297):                 -0.087, p=0.18
+    in HER2+/ER- (n=2763):                 -0.063, p=0.55
+  Olaparib in BRCAany (n=2499):            +0.346, p=0.041
+    in BRCAany/HER2- (n=2023):             +0.321, p=0.09
+    in BRCAany/ER- (n=750):                +0.829, p=0.0012  (apparent)
+  Sacituzumab in TNBC (n=10496):           -0.085, p=0.22
+    in HER2-low (n=18543):                 -0.031, p=0.64
+  Pembrolizumab in TNBC (n=10496):         +0.072, p=0.22
+
+Only the BRCAany/ER- olaparib comparison crossed nominal significance.
+
+
+8. Exhaustive 2-way subgroup screen (iter 10)
+---------------------------------------------
+For each non-palbociclib treatment, every pair of 12 binary features
+defined four cells; cells with n>=200 and >=30 in each treatment arm
+were tested. Hits required |diff|>0.3 mo and p<0.01.
+  Tamoxifen, Trastuzumab, Sacituzumab govitecan: zero hits.
+  Pembrolizumab: one hit (sex_female=1 & brca1_mutation=1) of opposite
+                 sign, almost certainly chance.
+  Olaparib: only BRCA2+/ER- looked positive (+0.880, p=0.007, ola_n=32).
+
+So the search did not surface a hidden subgroup-level benefit for any
+of the five non-palbociclib treatments.
+
+
+9. Refining the olaparib signal: confounding (iter 11, 12)
+----------------------------------------------------------
+Within BRCAany/ER- (n=750), olaparib-treated patients were on average
+3.1 years older than controls (68.1 vs 65.0 yrs). Given the strong
+positive age coefficient (+0.176/yr in the multivariable model), this
+imbalance alone explains roughly +0.55 mo of the +0.83 raw difference.
+Fitting OLS pfs_months ~ treatment_olaparib + age_years + ecog_ps +
+stage_iv + has_brain_mets + albumin_g_dl + weight_loss_pct_6mo within
+BRCAany/ER- collapses the olaparib coefficient to -0.003 (p=0.92). A
+triple-interaction model (olaparib*brca_any*er_positive, with full
+covariate adjustment) confirmed all interaction terms null
+(all p>=0.25). Olaparib has no detectable real PFS effect in this
+dataset, even in its biologically plausible niche.
+
+
+10. Verifying the age-PFS positive correlation (iter 13)
+--------------------------------------------------------
+Pearson r(age_years, pfs_months) was essentially unchanged after
+stratification:
+  Within ECOG 0:   r = 0.742
+  Within ECOG 1:   r = 0.741
+  Within ECOG 2:   r = 0.726
+  Within stage_iv=0: r = 0.739
+  Within stage_iv=1: r = 0.717
+This is a real (though clinically counterintuitive) feature of the
+data-generating process.
+
+
+11. Treatment heterogeneity for palbociclib by ki67 (iter 14, 15)
+-----------------------------------------------------------------
+Within ER+/HER2-/PIK3CAwt (n=18,681), the palbociclib effect on PFS
+declines monotonically with ki67_pct:
+  Q1 ki67 <= 7.5%:     palbo +4.93 mo
+  Q2 ki67 7.6-12.2%:   palbo +4.97 mo
+  Q3 ki67 12.3-19.6%:  palbo +1.72 mo
+  Q4 ki67 >= 19.7%:    palbo -0.05 mo
+
+The continuous-interaction OLS in this subgroup gives
+  treatment_palbociclib              coef +5.06
+  treatment_palbociclib : ki67_pct   coef -0.138 / % (p<1e-300)
+implying a palbociclib effect of +4.37 at ki67=5, +2.99 at ki67=15,
++1.61 at ki67=25, +0.92 at ki67=30.
+
+
+12. Best-supported palbociclib subgroup (iter 9, 16)
+----------------------------------------------------
+Refined subgroup: er_positive=1 AND her2_positive=0 AND
+pik3ca_mutation=0 AND ki67_pct <= 14. (21.7% of cohort, n=10,828.)
+  Inside subgroup:    palbo on=9.228 vs off=4.285, diff +4.94 mo
+                      adjusted +4.98 (p<1e-300).
+  Outside subgroup:   palbo on=4.324 vs off=4.317, diff +0.007 (p=0.75).
+
+Either of the unfavorable predicates (HER2+, PIK3CA mutation, or high
+ki67) suppresses the palbociclib effect to zero. ER positivity is a
+necessary positive predicate.
+
+
+Final treatment-by-subgroup conclusions
+---------------------------------------
+- treatment_palbociclib: large PFS benefit (~ +5 months) confined to
+  the subgroup defined by er_positive=1 AND her2_positive=0 AND
+  pik3ca_mutation=0 AND ki67_pct <= 14. Negligible effect outside.
+  Direction = positive.
+
+- treatment_tamoxifen: no PFS effect detected in any subgroup,
+  including ER+, ER+/PR+, ER+/postmenopausal, ER+/HER2-.
+
+- treatment_trastuzumab: no PFS effect detected; direction is slightly
+  negative everywhere including HER2+ (where benefit would be
+  biologically expected). Effect is negligible after adjustment.
+
+- treatment_olaparib: no genuine PFS effect. The only nominally
+  positive subgroup (BRCAany/ER-) was confounded by an age imbalance
+  and disappeared after covariate adjustment.
+
+- treatment_sacituzumab_govitecan: no PFS effect detected in any
+  subgroup including TNBC, HER2-low, HER2-low/HR+. The marginally
+  positive multivariable coefficient (+0.033, p=0.05) is at noise.
+
+- treatment_pembrolizumab: no PFS effect detected in any subgroup
+  including TNBC and PIK3CAwt subsets. Tiny overall negative effect
+  (~ -2 days) is clinically meaningless.
+
+
+Cohort observations
+-------------------
+Two features of this dataset deviate from real-world breast oncology:
+- only 44.7% of patients are sex_female, with no PFS difference by sex
+- age_years has a strong POSITIVE association with PFS (older = longer
+  PFS), robust within ECOG and stage strata
+Both observations are consistent with synthetic data rather than a
+real EHR-derived breast cancer cohort. Conclusions above describe the
+data-generating process embedded in this benchmark, not real-world
+biology.

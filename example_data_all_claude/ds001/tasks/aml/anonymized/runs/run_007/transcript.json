@@ -1,0 +1,326 @@
+{
+  "dataset_id": "ds001_aml",
+  "model_id": "claude-opus-4-7",
+  "harness_id": "claude-code@inline",
+  "max_iterations": 25,
+  "iterations": [
+    {
+      "index": 1,
+      "proposed_hypotheses": [
+        {
+          "id": "h1_main_binary",
+          "text": "At least one of the binary features in the dataset (feature_001, feature_005, feature_006, feature_008, feature_009, feature_010, feature_014, feature_015, feature_016, feature_018, feature_019, feature_021, feature_025, feature_026, feature_030, feature_032) is associated with a higher or lower probability of objective_response = 1 compared to its absence.",
+          "kind": "novel"
+        },
+        {
+          "id": "h1_main_cont",
+          "text": "At least one of the continuous features (feature_011, feature_022, feature_024, feature_029, feature_034, feature_020, feature_027, feature_012, feature_028, feature_007, feature_031, feature_013, feature_033, feature_003, feature_035, feature_023, feature_002, feature_017) differs in mean value between responders (objective_response=1) and non-responders (objective_response=0).",
+          "kind": "novel"
+        },
+        {
+          "id": "h1_main_cat",
+          "text": "Higher levels of feature_004 (an ordinal 0/1/2 feature) are associated with progressively lower response rates.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h1_main_binary"],
+          "code": "for f in binary_feats: chi2_contingency(crosstab(df[f], df['objective_response']))",
+          "result_summary": "Chi-square testing each binary feature vs response. Strongest signals: feature_014 (rate 23.5% if=1 vs 16.7% if=0, OR=1.53, p<1e-30); feature_001 (22.1% vs 16.5%, OR=1.43, p<1e-30); feature_021 (22.0% vs 16.6%, OR=1.41, p<1e-30); feature_026 (16.8% vs 19.1%, OR=0.86, p~3e-7); feature_009 (16.6% vs 19.0%, OR=0.85, p~6e-6). All other binary features had |OR-1|<0.05 and p>0.13.",
+          "p_value": 1e-30,
+          "effect_estimate": 0.0674,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h1_main_cont"],
+          "code": "for f in cont_feats: ttest_ind(df.loc[y==1,f], df.loc[y==0,f])",
+          "result_summary": "Welch t-tests of each continuous feature for responders vs non-responders. Significant differences: feature_020 (3.44 vs 3.95, t=-12.1, p<1e-30); feature_024 (58.5 vs 60.3, t=-8.2, p<1e-15); feature_029 (3.82 vs 3.79, t=+5.1, p~3e-7); feature_027 (5.69 vs 6.17, t=-4.8, p~2e-6); feature_022 (19.27 vs 20.39, t=-3.8, p~1.5e-4). All other continuous features p>0.05. Direction: lower feature_020/024/027/022 and higher feature_029 are associated with response.",
+          "p_value": 1e-30,
+          "effect_estimate": -0.5103,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h1_main_cat"],
+          "code": "df.groupby('feature_004')['objective_response'].mean(); chi2_contingency",
+          "result_summary": "Response rates: feature_004=0 -> 23.1% (n=17592); =1 -> 17.4% (n=24971); =2 -> 12.9% (n=7437). Chi-square p ~ 1.8e-90. Monotonic decrease in response with higher levels of feature_004 — consistent with a performance-status/risk-stratifier interpretation.",
+          "p_value": 1.79e-90,
+          "effect_estimate": -0.1019,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "proposed_hypotheses": [
+        {
+          "id": "h2_multivariable",
+          "text": "After mutual adjustment in a single logistic regression including all 35 features, feature_004, feature_014, feature_001, feature_021, feature_020, feature_024, feature_029, feature_026, and feature_009 remain independent predictors of objective_response, and most other features become non-significant.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h2_multivariable"],
+          "code": "sm.Logit(y, sm.add_constant(X_std_with_all_features)).fit()",
+          "result_summary": "Multivariable logistic regression confirmed independent effects (sorted by p): feature_004 (beta=-0.36, p~9e-93), feature_014 (+0.44, p~1.7e-71), feature_001 (+0.37, p~2.4e-57), feature_021 (+0.36, p~8e-54), feature_020 (-0.14, p~3e-31), feature_024 (-0.10, p~1e-17), feature_029 (+0.06, p~1.4e-7), feature_026 (-0.17, p~6e-7), feature_009 (-0.19, p~3.6e-6), feature_027 (-0.06, p~6e-6), feature_022 (-0.05, p~1.3e-4). Other features p>0.02 and |beta|<0.05 SD. The 9 hypothesized predictors all retained significance.",
+          "p_value": 1e-50,
+          "effect_estimate": 0.4355,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "proposed_hypotheses": [
+        {
+          "id": "h3_treat_indep",
+          "text": "feature_014, feature_001, and feature_021 are statistically independent of each other and of all other features in the dataset (i.e., they behave like independent randomized treatment assignments rather than disease-related risk markers).",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h3_treat_indep"],
+          "code": "for pairs in (014,001),(014,021),(001,021): chi2_contingency(crosstab(...))",
+          "result_summary": "Pairwise associations among the three candidate treatments are essentially null: feature_014 x feature_001 chi-square p=0.47 (corr=-0.003); feature_014 x feature_021 p=0.80 (corr=+0.001); feature_001 x feature_021 p=0.75 (corr=-0.001). All three are also balanced across the levels of feature_004 (each ~30%/40%/40% prevalence regardless of feature_004 level), and feature_026 prevalence is identical (~15%) across treated and untreated groups. Consistent with independent randomized assignment.",
+          "p_value": 0.47,
+          "effect_estimate": -0.003,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "proposed_hypotheses": [
+        {
+          "id": "h4_pairwise_int",
+          "text": "feature_014 modifies the effect of feature_001 on objective_response (and vice-versa); the effect of each is much larger when the other is also = 1.",
+          "kind": "novel"
+        },
+        {
+          "id": "h4_int_021",
+          "text": "feature_014 also interacts with feature_021 to produce response, and feature_001 interacts with feature_021.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h4_pairwise_int"],
+          "code": "Logit(y ~ T1 + T2 + T1:T2) for T1=feature_014, T2=feature_001",
+          "result_summary": "Interaction term feature_014:feature_001 in a logistic model: beta = +1.06, p ~ 6.8e-103. Stratified rates: feature_001=0 -> 014 effect 16.0% vs 16.8% (~null). feature_001=1 -> 014 effect 35.0% vs 16.6% (huge boost). Effect of feature_014 is conditional on feature_001=1.",
+          "p_value": 6.84e-103,
+          "effect_estimate": 1.0595,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h4_int_021"],
+          "code": "Logit(y ~ T1 + T3 + T1:T3) and (y ~ T2 + T3 + T2:T3)",
+          "result_summary": "feature_014:feature_021 interaction beta=+1.05, p ~ 5.5e-102. feature_001:feature_021 interaction beta=+0.88, p ~ 1.1e-78. Each pairwise interaction is highly significant and positive — but stratified analysis showed only the triple-positive cell (014=001=021=1) has elevated response.",
+          "p_value": 5.5e-102,
+          "effect_estimate": 1.0549,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "proposed_hypotheses": [
+        {
+          "id": "h5_three_way",
+          "text": "Objective response is driven by a pure 3-way interaction among feature_014, feature_001, and feature_021: response is only elevated when all three indicators equal 1; any singleton or pair is essentially as good as none.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h5_three_way"],
+          "code": "Logit(y ~ T1+T2+T3+T1T2+T1T3+T2T3+T1T2T3) with T1=014, T2=001, T3=021",
+          "result_summary": "Cell-level response rates with no other adjustment: (014,001,021)=(0,0,0)->17.2%; (1,0,0)->16.0%; (0,1,0)->16.4%; (0,0,1)->16.2%; (1,1,0)->16.4%; (1,0,1)->15.7%; (0,1,1)->16.9%; (1,1,1)->63.3%. In the saturated logistic model, only the triple-product term is significant (beta=+2.13, p<1e-90, z=20.4); all main effects and 2-way interactions have p>=0.05 and |beta|<=0.10. Consistent with a pure 3-way synergy: all three treatments are needed.",
+          "p_value": 1e-90,
+          "effect_estimate": 2.1262,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "proposed_hypotheses": [
+        {
+          "id": "h6_resistance_026",
+          "text": "feature_026 = 1 abolishes the response benefit of the triple-treatment combination (feature_014=feature_001=feature_021=1); within the triple-treated subgroup, response is dramatically lower in patients with feature_026=1 than feature_026=0.",
+          "kind": "novel"
+        },
+        {
+          "id": "h6_resistance_009",
+          "text": "feature_009 = 1 likewise abolishes the response benefit of the triple-treatment combination.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h6_resistance_026"],
+          "code": "Logit(y ~ T3 + F26 + T3:F26); stratified rates within T3=1",
+          "result_summary": "Within triple-treated patients (n=2401): feature_026=0 -> response 75.9% (n=2025); feature_026=1 -> 18.4% (n=376). Interaction T3:feature_026 in logistic model: beta=-2.44, p~1.8e-62. feature_026=1 essentially eliminates the triple-treatment benefit (post-treatment rate equals untreated baseline ~18%).",
+          "p_value": 1.78e-62,
+          "effect_estimate": -2.4389,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h6_resistance_009"],
+          "code": "Logit(y ~ T3 + F9 + T3:F9); stratified rates within T3=1, feature_026=0",
+          "result_summary": "Within triple-treated patients with feature_026=0 (n=2025): feature_009=0 -> response 78.6% (n=1790); feature_009=1 -> 18.7% (n=235). Interaction T3:feature_009 in logistic model: beta=-2.26, p~4.3e-42. feature_009=1 also abolishes the benefit. Feature_026 and feature_009 act independently — either alone is enough to suppress response.",
+          "p_value": 4.31e-42,
+          "effect_estimate": -2.2591,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "proposed_hypotheses": [
+        {
+          "id": "h7_global_screen",
+          "text": "Among all 32 non-treatment features, feature_026 and feature_009 are the only features that materially modify the effect of the triple-treatment indicator T3 = (feature_014=1 & feature_001=1 & feature_021=1).",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h7_global_screen"],
+          "code": "for f in features: Logit(y ~ T3 + F + T3:F).pvalues['T3:F']",
+          "result_summary": "Systematic interaction screen (32 features tested for T3-modification): feature_026 (beta=-2.44, p~1.8e-62) and feature_009 (beta=-2.26, p~4.3e-42) dominate. Only one other interaction had p<0.05 after adjusting (feature_024 beta=+0.15, p~5.6e-4 — small); all other features had p>0.1. Confirms that feature_026 and feature_009 are the principal effect modifiers.",
+          "p_value": 1.78e-62,
+          "effect_estimate": -2.4389,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "proposed_hypotheses": [
+        {
+          "id": "h8_ps_main",
+          "text": "feature_004 (ordinal 0/1/2) is a prognostic factor: response rate decreases monotonically with increasing feature_004 level, regardless of treatment status.",
+          "kind": "novel"
+        },
+        {
+          "id": "h8_ps_int",
+          "text": "feature_004 does NOT meaningfully modify the absolute or relative effect of the triple-treatment indicator on response — i.e., the triple-treatment benefit is preserved across feature_004 strata.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h8_ps_main"],
+          "code": "groupby('feature_004') and Logit(y ~ feature_004) and within T3=1, clean: groupby",
+          "result_summary": "Across the full cohort: feature_004=0 -> 23.1% response, =1 -> 17.4%, =2 -> 12.9% (chi-square p~1.8e-90). Within the favorable subgroup (T3=1, feature_026=0, feature_009=0): =0 -> 86.0%, =1 -> 77.2%, =2 -> 66.8%. Monotonic decrease confirmed in both groups.",
+          "p_value": 1.79e-90,
+          "effect_estimate": -0.1019,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h8_ps_int"],
+          "code": "for v in [0,1,2]: stratify by feature_004=v; compute T3 vs no-T3 response rate",
+          "result_summary": "Absolute T3 effect: feature_004=0 -> +49.0 percentage points (69.8% vs 20.8%); =1 -> +46.0 pp (61.2% vs 15.2%); =2 -> +44.6 pp (55.4% vs 10.8%). Treatment effect persists across all feature_004 strata; no meaningful interaction (T3:feature_004 in screen p~0.34). feature_004 is purely prognostic, not predictive of treatment effect.",
+          "p_value": 0.34,
+          "effect_estimate": -0.044,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "proposed_hypotheses": [
+        {
+          "id": "h9_continuous_in_subgroup",
+          "text": "Within the favorable subgroup (T3=1, feature_026=0, feature_009=0), continuous biomarkers feature_020 and feature_024 remain inversely associated with response.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h9_continuous_in_subgroup"],
+          "code": "ttest_ind on feature_020, feature_024 within favorable subgroup",
+          "result_summary": "Within favorable subgroup (n=1790): feature_020 mean 3.77 in responders vs 4.56 in non-responders (t=-3.36, p~8.2e-4); feature_022 mean 20.0 vs 22.6 (p~0.10, marginal); feature_024 effect attenuated within subgroup. Multivariable logistic in full cohort with T3, feature_026, feature_009, T3:026, T3:009, feature_004, feature_020 (std), feature_024 (std): T3 beta=+2.97 (p<1e-300), T3:026 -2.75 (p<1e-30), T3:009 -2.61 (p<1e-30), feature_004 -0.39 (p<1e-90), feature_020 -0.16 (p<1e-30), feature_024 -0.11 (p~1e-18). All independent. Higher feature_020 and feature_024 reduce response across the cohort and modestly within the favorable subgroup.",
+          "p_value": 8.19e-4,
+          "effect_estimate": -0.7912,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "proposed_hypotheses": [
+        {
+          "id": "h10_final_subgroup",
+          "text": "The complete subgroup definition for maximum benefit from triple treatment is: feature_014=1 AND feature_001=1 AND feature_021=1 AND feature_026=0 AND feature_009=0. In this subgroup, objective_response rate is markedly higher than in any other patient cohort; outside this subgroup, response is at baseline (~16-17%).",
+          "kind": "refined"
+        },
+        {
+          "id": "h10_singletons_pairs",
+          "text": "Among triple-treatment-eligible patients (feature_026=0, feature_009=0), neither single treatments (014 or 001 or 021 alone) nor pairs of treatments produce any meaningful response benefit over no treatment; only the full triple combination does.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h10_final_subgroup"],
+          "code": "fav = (T1=1)&(T2=1)&(T3=1)&(F26=0)&(F9=0); chi2_contingency(crosstab(fav, y))",
+          "result_summary": "Favorable subgroup n=1790, response 78.6% (1407/1790); rest n=48210, response 16.5% (7968/48210). Chi-square p effectively 0 (>1e-300). Risk difference +62.1 percentage points; risk ratio 4.76; odds ratio ~18.6. This is the maximally specified subgroup with all five predicates.",
+          "p_value": 1e-300,
+          "effect_estimate": 0.6209,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h10_singletons_pairs"],
+          "code": "stratify within (feature_026=0, feature_009=0): singletons vs pairs vs triple vs none",
+          "result_summary": "Within feature_026=0 & feature_009=0: none of 014/001/021 -> 17.2% response (n=9626); only feature_014=1 -> 16.1% (n=4162); only feature_001=1 -> 16.4% (n=6509); only feature_021=1 -> 16.0% (n=6416); 014+001 only -> 15.8% (n=2741); 014+021 only -> 15.8% (n=2789); 001+021 only -> 16.6% (n=4288); all three -> 78.6% (n=1790). Singletons and pairs are statistically indistinguishable from no treatment; only the triple combination produces benefit. Confirms a pure 3-way synergy with two effect-erasing comorbidities.",
+          "p_value": 1e-300,
+          "effect_estimate": 0.6135,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "proposed_hypotheses": [
+        {
+          "id": "h11_other_features_null",
+          "text": "Outside the predictors already identified (feature_014, 001, 021, 026, 009, 004, 020, 024, 029, 027, 022), the remaining ~24 features (feature_005, 006, 008, 010, 011, 012, 013, 015, 016, 017, 018, 019, 023, 025, 028, 030, 031, 032, 033, 034, 035, 002, 003, 007) have no detectable effect on objective_response in this cohort.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h11_other_features_null"],
+          "code": "from multivariable Logit; check all coefficients with p > 0.05",
+          "result_summary": "From the full multivariable logistic regression, the following features had |beta|<0.05 and p>0.08: feature_010 (p=0.34), feature_005 (p=0.90), feature_016 (p=0.87), feature_025 (p=0.41), feature_019 (p=0.52), feature_015 (p=0.70), feature_018 (p=0.79), feature_008 (p=0.13), feature_006 (p=0.65), feature_032 (p=0.80), feature_030 (p=0.55), feature_011 (p=0.67), feature_028 (p=0.19), feature_007 (p=0.02 but tiny), feature_031 (p=0.08), feature_013 (p=0.15), feature_033 (p=0.22), feature_003 (p=0.68), feature_035 (p=0.55), feature_023 (p=0.73), feature_002 (p=0.69), feature_017 (p=0.90), feature_034 (p=0.38), feature_012 (p=0.82). With ~50K patients, even tiny true effects would be detectable; these features are not informative for predicting objective_response.",
+          "p_value": 0.34,
+          "effect_estimate": 0.022,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "proposed_hypotheses": [
+        {
+          "id": "h12_summary",
+          "text": "FINAL: The principal driver of objective_response in this AML cohort is a triple-combination treatment indicator (feature_014=1 AND feature_001=1 AND feature_021=1) which, in the absence of two resistance markers (feature_026=0 AND feature_009=0), raises response from approximately 17% to approximately 79%. feature_004 and continuous biomarkers feature_020, feature_024 are independent prognostic factors but do not modify the relative treatment benefit. The triple-treatment effect requires all three component treatments simultaneously; any subset (singleton or pair) is no better than no treatment.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h12_summary"],
+          "code": "Final integrated logistic model: Logit(y ~ T3 + F26 + F9 + T3:F26 + T3:F9 + F4 + F20 + F24)",
+          "result_summary": "Integrated final model coefficients: const=-1.35; T3=+2.97 (p<1e-300); T3:feature_026=-2.75 (p<1e-30); T3:feature_009=-2.61 (p<1e-30); feature_026 main=+0.01 (NS); feature_009 main=-0.01 (NS); feature_004=-0.39 (p<1e-90); feature_020(std)=-0.16 (p<1e-30); feature_024(std)=-0.11 (p~1e-18). Interpretation: feature_026 and feature_009 are essentially treatment-effect modifiers only — they have no main effect on response in untreated patients, but each abolishes the triple-treatment benefit. feature_004, feature_020, feature_024 are pure prognostic factors with consistent effects regardless of treatment.",
+          "p_value": 1e-300,
+          "effect_estimate": 2.9725,
+          "significant": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,179 @@
+Analysis summary for ds001_crc (50,000 colorectal cancer patients; outcome: pfs_months)
+================================================================================
+
+Approach
+--------
+Across 25 iterations I (a) characterized the dataset's main prognostic structure,
+(b) identified the unique treatment indicator, and (c) systematically searched
+for treatment-effect heterogeneity until the smallest stable subgroup
+definition that captured all the benefit was located. All effect signs reflect
+the natural pfs_months scale (months gained or lost).
+
+Phase 1 -- Prognostic main effects (iterations 1-6)
+---------------------------------------------------
+Univariate Pearson screening flagged a small handful of features with
+substantial pfs_months associations and a long tail of essentially null
+features. A single multivariable OLS fit with all 33 features explained
+R^2 = 0.86 of pfs_months variance, isolating the independent prognostic core:
+
+  feature_015  +0.176/unit (continuous, range 30-90, mean 65; the dominant
+               positive predictor; deciles span PFS 1.3 -> 7.5 months)
+  feature_001  -1.17/category (3-level ordinal 0/1/2; PFS 5.27 -> 4.05 -> 2.91)
+  feature_014  -1.36 (binary, prevalence 55%)
+  feature_019  +0.47/unit (continuous, range 1.5-5.5, mean 3.8)
+  feature_025  -0.078/unit (continuous, range 0-25)
+  feature_006  -0.29; feature_023 -0.35; feature_022 -0.36 (binary)
+  feature_005  -0.005/unit (continuous, right-skewed, range 0-777)
+  feature_021  -0.0004/unit
+
+The remaining ~20 features (feature_002, _003, _004, _007, _008, _009, _010,
+_012, _013, _016, _017, _018, _020, _024, _026, _028, _029, _030, _031, _032,
+_033) carried no independent prognostic signal in the multivariable fit --
+they are noise / null variables in this cohort.
+
+Phase 2 -- Identifying the treatment indicator (iteration 7)
+------------------------------------------------------------
+Among the binary features, feature_027 (prevalence 20%) stood out as the only
+mid-prevalence binary with a large positive PFS effect: +0.97 unadjusted /
++0.94 adjusted PFS-months (n_trt=10,022 vs n_ctrl=39,978; p ~ 0). All other
+binary features either had small effects or negative effects in the same
+prognostic direction as the resistance markers above. feature_027 is thus the
+natural treatment-arm candidate, and the heterogeneity search for the
+remaining iterations focused on this variable.
+
+Phase 3 -- Treatment-effect heterogeneity search (iterations 8-12)
+------------------------------------------------------------------
+A treatment-by-binary-feature interaction sweep was conducted for feature_027
+against every binary in the dataset. Three negative interactions and one
+positive interaction reached strong significance:
+
+  feature_023 x feature_027 :  interaction coef = -1.63 (p = 7.7e-226)
+  feature_006 x feature_027 :  interaction coef = -1.45 (p = 4.1e-168)
+  feature_022 x feature_027 :  interaction coef = -1.18 (p = 6.1e-23)
+  feature_011 x feature_027 :  interaction coef = +0.99 (p = 1.2e-11)
+
+All other binary features had non-significant interactions with feature_027.
+
+Stratified means showed each of feature_023, feature_006, feature_022 acts as
+a complete-resistance marker -- when =1, the feature_027 PFS effect collapses
+to ~ 0:
+
+  feature_023=0: feature_027 effect = +1.66 months (p ~ 0)
+  feature_023=1: feature_027 effect = +0.027 months (p = 0.45)
+  feature_006=0: feature_027 effect = +1.48 months (p ~ 0)
+  feature_006=1: feature_027 effect = +0.026 months (p = 0.52)
+  feature_022=0: feature_027 effect = +1.03 months (p ~ 0)
+  feature_022=1: feature_027 effect = -0.16 months (p = 0.15)
+
+feature_011=1 looked like an enhancer (effect +1.93 vs +0.94 in =0), but later
+analysis showed this was driven by enrichment of triple-WT/low-feature_005
+patients within the feature_011=1 stratum rather than independent biomarker
+activity (see iteration 24).
+
+Phase 4 -- Joint subgroup definition (iterations 13-14)
+-------------------------------------------------------
+The triple-wild-type subgroup (feature_023=0 AND feature_006=0 AND
+feature_022=0; n = 17,372, ~35% of cohort) showed feature_027 effect = +2.76
+months -- nearly triple the overall +0.97. Within this triple-WT subgroup, a
+treatment-by-continuous-feature interaction sweep identified one dominant
+continuous modifier:
+
+  feature_005 x feature_027 (within triple-WT) : interaction coef = -0.065
+                                                  per unit feature_005,
+                                                  p = 7.4e-136
+
+Higher feature_005 progressively erased the treatment benefit. No other
+continuous feature reached p < 0.05 with meaningful magnitude in this stratum.
+
+Phase 5 -- Optimal cutoff for feature_005 (iterations 15-16)
+------------------------------------------------------------
+Treatment effect by feature_005 quintile within triple-WT was sharply
+bimodal: Q1-Q3 (feature_005 < ~6) all gave ~ +5 months; Q4-Q5 (feature_005 >=
+~6) gave ~ 0 months. Cutpoint sweep:
+
+  thr  LOW-side TE     HIGH-side TE
+   3   +5.03           +1.33
+   4   +5.04           +0.69
+   5   +5.01           +0.005
+   6   +4.55           -0.02
+   7   +4.13           +0.02
+   8   +3.90           -0.004
+
+feature_005 < 6 was selected as the operational cutoff: clean zero benefit on
+the high side, ~+4.5 months on the low side.
+
+Phase 6 -- Final subgroup, robustness, and refutation of competitors (iterations 17-25)
+--------------------------------------------------------------------------------------
+Eligibility predicate: feature_023=0 AND feature_006=0 AND feature_022=0
+AND feature_005<6.
+
+  Eligible    : n = 10,398 (20.8% of cohort)
+                feature_027 effect = +4.55 months unadjusted (mean PFS 8.63 vs
+                4.09; p ~ 0)
+                feature_027 effect = +4.50 months adjusted (95% CI 4.47-4.53)
+  Ineligible  : n = 39,602
+                feature_027 effect = +0.022 months unadjusted (p = 0.41)
+                feature_027 effect = -0.007 months adjusted (p = 0.18)
+
+A joint OLS with the four-way eligibility predicate, the prognostic main
+effects, and the treatment-by-eligibility interaction reached R^2 = 0.976. In
+that model the feature_027:eligible interaction was +4.51 (p << 1e-300), the
+feature_027 main effect was -0.004 (p = 0.37), and the eligible main effect
+was -0.006 (p = 0.20). The treatment effect is essentially entirely captured
+by the four-way conjunction.
+
+Iterations 18-20 confirmed that within the eligible subgroup no further
+binary or continuous feature provides additional, independent treatment-effect
+modification at meaningful magnitude. Iteration 23 confirmed via pairwise
+binary x binary interaction sweeping that no other binary feature in the
+dataset behaves like a treatment with subgroup-specific effects -- feature_027
+is the unique treatment indicator. Iteration 24 confirmed that feature_011's
+apparent positive interaction is non-additive once eligibility is satisfied
+(within-eligible difference between feature_011=1 vs 0 = +0.32, ns), so
+feature_011 is dropped from the final subgroup definition.
+
+Hypotheses supported vs. refuted
+--------------------------------
+Supported:
+  * h2.1  feature_015 -> longer PFS  (+0.176/unit)
+  * h3.1  feature_001 (0->1->2) -> shorter PFS (-1.17/cat)
+  * h4.1  feature_014=1 -> shorter PFS (-1.35)
+  * h5.1  feature_019 -> longer; feature_025 -> shorter
+  * h6.1  full multivariable model R^2 > 0.8 (achieved 0.86)
+  * h7.1  feature_027=1 -> longer PFS (+0.97 unadjusted)
+  * h8.1, h9.1, h10.1, h11.1  feature_023, _006, _022 each abolish feature_027 benefit
+  * h13.1  triple-WT subgroup amplifies treatment effect to +2.76
+  * h14.1, h15.1, h16.1  feature_005 modulates treatment within triple-WT, with
+                         abrupt loss of benefit above ~6
+  * h17.1, h21.1, h22.1  four-way eligibility predicate captures all benefit;
+                         non-eligible patients gain zero PFS from feature_027
+  * h23.1  feature_027 is the unique treatment indicator
+  * h25.1  FINAL: feature_027 -> +4.5 PFS-months exclusively in patients with
+                  feature_023=0 AND feature_006=0 AND feature_022=0 AND
+                  feature_005<6
+
+Refuted / nuanced:
+  * h12.1  feature_011 looked like an effect-enhancer in unadjusted analysis,
+           but the apparent enhancement was confounded by triple-WT/low-
+           feature_005 enrichment (h24.1)
+  * h18.1, h19.1, h20.1  no further treatment-effect modifier exists within the
+                          eligible subgroup -- the heterogeneity search
+                          terminates at the four-way predicate
+
+Final treatment-effect subgroup hypothesis (preregistered for scoring)
+----------------------------------------------------------------------
+Treatment    : feature_027
+Outcome      : pfs_months
+Direction    : positive (treatment INCREASES pfs_months)
+Effect size  : +4.50 PFS-months (95% CI ~4.47 to 4.53) within the eligible
+               subgroup; ~ 0 (-0.007, 95% CI -0.018 to +0.003) outside it
+Subgroup     : feature_023 = 0 AND feature_006 = 0 AND feature_022 = 0
+               AND feature_005 < 6
+Subgroup size: 10,398 of 50,000 patients (20.8% of cohort)
+Interpretation: The pattern is consistent with a targeted oncology therapy
+whose response requires absence of three molecular resistance markers
+(feature_023, feature_006, feature_022) and a low value of a continuous
+tumor-burden / load marker (feature_005). Mechanistically this resembles, but
+the dataset does not name, an EGFR-inhibitor-like profile in metastatic
+colorectal cancer (resistance markers consistent with a RAS/RAF axis;
+feature_005 consistent with a tumor-burden marker such as CEA or LDH).

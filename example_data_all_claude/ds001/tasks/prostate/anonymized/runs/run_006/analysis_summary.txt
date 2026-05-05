@@ -1,0 +1,147 @@
+Analysis Summary — ds001_prostate
+=================================
+
+Cohort: 50,000 patients, 33 anonymised features (one constant, 32 informative),
+single binary outcome `objective_response` (overall rate 24.0%, 12,011 of
+50,000 responders). Twenty propose-test-refine iterations were carried out.
+
+------------------------------------------------------------------------
+1. Identifying the treatment variable
+------------------------------------------------------------------------
+The strongest single positive predictor of `objective_response` is the binary
+variable `feature_008`. Patients with `feature_008==1` (n=20,076) have a 36.1%
+response rate vs 15.9% in `feature_008==0` (n=29,924), an absolute difference of
++20.2 percentage points (chi-square p<1e-300; univariable logistic OR ~3.0).
+
+Critically, `feature_008` is essentially perfectly balanced across every other
+feature in the dataset:
+  * proportion differences for binary covariates: |diff| < 0.006 in all cases
+  * median differences for continuous covariates: trivial (e.g., feature_022
+    median 15.82 vs 15.89; feature_016 median 64.9 vs 65.0)
+This balance pattern is the signature of a randomized treatment assignment, so
+`feature_008` is treated as the active treatment of interest. All subsequent
+analyses focus on uncovering its true effect heterogeneity.
+
+------------------------------------------------------------------------
+2. Other features that were initially confused with treatments
+------------------------------------------------------------------------
+Four binary features have large NEGATIVE marginal associations with response —
+feature_013 (-19.3 pp), feature_015 (-10.0 pp), feature_021 (-10.0 pp),
+feature_027 (-6.6 pp) — but cross-tabulation shows they are also balanced
+across `feature_008` arms, so they are NOT competing treatment indicators. Of
+these, feature_013 is balanced on every other variable except `feature_022`
+(PSA-like, median 32.94 if feature_013==1 vs 7.38 if feature_013==0), suggesting
+it marks a stage/biology axis tightly linked to PSA rather than an independent
+randomization.
+
+The ordinal `feature_001` (0/1/2; likely ECOG/performance-status-like) is
+strongly prognostic with monotonically decreasing response rates of 28.2 -> 22.8
+-> 18.2 percent (adjusted log-OR -0.33 per level, p=5e-72).
+
+`feature_010` (integer 6-10 with mode 7-8, suggesting Gleason sum) is NOT
+predictive of `objective_response` in either crude or adjusted analyses
+(p=0.77 / 0.97).
+
+Continuous predictors with significant adjusted effects on response include
+log(feature_022) (PSA-like, neg), log(feature_024) (neg), feature_002 (likely
+albumin, pos), and feature_020 (likely a count of metastatic sites, neg). The
+full multivariable model (32 features + 4 log-transforms) reaches pseudo-R^2 =
+0.125 with all the above retaining significance at p<1e-7.
+
+------------------------------------------------------------------------
+3. Treatment-effect heterogeneity (the main finding)
+------------------------------------------------------------------------
+A systematic interaction screen testing every feature's interaction with
+`feature_008` in a logistic model identified four binary features whose
+interaction with treatment is ENORMOUS and overwhelmingly significant:
+
+   Feature       Interaction OR    p-value         Trt effect when 0    Trt effect when 1
+   feature_013   0.138             p < 1e-300      +0.440 abs           +0.008 abs
+   feature_015   0.290             p = 1.4e-93     +0.251 abs           +0.009 abs
+   feature_021   0.321             p = 3.3e-42     +0.225 abs           +0.006 abs
+   feature_027   0.277             p = 1.8e-19     +0.209 abs          -0.022 abs
+
+In each case, switching the modifier to 1 collapses the absolute treatment
+benefit to ~zero. log(feature_022) (PSA) showed a softer interaction
+(int_OR 0.45, p=1e-72), but the effect is essentially mediated by feature_013
+(see point 4 below). No other feature had an interaction p < 1e-4.
+
+------------------------------------------------------------------------
+4. Joint subgroup discovery — Boolean-OR resistance pattern
+------------------------------------------------------------------------
+Stratifying by all 16 combinations of the four resistance flags revealed a
+striking Boolean-OR pattern:
+
+   feature_013 / feature_015 / feature_021 / feature_027 = 0/0/0/0
+       n = 15,681 (31.4% of cohort)
+       treated:    79.8% response (4,506 of 5,649)
+       control:    17.2% response (1,727 of 10,032)
+       absolute risk reduction +0.626  ARR
+       relative risk           4.64
+       odds ratio              18.98
+       NNT                     1.60
+
+   ANY other combination (any single flag = 1)
+       n = 34,319 (68.6% of cohort)
+       treated:    16.6% response (2,393 of 14,427)
+       control:    15.3% response (3,037 of 19,892)
+       absolute risk reduction +0.013
+       odds ratio              1.06 (p = 0.055)
+
+A single logistic model `y ~ trt + good_subgroup + trt:good_subgroup` returns
+an interaction coefficient of +2.885 (z = 56.1, p < 1e-300) and lifts the
+pseudo-R^2 from 0.027 (treatment alone) to 0.190 — by far the largest single
+explanatory jump in the dataset.
+
+A necessity check confirmed each of the four flags is indispensable: holding
+the other three at 0 and switching one flag to 1 shrinks the treatment effect
+from +0.626 to between -0.025 and +0.022. Dropping any flag from the subgroup
+definition therefore loses the predictive signal.
+
+A within-good-subgroup interaction screen across the remaining 26 features
+found NO interaction surviving Bonferroni correction (best p ≈ 0.004 for
+feature_005; threshold 0.0019). PSA is similarly inert within the subgroup —
+the treatment effect ranges only from +0.618 to +0.633 across PSA quartiles.
+The four-flag definition is therefore essentially complete.
+
+------------------------------------------------------------------------
+5. Prognostic vs predictive distinction
+------------------------------------------------------------------------
+A direct test in the control-arm-only multivariable model (n=29,924) shows the
+four flags have only weak/marginal independent prognostic value (|coef| < 0.20,
+p between 0.03 and 0.23). In the treatment-arm-only model (n=20,076), the same
+flags have coefficients of -2.27, -1.66, -1.65, -1.48 (all p << 1e-30), an
+order of magnitude larger. This pattern — small or null in controls, dominant
+in treated — is the textbook signature of PURELY PREDICTIVE biomarkers (i.e.,
+they identify treatment resistance, not baseline disease aggressiveness).
+
+The classical prognostic factors (feature_001, feature_002, log feature_022,
+feature_020, log feature_024) by contrast retain similar coefficients in both
+arms, confirming they are prognostic but not predictive.
+
+------------------------------------------------------------------------
+6. Hypothesis support summary
+------------------------------------------------------------------------
+Supported (p < 0.001 and direction confirmed):
+  h1, h3, h4, h5, h6, h7, h9, h10, h11, h12, h13, h14, h15, h16, h17, h18,
+  h19, h22, h23, h24, h25, h26
+Refuted / null (no effect detected):
+  h2 (confirmed null — feature_030 is constant, expected)
+  h8 (feature_010 / Gleason-like is not predictive after adjustment)
+  h20 (PSA does not modify treatment effect within the good subgroup)
+  h21 (no additional within-subgroup interaction survives correction)
+
+------------------------------------------------------------------------
+7. Final conclusion
+------------------------------------------------------------------------
+The treatment marked by `feature_008` produces a clinically dramatic improvement
+in `objective_response` (~63 percentage-point absolute increase, NNT 1.6)
+EXCLUSIVELY in the ~31% of patients with feature_013==0 AND feature_015==0 AND
+feature_021==0 AND feature_027==0. In every other patient subgroup the drug
+does not produce any clinically meaningful benefit. The four resistance flags
+operate by Boolean OR — any one of them being positive is sufficient to abolish
+the treatment effect — and each is independently necessary in the subgroup
+definition. These four features are predictive of treatment response rather
+than prognostic of baseline outcome, and there is no evidence that PSA
+(feature_022), age (feature_016), Gleason-like (feature_010), or any other
+measured feature further refines the predictive subgroup.

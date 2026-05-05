@@ -1,0 +1,179 @@
+Analysis Summary — ds001_nsclc (50,000 NSCLC patient records)
+================================================================
+
+OVERVIEW
+--------
+The dataset is a 50,000-row NSCLC cohort with 33 baseline features (demographics,
+performance status, histology, biomarkers, lab values), four binary treatment
+indicators (pembrolizumab, sotorasib, olaparib, osimertinib), and one outcome
+(pfs_months, range 0–15.3, mean 3.43, median 3.32). All four treatments appear
+RANDOMIZED — biomarker prevalences match within ≤0.5 percentage points on/off
+each treatment — which permits causal interpretation of treatment-by-feature
+interactions. Patients can carry multiple treatments (0–4 per patient).
+
+I ran 20 iterations testing 50 hypotheses with 50 analyses, organized as:
+prognostic main effects → treatment main effects → canonical
+treatment×biomarker interactions → systematic heterogeneity searches per
+treatment (single-feature stratifications, pairwise interaction screens, and
+random-forest CATE with depth-3 decision tree) → refinement of the
+best-supported subgroup hypothesis.
+
+
+PROGNOSTIC MAIN EFFECTS (iterations 1–2)
+----------------------------------------
+Strongly supported (all p<1e-17):
+- age_years: STRONG POSITIVE correlation with PFS (r=0.757, p<1e-300; quartile
+  means 1.33→2.78→3.97→5.69 mo). Direction is opposite the usual clinical
+  intuition — likely a property of this synthetic cohort but robust within it.
+- stage_iv=1: -1.44 mo vs stage_iv=0
+- ecog_ps: -1.10 mo per ECOG unit
+- has_brain_mets=1: -0.92 mo
+- squamous histology: -0.86 mo vs adenocarcinoma
+- current smoking: ~-0.6 mo vs former/never
+- weight_loss_pct_6mo: r=-0.127
+- albumin_g_dl: r=+0.099
+- ldh_u_l: r=-0.019 (small)
+- sex_female: -0.20 mo (small but significant; this becomes important later)
+- tmb_high=1: -0.19 mo (DIRECTION OPPOSITE expectation)
+
+Null prognostic effects (p>0.1): pdl1_tps overall, nlr, crp_mg_l,
+hemoglobin_g_dl, calcium_mg_dl.
+
+
+TREATMENT MAIN EFFECTS (iteration 3)
+------------------------------------
+Adjusted-model coefficients (controlling for all baseline features):
+- treatment_sotorasib:    +0.323 mo  (p<1e-300)  POSITIVE
+- treatment_pembrolizumab: -0.006 mo (p=0.39)    NULL
+- treatment_olaparib:     +0.002 mo  (p=0.73)    NULL
+- treatment_osimertinib:  +0.001 mo  (p=0.86)    NULL
+
+Only sotorasib shows a population-level positive effect, and the next stage
+shows that this entire main effect is driven by a single subgroup.
+
+
+CANONICAL TREATMENT × BIOMARKER INTERACTIONS (iterations 4–5, 14–15)
+--------------------------------------------------------------------
+Tested in pfs_months ~ treatment * biomarker form:
+
+Pair                                    Interaction coef   p-value      Result
+treatment_sotorasib × kras_g12c         +2.558             <1e-300      SUPPORTED
+treatment_osimertinib × egfr_mutation   -0.020             0.76         REFUTED (null)
+treatment_olaparib × brca2_mutation     +0.037             0.78         REFUTED (null)
+treatment_pembrolizumab × tmb_high      -0.018             0.69         REFUTED (null)
+treatment_pembrolizumab × pdl1_tps      -0.116             0.22         REFUTED (null)
+treatment_osimertinib × alk_fusion      +0.238             0.017        Marginal (+0.23 mo within ALK+)
+
+Subgroup PFS within each canonical biomarker subgroup:
+- KRAS+ on/off sotorasib: 5.77 vs 3.21  (+2.55 mo, p<1e-300)
+- EGFR+ on/off osimertinib: 3.59 vs 3.60 (-0.01 mo, p=0.81)  [NULL — surprising]
+- BRCA2+ on/off olaparib: 3.32 vs 3.31  (+0.01 mo, p=0.93)   [NULL]
+- TMB-high on/off pembrolizumab: 3.27 vs 3.32 (-0.05 mo, p=0.20) [NULL]
+- ALK+ on/off osimertinib: 2.82 vs 2.59  (+0.23 mo, p=0.018) [marginal]
+
+Three of the four "canonical" pairings expected from clinical literature are
+genuinely flat in this dataset; sotorasib×KRAS-G12C is the only one supported.
+
+
+SYSTEMATIC HETEROGENEITY SEARCH (iterations 6–9, 10–13, 16, 18)
+---------------------------------------------------------------
+For every treatment with usable variation I ran (a) interaction screens vs all
+20 candidate moderators, (b) single-stratum on/off comparisons across all
+single-feature subgroups, and (c) a random-forest T-learner CATE estimation
+followed by a depth-3 decision tree over the predicted CATE.
+
+PEMBROLIZUMAB
+- Interaction screen: only stage_iv (p=0.007, +0.108 mo more in stage IV) and
+  weight_loss_pct_6mo (p=3e-4, +0.018 per 1%) reach p<0.05; magnitudes <0.15 mo.
+  No biomarker, PD-L1, or TMB interaction.
+- Single-stratum: every subgroup mean diff lies in [-0.13, +0.05]. No subgroup
+  has a positive effect.
+- CATE (depth-3 tree): mean -0.01, std 0.29; tree splits on age only with leaf
+  range [-0.28, +0.08]. Effect essentially absent everywhere.
+
+OLAPARIB
+- Interaction screen: no moderator reaches p<0.01.
+- Single-stratum: no subgroup shows |diff|>0.3 mo, none significant.
+- CATE: mean +0.008, std 0.31, leaf range [-0.06, +0.20].
+
+OSIMERTINIB
+- Interaction screen: no moderator reaches p<0.01.
+- Single-stratum: only ALK+ (+0.23 mo, p=0.018) and BRCA2+ (-0.24 mo, p=0.039)
+  reach significance — small magnitudes; no clinically meaningful benefit.
+- 3-way osimertinib×egfr×X screen: no significant 3-way interactions.
+- CATE: mean +0.006, std 0.34, leaf range [-0.22, +0.45].
+
+SOTORASIB
+- Interaction screen: kras_g12c interaction is dominant (+2.56, p<1e-300).
+- 3-way sotorasib×kras×stk11: NS (p=0.13). STK11 does NOT meaningfully suppress
+  sotorasib benefit in this dataset.
+- 3-way sotorasib×kras×sex_female: STRIKING. Within KRAS+, sotorasib effect is
+  +4.64 mo in males (n=1237 on, 2271 off) but -0.01 mo in females (n=1009 on,
+  1851 off). The 3-way coefficient (+4.66 main interaction, -4.69 three-way)
+  exactly cancels the kras-sotorasib effect for females.
+- 4-way sotorasib×kras×sex×age: positive sotorasib×kras×age coef +0.0315
+  (p=5.7e-11), opposed by sotorasib×kras×sex×age coef -0.0375 (p=1.5e-7). The
+  age modification of the sotorasib×kras effect is itself blunted by female sex.
+- Within KRAS+ males: continuous age modifier sotorasib×age coef +0.030 mo per
+  year (p=2e-9). Quartile diffs: <58.5y +4.07 → 58.5-65y +4.67 → 65-72y +4.52 →
+  >72y +4.92. By histology: adeno +4.67, squamous +4.64 — equivalent.
+- Within KRAS+ females: no single-feature subgroup recovers a positive effect
+  (all |diff|<0.3 mo).
+- CATE tree: top splits kras_g12c then sex_female. KRAS+/male leaves +4.25 to
+  +5.02; KRAS+/female -0.29 to +0.29; KRAS- ≈ 0.
+
+
+BEST-SUPPORTED TREATMENT-EFFECT SUBGROUP HYPOTHESIS (iterations 17, 20)
+-----------------------------------------------------------------------
+Treatment: treatment_sotorasib
+Outcome:   pfs_months
+Direction: POSITIVE (longer PFS on treatment)
+Subgroup definition (full predicate): kras_g12c = 1 AND sex_female = 0
+  (i.e., KRAS-G12C-mutant MALES)
+
+Quantitative effect:
+- n = 3,508 (7.0% of cohort) — 1,237 on sotorasib, 2,271 off
+- Mean PFS on  = 7.88 mo
+- Mean PFS off = 3.23 mo
+- Effect      = +4.64 mo (95% CI well-bounded; t-test p<1e-300)
+- Effect by histology: adenocarcinoma +4.67 mo, squamous +4.64 mo (homogeneous)
+- Continuous modifier within subgroup: each additional year of age_years adds
+  ~0.030 mo of treatment benefit (sotorasib×age p=2e-9)
+
+Critical negative finding: although stk11_mutation is biologically known to
+suppress KRAS-targeted therapy benefit, in this dataset stk11_mutation does
+NOT meaningfully attenuate sotorasib benefit (within KRAS+: +2.59 mo if
+STK11=0 vs +2.33 mo if STK11=1; 3-way p=0.13). The variable that does suppress
+the effect is sex_female=1.
+
+
+OVERALL CONCLUSIONS ABOUT TREATMENT–BIOMARKER–OUTCOME RELATIONSHIPS
+-------------------------------------------------------------------
+1. Sotorasib in KRAS-G12C-mutant MALES is the single dominant
+   treatment–biomarker–outcome relationship in this cohort, contributing
+   essentially the entire population-level sotorasib main effect (~7% of the
+   cohort produces ~100% of the +0.32 mo overall effect). The benefit is
+   independent of histology, brain mets, stage, and STK11 status, and grows
+   slightly with age.
+
+2. The osimertinib–EGFR, olaparib–BRCA2, and pembrolizumab–TMB/PDL1 pairings
+   that are clinically expected from real-world NSCLC literature are NOT
+   present in this dataset. Each was rigorously tested via main-effect, 2-way
+   interaction, stratified-subgroup, 3-way interaction, and tree-based CATE
+   analyses, and no clinically meaningful positive treatment effect was found
+   in the biomarker-positive subgroup or in any other subgroup.
+
+3. Pembrolizumab, olaparib, and osimertinib show essentially flat treatment
+   effects across the entire cohort and across all subgroup definitions
+   examined, with mean predicted CATE near zero and standard deviations under
+   0.35 months.
+
+4. Standard NSCLC prognostic factors behave normally in this cohort
+   (stage IV, ECOG, brain mets, squamous histology, current smoking, weight
+   loss, low albumin all worsen PFS; high albumin slightly improves it), with
+   one notable exception: age_years is positively correlated with PFS in this
+   cohort, which is unusual and a robust idiosyncrasy of this dataset.
+
+5. The cohort and treatment structure look randomized; biomarker prevalences
+   are balanced on/off treatment, supporting causal interpretation of the
+   sotorasib × KRAS × sex finding.

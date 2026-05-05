@@ -1,0 +1,163 @@
+ANALYSIS SUMMARY — ds001_prostate (n=50,000; 32 deidentified features; binary outcome objective_response)
+========================================================================================================
+
+OVERVIEW
+--------
+The cohort comprises 50,000 patient records with 32 deidentified features and a single binary
+outcome, objective_response (overall response rate 24.0%). One feature, feature_030, was constant
+(all zeros) and was excluded from analysis. The remaining 31 features include 11 binary indicators,
+two small-cardinality categorical/integer variables (feature_001 with levels 0/1/2; feature_010 with
+levels 6-10), and 17 continuous lab-like values. No missing data.
+
+I structured the analysis as 25 propose-test-refine iterations covering univariate screening,
+multivariable adjustment, treatment-by-feature interaction screening for every plausible modifier,
+joint multi-modifier subgroup tests, and an independent T-learner + decision-tree subgroup discovery
+sweep for confirmation.
+
+UNIVARIATE LANDSCAPE (iterations 1-5)
+-------------------------------------
+Pearson correlations and univariate logistic regressions identified ten features that carry any
+detectable marginal signal for objective_response:
+
+  - feature_008 (binary, 40% prevalence): the only feature with a strong positive association.
+    Crude response 36.1% (feature_008=1) vs 15.9% (feature_008=0); univariate beta = +1.10
+    (OR 2.99), p effectively 0. This pattern -- binary, large effect, ~40% prevalence -- is
+    consistent with a treatment indicator.
+
+  - feature_013 (binary, 55% prevalence): the only feature with a strong negative association of
+    comparable magnitude. Univariate beta = -1.07 (OR 0.34); response 15.3% (feature_013=1) vs
+    36.4% (feature_013=0).
+
+  - Smaller but highly significant negative effects: feature_015 (OR 0.54), feature_022 (continuous,
+    heavy right tail; per-unit OR 0.995 but cumulatively large), feature_001 (per-level OR 0.75),
+    feature_021 (OR 0.53), feature_020 (per-unit OR 0.97), feature_027 (OR 0.67), feature_024
+    (per-unit OR 0.99).
+
+  - Small positive effect: feature_002 (per-unit OR 1.10).
+
+  - All other 20 features (feature_003, 004, 005, 006, 007, 009, 010, 011, 012, 014, 016, 017, 018,
+    019, 023, 025, 026, 028, 029, 031, 032) had univariate p > 0.10 and |Pearson r| < 0.05.
+
+A multivariable logistic regression containing every predictor (iteration 6) preserved the same
+pattern. feature_008 remained strongly positive after adjustment (adj. beta = +1.20, OR 3.32);
+feature_013 (-1.13), feature_015 (-0.69), feature_021 (-0.74), feature_027 (-0.43), feature_001
+(-0.33), feature_022, feature_020, feature_024 (small negatives) and feature_002 (small positive)
+all remained significant. Every other coefficient was statistically null in the adjusted model.
+
+This identified feature_008 as the single plausible "treatment-like" feature in the dataset and
+made it the natural target for treatment-effect heterogeneity searches.
+
+TREATMENT-EFFECT HETEROGENEITY (iterations 7-15, 18, 22)
+--------------------------------------------------------
+I screened every other feature for interaction with feature_008 on the log-odds scale. Four binary
+features showed strong negative interactions -- meaning that when these features = 1, the feature_008
+benefit is sharply attenuated or abolished:
+
+                  feature_008 risk difference (RR1 - RR0)
+  modifier        modifier=0           modifier=1           interaction beta (logit)   p
+  feature_013     +44.0 pp             +0.8 pp              -1.978                     ~0
+  feature_021     +22.5 pp             +0.6 pp              -1.138                     3.3e-42
+  feature_015     +25.1 pp             +0.85 pp             -1.237                     1.4e-93
+  feature_027     +20.9 pp             -2.2 pp              -1.283                     1.8e-19
+
+Each of these four modifiers, individually, is sufficient to nearly extinguish the feature_008
+benefit. The interactions are robust both as marginal stratifications and as logistic interaction
+terms. None of the other binary features (feature_004, 005, 006, 011, 017, 019, 023) showed a
+biologically meaningful interaction with feature_008; feature_011 reached nominal p=0.023 with a
+trivially small absolute effect (RD +20.8 pp vs +18.9 pp).
+
+The continuous feature_022 also showed a strong feature_008 x feature_022 interaction in the whole
+cohort (p = 1.2e-72). However, feature_022 is dramatically higher in feature_013=1 patients (mean
+67.8 vs 12.0). After conditioning on the four binary modifiers (subgroup S, defined below) the
+feature_008 x feature_022 interaction collapsed to p=0.79 -- the marginal interaction was confounded
+by feature_013. No other continuous feature showed a robust treatment-effect interaction in the
+within-subgroup analysis.
+
+feature_001 (the 0/1/2 categorical, with a large prognostic effect) is NOT a modifier. Across all
+three feature_001 levels, the feature_008 risk difference was essentially constant (+20.7, +20.0,
++19.8 pp). feature_010 (the 6-10 integer) is neither prognostic nor modifying.
+
+JOINT SUBGROUP DEFINITION (iteration 13, 17, 21, 25)
+----------------------------------------------------
+Defining S = {feature_013=0 AND feature_021=0 AND feature_015=0 AND feature_027=0}:
+
+  - Subgroup S contains 15,681 patients (31.4% of the cohort).
+  - Within S, treated (feature_008=1) response = 79.78% vs untreated (feature_008=0) response =
+    17.21%; absolute risk difference +62.6 percentage points; OR ~ 19.0 (chi-square p effectively 0).
+  - Outside S (any of the four modifiers active), the feature_008 effect is essentially null:
+    treated 16.06% vs untreated 15.30%, RD +0.77 pp.
+
+A likelihood-ratio test of the four feature_008 x modifier interactions versus a main-effects model
+gave chi2 = 2946 on 4 df (p effectively 0), confirming that the subgroup structure is real and not
+explained by main effects alone.
+
+A simple "modifier count" k = feature_013 + feature_021 + feature_015 + feature_027 produces a clean
+dose-response summary of the heterogeneity:
+
+  k=0 (n=15,681): treatment RD +62.6 pp
+  k=1 (n=25,372): treatment RD  +0.9 pp
+  k=2 (n= 8,186): treatment RD  +0.7 pp
+  k=3 (n=   745): treatment RD  -2.2 pp
+  k=4 (n=    16): treatment RD  -9.1 pp
+
+The treatment effect collapses as soon as ANY one of the four modifiers is active. This is
+consistent with each modifier being individually sufficient to suppress the feature_008 effect --
+i.e., the four modifiers act as redundant "off switches" rather than additively reducing the effect.
+
+INDEPENDENT CONFIRMATION VIA T-LEARNER + TREE (iteration 18)
+------------------------------------------------------------
+I fit separate logistic-regression models on the feature_008=0 and feature_008=1 arms, computed
+individual treatment effect (ITE) predictions for every patient, and partitioned the ITE with a
+depth-4 regression tree (min_samples_leaf=500). Every top-level split was a binary modifier:
+feature_013 at the root, then feature_015, feature_021, and feature_027 at deeper levels. The leaf
+with feature_013=0 AND feature_015=0 AND feature_021=0 had the largest predicted ITE (~0.55); the
+mirror-image leaf with all three flipped had ITE near -0.10. No continuous feature entered the tree
+as a stronger split. This independent analysis rediscovered the same four-modifier subgroup as the
+interaction screen.
+
+PROGNOSTIC vs PREDICTIVE EFFECTS (iterations 19-20, 23-24)
+----------------------------------------------------------
+Restricted to feature_008=0 patients only (i.e., in the absence of the apparent treatment), the
+modifier features had only modest effects on response (feature_013 OR=0.87, p=4e-7; feature_015,
+feature_021, feature_027 ORs ~1, p>0.4). Their dominant role is therefore PREDICTIVE (modifying the
+treatment effect of feature_008), not PROGNOSTIC. By contrast, feature_001 and feature_002 are
+prognostic but not predictive: they shift the baseline response rate without changing the size of
+the feature_008 benefit.
+
+WHAT IS REFUTED
+---------------
+- The hypothesis that feature_022 directly modifies the feature_008 effect (refuted: confounded by
+  feature_013).
+- The hypothesis that feature_001 (the 0/1/2 categorical) modifies the feature_008 effect (refuted:
+  uniform RD across levels).
+- The hypothesis that feature_010 (the 6-10 integer) is associated with response or treatment
+  benefit (refuted: null across the board).
+- The hypothesis that feature_005, 006, 011, 017, 019, 023, 004 modify the feature_008 effect
+  (refuted: no biologically meaningful interactions).
+
+WHAT IS SUPPORTED — FINAL CONCLUSIONS
+-------------------------------------
+1. feature_008 is the single feature in this dataset that behaves as a treatment: a binary, ~40%
+   prevalence variable whose effect on objective_response is large in some patients and absent in
+   others.
+
+2. feature_013, feature_021, feature_015, and feature_027 are predictive negative biomarkers for
+   the feature_008 effect. Each one, individually, suppresses the feature_008 benefit; their actions
+   are largely redundant rather than additive.
+
+3. The best-supported predictive-biomarker subgroup definition is:
+
+     S* = {feature_013 = 0 AND feature_021 = 0 AND feature_015 = 0 AND feature_027 = 0}
+
+   In S* (n = 15,681; 31.4% of cohort), feature_008 = 1 increases the probability of
+   objective_response from 17.2% to 79.8% (absolute risk difference +62.6 percentage points;
+   odds ratio ~19; p effectively 0). Outside S*, feature_008 confers essentially no benefit
+   (RD < 1 pp).
+
+4. feature_001 is a prognostic factor (lower response with higher levels), not a treatment-effect
+   modifier. feature_002, feature_020, feature_022, feature_024 are weak prognostic factors.
+   feature_010 and the remaining 19 features carry no detectable signal in this cohort.
+
+5. There is only one outcome (objective_response) in the dataset, so a separate heterogeneity search
+   per outcome was not required. The single subgroup hypothesis above is the final best-supported
+   treatment-effect heterogeneity result.

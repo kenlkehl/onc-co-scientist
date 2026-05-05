@@ -1,0 +1,216 @@
+Analysis summary - ds001_breast (n=50,000)
+==========================================
+
+OVERVIEW
+
+The dataset is a single-outcome (pfs_months: progression-free survival in
+months, range 0-16.66, mean 4.69) breast-cancer cohort with 37 anonymized
+features. Of those features, 17 are binary (prevalence 2.4%-55%), one
+(feature_005) is a 3-level ordinal, and the remaining 18 are continuous.
+We worked through 15 iterations of hypothesize-test-refine and arrived
+at a clean treatment / biomarker / prognostic decomposition. The final
+multivariable model attains R^2 = 0.929 on the full cohort.
+
+----------------------------------------------------------------------
+STAGE 1 - MARGINAL SCREENING (iterations 1-3)
+----------------------------------------------------------------------
+
+* Largest binary marginal effects on pfs_months (signed, level 1 vs 0):
+  feature_006 -1.54 (p~0); feature_013 +1.10 (p~0); feature_001 -1.05
+  (p=1.5e-178); feature_029 +0.57 (p=4e-143); feature_028 -0.56
+  (p=6e-144); feature_018 -0.46 (p=6e-70); feature_023 +0.36 (p=6e-59).
+  All other binary features had |diff|<0.13 and most were null.
+
+* feature_005 (3 levels) showed a strong monotone gradient:
+  level 0 mean PFS 5.64; level 1 mean PFS 4.44; level 2 mean PFS 3.29
+  (ANOVA F=2861, p~0). Behaves like an ordinal stage/grade marker.
+
+* Continuous features: feature_012 (range 30-90, mean 65, plausibly age)
+  was the dominant signal, r = +0.702 with PFS (older patients have
+  longer PFS in this synthetic cohort). PFS rises monotonically across
+  age bins from ~0.6 mo (<40 yr) to ~8.2 mo (80+ yr). Other continuous
+  features with non-trivial r: feature_004 -0.116, feature_024 +0.100,
+  feature_033 -0.091. The remaining 14 continuous features had |r|<0.02
+  or were null.
+
+* A 36-covariate multivariable OLS attained R^2 = 0.792. Independent
+  effects (per-unit on PFS): feature_005_2 -2.33; feature_006 -1.55;
+  feature_005_1 -1.19; feature_013 +1.10; feature_001 -0.98;
+  feature_028 -0.58; feature_029 +0.53; feature_024 +0.48 per unit;
+  feature_018 -0.47; feature_012 +0.176 per yr; feature_004 -0.077;
+  feature_033 -0.019. Notably, feature_023's bivariate +0.36 collapsed
+  to +0.014 (n.s.) after adjustment, foreshadowing its role as a
+  surrogate marker rather than an independent driver.
+
+----------------------------------------------------------------------
+STAGE 2 - IS feature_013 A TREATMENT? (iteration 4)
+----------------------------------------------------------------------
+
+A logistic regression of feature_013 on every other feature yielded NO
+significant coefficient (smallest p = 0.053 for feature_027); feature_013
+prevalence sat at 0.347-0.355 across every stratum of every plausible
+prognostic feature (feature_005 levels, feature_006, feature_001,
+feature_028, feature_018, feature_029, feature_023, feature_012 quartiles,
+feature_033 quartiles). This is essentially randomized assignment at
+~35% prevalence. We treat feature_013 as the cohort's intervention
+arm and the remaining features as candidate prognostic / predictive
+biomarkers.
+
+----------------------------------------------------------------------
+STAGE 3 - HETEROGENEITY OF feature_013 EFFECT (iterations 5-7, 9-12)
+----------------------------------------------------------------------
+
+Stratified by the strongest prognostic features, the +1.1-month main
+effect of feature_013 was REMARKABLY UNIFORM across feature_005 strata
+(+1.12/+1.09/+1.15 across levels 0/1/2), feature_006 strata (+1.10/+1.10),
+and feature_001 strata (+1.10/+1.06). None of these prognostic markers
+modified the treatment effect.
+
+By contrast, an exhaustive interaction screen of feature_013 x each
+binary feature found three very strong modifiers:
+  feature_013 x feature_028   TM = -1.62  (p = 4e-255)
+  feature_013 x feature_029   TM = +1.59  (p = 9e-229)
+  feature_013 x feature_018   TM = -1.36  (p = 2e-118)
+  feature_013 x feature_023   TM = +1.09  (p = 3e-117)
+  feature_013 x feature_016   TM = +0.42  (p = 9e-19)
+
+A continuous-feature interaction screen turned up one strong modifier:
+  feature_013 x feature_033 (per SD)   TM = -0.64  (p = 1e-174)
+
+When we put all candidate modifiers in one joint OLS, two findings
+emerged: (a) the four binary modifiers feature_028/018/029 and the
+continuous feature_033 stay strong (p~0); (b) feature_023 collapses to
++0.12 (p=0.05) and feature_016 collapses to -0.0004 (p=0.99). So the
+genuine effect modifiers of feature_013 are exactly:
+  feature_028 (negative biomarker), feature_018 (negative biomarker),
+  feature_029 (positive biomarker), feature_033 (continuous negative).
+
+The 8-cell crosstab of (feature_028 x feature_018 x feature_029) made
+this concrete. In the (0,0,1) cell (n=18681, ~37% of cohort) the
+treatment effect of feature_013 was +2.91 mo (p~0). In every other
+cell (combined n=31319) the treatment effect was +0.003 mo (p=0.91).
+Equivalently: any patient with feature_028=1 OR feature_018=1 (n=23240)
+gets ZERO benefit from feature_013 (TE=+0.018, p=0.54). And any patient
+with feature_029=0 within the otherwise-eligible (0,0,*) cell also gets
+zero benefit (TE=-0.04, p=0.39).
+
+----------------------------------------------------------------------
+STAGE 4 - REFINEMENT BY feature_033 (iterations 9, 12)
+----------------------------------------------------------------------
+
+Within the (0,0,1) responder cell, the treatment effect varied steeply
+with feature_033. By feature_033 decile within responders (with mean
+feature_033 increasing from 3.7 to 43.2):
+  TE = +4.9, +4.9, +5.0, +5.0, +4.9, +4.0, +0.2, -0.1, -0.2, +0.2
+The effect cliff sits near feature_033 ~ 14-15. A threshold sweep
+(thr=10..20) showed the optimal cut is feature_033 <= 14: in-group TE
++4.94 mo, out-of-group TE within (0,0,1) responders = +0.02 mo
+(p=0.85). Importantly, in untreated patients feature_033 has zero
+correlation with PFS (r=-0.002, p=0.68), confirming feature_033 is
+PURELY PREDICTIVE - it does not predict outcome on its own; it only
+predicts who benefits from feature_013.
+
+----------------------------------------------------------------------
+STAGE 5 - PROGNOSTIC vs PREDICTIVE DECOMPOSITION (iteration 8)
+----------------------------------------------------------------------
+
+Restricting to untreated (feature_013=0) patients to remove any
+treatment-mixing, every modifier became null and every prognostic
+marker stayed strong:
+
+  Modifiers (predictive only - null in untreated):
+    feature_028   diff = +0.008, p = 0.74
+    feature_018   diff = +0.015, p = 0.64
+    feature_029   diff = +0.011, p = 0.68
+    feature_023   diff = -0.020, p = 0.41
+    feature_033   r    = -0.002, p = 0.68
+
+  Prognostic markers (effect persists in untreated):
+    feature_005   ANOVA F = 2736, p ~ 0
+    feature_006   diff = -1.538, p ~ 0
+    feature_001   diff = -1.029, p = 4e-155
+    feature_012   r    = +0.829, p ~ 0
+    feature_004   r    = -0.144, p ~ 0
+    feature_024   r    = +0.119, p ~ 0
+
+This clean separation - feature_028/018/029/023/033 are pure
+predictive biomarkers, feature_005/006/001/012/004/024 are pure
+prognostic markers - is the central organizing finding of the cohort.
+
+----------------------------------------------------------------------
+STAGE 6 - NO SECOND TREATMENT (iteration 11)
+----------------------------------------------------------------------
+
+We rechecked every binary feature for hidden treatment-like behavior
+in the feature_013=0 subset. None had a meaningful PFS effect there
+(largest |diff| = 0.020, all p > 0.20 except for the prognostic
+features feature_006 and feature_001, which retain their effects but
+are not treatments). There is no second randomized treatment in the
+data.
+
+----------------------------------------------------------------------
+FINAL TREATMENT-EFFECT SUBGROUP (iteration 13)
+----------------------------------------------------------------------
+
+  Treatment:           feature_013
+  Outcome:             pfs_months (longer = better)
+  Direction:           positive
+  Responder subgroup:  feature_028 = 0
+                   AND feature_018 = 0
+                   AND feature_029 = 1
+                   AND feature_033 <= 14
+  Subgroup size:       n = 10,828 (21.7% of cohort)
+
+  Treatment effect within responder subgroup:
+    PFS off-treatment   4.285 mo (n=6975)
+    PFS on-treatment    9.228 mo (n=3853)
+    Treatment effect   +4.943 mo  (p < 1e-300)
+
+  Treatment effect outside responder subgroup (n=39,172, 78.3%):
+    Treatment effect   +0.007 mo  (p = 0.75)
+
+A compact final OLS that combines the responder structure with the
+prognostic features (feature_012, feature_005 dummies, feature_006,
+feature_001, feature_004, feature_024) yields R^2 = 0.929. In that
+model, T_responder = +2.92 (intercept treatment effect inside the
+responder cell), T_responder x feature_033(z) = -1.68 per SD (the
+within-responder dose-response decay), and the main T term in
+non-responders is +0.0004 (p = 0.96).
+
+----------------------------------------------------------------------
+SUPPORTED vs REFUTED HYPOTHESES
+----------------------------------------------------------------------
+
+Supported:
+  - feature_013 is the lone (randomized) treatment.
+  - feature_005, feature_006, feature_001, feature_012, feature_004,
+    feature_024 are prognostic, with effects that persist in
+    untreated patients and add up to most of the explained variance.
+  - feature_028, feature_018, feature_029, feature_033 are predictive
+    biomarkers of feature_013 response, with no prognostic role.
+  - The treatment effect is biomarker-confined: ~+5 months in the
+    (28=0, 18=0, 29=1, 33<=14) subgroup; ~0 elsewhere.
+
+Refuted / clarified:
+  - feature_013 effect is NOT modified by feature_005, feature_006,
+    feature_001, or feature_012 (the dominant prognostic features).
+  - feature_023 and feature_016 are not independent effect modifiers
+    once the dominant 28/18/29/33 modifiers are accounted for; their
+    bivariate signals were driven by correlation with the responder
+    cell.
+  - There is no second treatment hidden in the binary features.
+
+OVERALL CONCLUSION
+
+The cohort behaves like a randomized trial of feature_013 (~35%
+treated) embedded in a heterogeneous breast-cancer population. The
+intervention has no average benefit outside of a sharply defined,
+biomarker-positive subgroup (~22% of patients) in which it nearly
+doubles median progression-free survival (4.3 -> 9.2 months). The
+biomarker definition combines two negative resistance markers
+(feature_028, feature_018), one positive sensitivity marker
+(feature_029), and a continuous resistance threshold on feature_033.
+The variables that drive raw PFS regardless of treatment - notably
+feature_012, feature_005, feature_006, and feature_001 - are
+orthogonal to the treatment-effect biomarker set and do not modify
+its magnitude.

@@ -1,0 +1,145 @@
+ANALYSIS SUMMARY — ds001_nsclc (n=50000 patients, outcome = pfs_months)
+
+OVERVIEW
+--------
+The dataset contains 50,000 advanced NSCLC patients with 33 anonymized features
+(features_001..033) and one outcome, progression-free survival in months
+(pfs_months). PFS has mean ≈ 3.43 months (sd 2.23, median 3.32, range 0–15.33),
+right-skewed.
+
+I ran 25 iterations of propose–test–refine. The headline finding is a strong
+TREATMENT-EFFECT HETEROGENEITY for feature_018 with a clean four-variable
+predictive subgroup definition. Below I summarize the journey.
+
+MAIN PROGNOSTIC EFFECTS (iterations 2–8)
+----------------------------------------
+- feature_015 (continuous, range 30–90): strongly POSITIVE association with
+  pfs_months. Quintile means rise from 1.14 → 5.92 months. OLS slope ≈ +0.17
+  mo/unit (p ≈ 0). Likely a synthetic age-like feature with positive coding.
+- feature_014 (ordinal 0/1/2): per-level means 4.33 / 3.19 / 2.15. Linear slope
+  ≈ −1.09 mo/level (p ≈ 0). Likely ECOG-like severity.
+- feature_006 (squamous vs adenocarcinoma): squamous shorter PFS by ≈ −0.86 mo
+  (p ≈ 0).
+- feature_001 (smoking): current 2.99 < former 3.61 < never 3.68 mo (current vs
+  never diff ≈ −0.69 mo, p ≈ 1e-87).
+- feature_023==1 vs 0: −1.44 mo (p ≈ 0). Strong adverse prognostic.
+- feature_011==1 vs 0: −0.92 mo (p ≈ 0). Adverse.
+- feature_028==1 vs 0: −0.81 mo (p ≈ 3e-69). Low-prevalence (5%) adverse.
+- feature_016==1 vs 0: +0.78 mo (p ≈ 5e-151). Favorable biomarker.
+- feature_017 (count-like, 0–28): r = −0.127 (p ≈ 7e-179). Higher = worse.
+- feature_025 (lab-like, 1.7–5.5): r = +0.099. Higher = better.
+
+MULTIVARIABLE PROGNOSTIC MODEL (iteration 8)
+--------------------------------------------
+A linear model with all main features yields R² ≈ 0.78 (no interactions). The
+strongest INDEPENDENT effects are feature_014 (−2.18 mo for level 2 vs 0),
+feature_023 (−1.42), feature_014 level 1 (−1.15), feature_011 (−0.91),
+feature_016 (+0.89), squamous (−0.72), former/never smoking (+0.55 vs current),
+feature_025 (+0.46), feature_018 (+0.32), feature_015 (+0.17 / unit),
+feature_017 (−0.07 / unit). All directions match univariate.
+
+Smoking × histology (iteration 10): the smoking deficit is more pronounced in
+squamous than adenocarcinoma (interaction p = small). feature_023 × feature_011
+(iteration 9): joint presence drives the worst PFS, roughly additive.
+
+CANDIDATE-TREATMENT IDENTIFICATION (iteration 11)
+-------------------------------------------------
+Four binary features had near-zero univariate effect on pfs_months: feature_002
+(diff = +0.009, p = 0.75), feature_012 (diff = −0.035, p = 0.08), feature_020
+(diff = −0.025, p = 0.26), feature_027 (diff = +0.003, p = 0.87). These were
+flagged as candidate treatments (effects could cancel across subgroups).
+
+TREATMENT-BY-FEATURE INTERACTION SCREEN (iteration 12)
+------------------------------------------------------
+For each of {feature_002, feature_012, feature_020, feature_027, feature_018,
+feature_022, feature_021, feature_005}, I scanned every other feature for a
+treatment-by-feature interaction (nested OLS F-test). The screen revealed an
+extreme outlier:
+
+   feature_018 × feature_016: p ≈ 0  (machine zero)
+   feature_018 × feature_031: p ≈ 5.3e-41
+   feature_018 × feature_001: p ≈ 1.7e-13
+   feature_018 × feature_028: p ≈ 4.1e-7
+
+By contrast, the candidate-treatment screen (feature_002/012/020/027) produced
+top p-values only in the 1e-3 to 1e-2 range — noise-level after multiplicity
+adjustment.
+
+CENTRAL FINDING — feature_018 IS THE TREATMENT (iterations 13–18, 22)
+---------------------------------------------------------------------
+- Iteration 13: stratifying by feature_016, feature_018 has NO effect when
+  feature_016 == 0 (diff = −0.005, p = 0.80) and a LARGE +2.55 mo benefit when
+  feature_016 == 1 (p ≈ 1.7e-202).
+- Iteration 14: stratifying by feature_031, the +0.57 mo overall feature_018
+  effect (in feature_031 == 0) collapses to +0.01 mo when feature_031 == 1.
+- Iteration 15: the triple feature_018 × feature_016 × feature_031 interaction
+  (coefficient ≈ −4.59, p ≈ 0) confines the benefit to the cell
+  {feature_016 == 1, feature_031 == 0}, where the in-cell feature_018 effect
+  is +4.64 mo (n ≈ 3,508).
+- Iteration 16: within {feature_016 == 1, feature_031 == 0}, two further
+  binaries SUPPRESS the benefit when set to 1: feature_028 (effect drops from
+  +4.83 mo at feature_028 == 0 to −0.29 mo at feature_028 == 1) and feature_005
+  (effect drops from +4.99 at feature_005 == 0 to +0.05 at feature_005 == 1).
+- Iteration 17: the full responder rule (feature_016 == 1) AND
+  (feature_031 == 0) AND (feature_028 == 0) AND (feature_005 == 0) defines a
+  cohort of n = 3266 patients where feature_018 confers ≈ +4.99 mo PFS
+  (Welch p = 0.0e+00); outside this rule (n = 46734) the effect is
+  -0.0063 mo (p = 0.76) — essentially null.
+- Iteration 18: after adjustment for major prognostic factors (feature_015,
+  feature_014, feature_006, feature_001, feature_023, feature_011, feature_017,
+  feature_025, and the other binary features), the feature_018 × in_subgroup
+  interaction remains large and highly significant; the feature_018 main effect
+  outside the subgroup is ≈ 0. The subgroup variables are PREDICTIVE, not
+  merely prognostic confounders.
+- Iteration 22: progressively adding the four subgroup constraints walks the
+  in-subgroup effect from 0 → +2.55 (after f016=1) → +4.64 (also f031=0) →
+  +4.83 (also f028=0) → +4.99 (also f005=0).
+
+OTHER CANDIDATE TREATMENTS — NULL RESULTS (iterations 19–20)
+------------------------------------------------------------
+- Exhaustive 2-binary-feature subgroup search for feature_002, feature_012,
+  feature_020, feature_027 yielded no subgroups with both large magnitude AND
+  highly significant treatment effects. These features behave as noise.
+- feature_022 and feature_021 have small, approximately constant main effects
+  (~+0.2 and ~−0.2 mo respectively) without large heterogeneity by feature_016
+  × feature_031.
+
+T-LEARNER VALIDATION (iteration 21)
+-----------------------------------
+A gradient-boosted T-learner CATE estimator independently identified the same
+predictive subgroup. Patients in the top quintile of estimated feature_018
+benefit had a high concentration of in-subgroup patients, and the OBSERVED
+feature_018 effect in that quintile was about +5 mo, vs near zero in the
+bottom quintile.
+
+WORST- VS BEST-PROFILE PROGNOSTIC SUBGROUP (iteration 25)
+---------------------------------------------------------
+Independent of treatment: combining feature_023==1 ∧ feature_014==2 ∧
+feature_011==1 ∧ feature_006=='squamous' ∧ feature_001=='current' identifies
+n = 162 patients with mean PFS ≈ 0.70 mo, vs the all-favorable
+profile n = 645 with mean PFS ≈ 5.90 mo. Difference ≈
+-5.20 mo (Welch p = 1.3e-163).
+
+CONCLUSIONS
+-----------
+1. The dominant treatment in this cohort is feature_018. Its average effect on
+   pfs_months is small (+0.32 mo) ONLY because the benefit is concentrated in a
+   minority of patients meeting all four criteria below; in the remaining ~93%
+   of patients there is no detectable effect.
+2. The PREDICTIVE SUBGROUP for feature_018 benefit is:
+        feature_016 == 1   AND
+        feature_031 == 0   AND
+        feature_028 == 0   AND
+        feature_005 == 0
+   In this subgroup feature_018 confers approximately +5 months of pfs_months.
+   Each of feature_031==1, feature_028==1, and feature_005==1 individually
+   abolishes the benefit even when feature_016==1.
+3. The strongest PROGNOSTIC drivers of pfs_months (independent of treatment)
+   are feature_014, feature_023, feature_011, feature_006 (squamous worse),
+   feature_001 (current worse), feature_016 (favorable biomarker also acts
+   prognostically), feature_025, feature_017, feature_015. All effects are
+   internally consistent (univariate vs adjusted) in direction.
+4. feature_002, feature_012, feature_020, feature_027 behave as null variables
+   in this cohort — no main effect and no clinically meaningful subgroup-level
+   effect after exhaustive 2-feature stratification. They should not be
+   interpreted as treatments with hidden heterogeneity.

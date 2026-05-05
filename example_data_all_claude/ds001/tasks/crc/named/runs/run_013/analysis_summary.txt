@@ -1,0 +1,182 @@
+Analysis Summary — ds001_crc (n = 50,000 colorectal cancer patients)
+====================================================================
+
+Outcome: progression-free survival in months (`pfs_months`)
+Treatments: cetuximab, bevacizumab, pembrolizumab, encorafenib, trastuzumab/tucatinib, regorafenib
+Iterations completed: 25 (cap)
+
+
+1. Baseline prognostic associations with PFS
+--------------------------------------------
+Univariable OLS regressions of `pfs_months` on each candidate prognostic variable
+identified the expected directions for several classical markers and unmasked
+two unexpected patterns.
+
+• Performance status (`ecog_ps`): each one-point increase reduced mean PFS by
+  ~1.19 months (p effectively 0). Stage IV vs non-IV: −1.35 months
+  (p effectively 0). These were by far the largest baseline prognostic effects.
+• Albumin: +0.47 months/g/dL (p=3e-115). Higher albumin ⇒ longer PFS, as
+  expected for a nutritional/visceral-protein marker.
+• 6-month weight loss: −0.073 months per percentage-point (p=2e-167). Higher
+  weight loss ⇒ shorter PFS.
+• log(1+CEA): −0.15 months per log-unit (p=5e-44). Higher tumor burden ⇒
+  shorter PFS.
+• LDH: very small negative effect (β=-3.2e-4 per U/L, p=0.013), borderline.
+• NLR (β=+0.005, p=0.29) and CRP (β=-0.002, p=0.06) were not significant on
+  their own — surprising for inflammatory markers, but consistent with their
+  being captured by other prognostic features in this cohort.
+• Right-sided primary tumors had ~0.31 months shorter PFS than left-sided
+  (p=5e-46), aligning with the known biology of CRC sidedness.
+• Sex was not associated with PFS (Δ=-0.006 months, p=0.77).
+• Age: slope of +0.18 months/year (p≈0). This is opposite to the usual
+  intuition; in this synthetic cohort older patients have *longer* PFS,
+  which likely reflects the simulator's design rather than real-world
+  oncology.
+
+These priors were treated as nuisance covariates for downstream treatment
+analyses.
+
+
+2. Treatment main effects
+-------------------------
+Unadjusted t-tests of `pfs_months` by each treatment indicator showed only
+ONE significant main effect:
+
+• Regorafenib: ON vs OFF mean PFS difference = +0.97 months (p effectively 0).
+• Cetuximab: −0.04 months (p=0.09).  Bevacizumab: −0.02 (p=0.35).
+  Pembrolizumab: +0.005 (p=0.86).  Encorafenib: +0.005 (p=0.87).
+  Trastuzumab/tucatinib: −0.04 (p=0.25).
+
+After multivariable adjustment for age, sex, ECOG, stage_iv, sidedness,
+RAS/RAF/MSI/HER2 biomarkers, hemoglobin, log(CEA), albumin, LDH, weight loss,
+CRP, and NLR, regorafenib remained the only treatment with a meaningful
+adjusted main effect (β=+0.94 months, p≈0). All others had |β| < 0.03 with
+p>0.06. So the *cohort-average* treatment-effect signal in this dataset is
+concentrated in regorafenib.
+
+
+3. Canonical biomarker–treatment hypotheses (mostly REFUTED here)
+-----------------------------------------------------------------
+I tested the standard real-world CRC pairings, expecting:
+  • cetuximab × KRAS WT (and NRAS WT, BRAF WT, left-sided)
+  • pembrolizumab × MSI-high
+  • encorafenib × BRAF V600E
+  • trastuzumab/tucatinib × HER2-amplified
+
+None of these canonical interactions reached significance on
+`pfs_months` in this cohort:
+
+• Cetuximab × KRAS interaction β = +0.020, p=0.66 (and unadjusted PFS effect
+  was negative in BOTH KRAS WT (−0.05, p=0.12) and KRAS mut (−0.03, p=0.38)).
+  In RAS/RAF WT left-sided patients (n≈10k), cetuximab effect = −0.067 months
+  (p=0.13) — refuting the standard hypothesis in this dataset.
+• Pembrolizumab × MSI-high interaction β = +0.002, p=0.99. Within MSI-high
+  patients (n≈2,500), pembrolizumab effect = +0.007 months, p=0.95.
+• Encorafenib × BRAF V600E interaction β = −0.14, p=0.38. Within BRAF V600E
+  (n≈2,300), encorafenib effect = −0.13 months, p=0.36.
+• Trastuzumab/tucatinib × HER2-amplified interaction β = +0.06, p=0.78.
+  Within HER2-amplified RAS WT (n≈900), effect = +0.05, p=0.86.
+
+After full multivariable adjustment, all seven canonical interaction terms
+remained non-significant (p ranging 0.13 to 0.91). Hypothesis h69 — that the
+canonical biomarker-treatment heterogeneity is essentially absent in this
+cohort — was supported. The simulator did not encode classic real-world
+biomarker effects for these five treatments.
+
+
+4. Heterogeneity discovery for regorafenib (the dominant signal)
+----------------------------------------------------------------
+A treatment-by-feature interaction screen across 18 candidate modifiers
+(demographics + biomarkers + labs) identified four highly significant,
+mutually-reinforcing modifiers of the regorafenib effect on `pfs_months`:
+
+  • × KRAS mutation:           β = −1.63   p = 8e-226
+  • × right-sided primary:     β = −1.45   p = 4e-168
+  • × BRAF V600E:              β = −1.18   p = 6e-23
+  • × log(1+CEA):              β = −0.76   p = 1e-175
+
+All four interactions are NEGATIVE — i.e., each unfavorable feature
+suppresses the regorafenib benefit. NRAS mutation, MSI-high, HER2,
+ECOG, age, albumin, LDH, NLR, and stage IV did NOT modify the regorafenib
+effect (all p>0.12). Putting all four candidate modifiers in a single joint
+interaction model:
+
+  • regorafenib main effect (intercept of subgroup with all favorable
+    values, log_cea≈0):                  β = +3.61, p≈0
+  • × kras_mutation:        β = −1.76,  p = 8e-258
+  • × braf_v600e:           β = −1.91,  p = 1e-58
+  • × right_sided_primary:  β = −1.46,  p = 7e-178
+  • × log_cea:              β = −0.73,  p = 3e-170
+  • × nras_mutation:        β = +0.17,  p = 0.24  (NOT significant)
+
+NRAS does not independently suppress regorafenib in the joint model
+(it appeared marginal univariate-only because of correlation with the
+KRAS WT subset).
+
+Stratified subgroup means (regorafenib ON minus OFF, mean PFS in months):
+
+  KRAS WT, BRAF WT, LEFT-sided, CEA<5 ng/mL  →  +5.00 months  (p≈0)
+  KRAS WT, BRAF WT, LEFT-sided, CEA≥5 ng/mL  →  +0.005       (p=0.93)
+  KRAS WT, BRAF WT, LEFT-sided (any CEA)     →  +2.76         (p≈0)
+  KRAS WT, BRAF WT, RIGHT-sided              →  +0.08         (p=0.12)
+  KRAS WT, BRAF V600E                        →  −0.16         (p=0.15)
+  KRAS mut (regardless of other features)    →  +0.027        (p=0.45)
+
+All-favorable subgroup (KRAS WT AND NRAS WT AND BRAF WT AND left-sided
+AND CEA<5):  +5.00 months PFS gain (p≈0).
+Anyone failing one or more conditions (the complement): +0.10 months
+(p=2e-4 — significant only because of n; clinically negligible).
+
+So the regorafenib treatment effect is essentially binary: a large benefit
+(~5 months) in a clean predicted-responder subgroup, and ≈0 elsewhere.
+
+
+5. Final supported subgroup hypotheses by treatment
+---------------------------------------------------
+For each treatment with usable variation, after the systematic
+heterogeneity searches:
+
+  Cetuximab           — NO supported subgroup. Canonical KRAS/NRAS/BRAF/sidedness
+                        hypothesis is refuted. Adjusted main effect β=−0.010,
+                        p=0.23. No subgroup achieves a positive significant
+                        effect on PFS.
+  Bevacizumab         — NO supported subgroup. All tested interactions
+                        non-significant; adjusted main effect β=+0.002, p=0.77.
+  Pembrolizumab       — NO supported subgroup. MSI-high effect ≈ 0; no
+                        within-MSI modifier reaches significance.
+  Encorafenib         — NO supported subgroup. BRAF V600E does not predict
+                        benefit in this dataset.
+  Trastuzumab/tucatinib — NO supported subgroup. HER2 amplification (with
+                        or without RAS WT or full RAS/RAF WT) does not predict
+                        benefit.
+  Regorafenib         — STRONG supported subgroup:
+                            kras_mutation = 0
+                            AND nras_mutation = 0
+                            AND braf_v600e = 0
+                            AND right_sided_primary = 0
+                            AND cea_ng_ml < 5
+                        Effect on `pfs_months`: +5.00 months (positive direction).
+                        Outside the subgroup the effect is ~0.
+
+Suppressor variables for the regorafenib effect (each, holding others
+favorable, drives the effect toward 0): KRAS mutation, BRAF V600E, right-sided
+primary tumor, elevated CEA. NRAS mutation does NOT independently suppress
+the effect.
+
+
+6. Caveats and interpretation
+-----------------------------
+• The dataset behaves as a synthetic cohort: classic CRC biomarker-treatment
+  pairings (cetuximab/RAS, pembro/MSI, encorafenib/BRAF, HER2 inhibitors/HER2)
+  were *not* encoded. Without ground truth from the simulator we should not
+  conclude these treatments are ineffective in real life — only that the
+  simulator did not embed those effects.
+• `pfs_months` is treated as a continuous outcome (no censoring information
+  provided). All models are OLS rather than Cox.
+• The very large sample (n=50,000) makes even tiny effects statistically
+  significant, so I weighted clinical magnitude alongside p-values throughout.
+• The unexpected positive age effect and modest albumin/CEA effects suggest
+  the simulator's prognostic baseline is not a faithful copy of EHR data.
+• The single robust, replicable, large-magnitude treatment-effect heterogeneity
+  in this dataset is the regorafenib KRAS-WT / BRAF-WT / left-sided / low-CEA
+  responder subgroup.

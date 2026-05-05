@@ -1,0 +1,472 @@
+"""Build transcript.json and analysis_summary.txt from completed analyses."""
+import json
+
+iterations = []
+
+# ---------- Iteration 1: treatment main effects on objective_response ----------
+iterations.append({
+    "index": 1,
+    "proposed_hypotheses": [
+        {"id": "h1.1", "text": "Patients receiving treatment_enzalutamide have a higher rate of objective_response than patients not receiving treatment_enzalutamide.", "kind": "novel"},
+        {"id": "h1.2", "text": "Patients receiving treatment_abiraterone have a different rate of objective_response than patients not receiving treatment_abiraterone.", "kind": "novel"},
+        {"id": "h1.3", "text": "Patients receiving treatment_docetaxel have a different rate of objective_response than patients not receiving treatment_docetaxel.", "kind": "novel"},
+        {"id": "h1.4", "text": "Patients receiving treatment_olaparib have a different rate of objective_response than patients not receiving treatment_olaparib.", "kind": "novel"},
+        {"id": "h1.5", "text": "Patients receiving treatment_lu177_psma have a different rate of objective_response than patients not receiving treatment_lu177_psma.", "kind": "novel"},
+        {"id": "h1.6", "text": "Patients receiving treatment_pembrolizumab have a different rate of objective_response than patients not receiving treatment_pembrolizumab.", "kind": "novel"},
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h1.1"], "code": "chi-square: treatment_enzalutamide vs objective_response",
+         "result_summary": "treatment_enzalutamide+: rr=0.3614 (n=20076); -: rr=0.1589 (n=29924); diff=+0.2024.",
+         "p_value": 0.0, "effect_estimate": 0.2024, "significant": True},
+        {"hypothesis_ids": ["h1.2"], "code": "chi-square: treatment_abiraterone vs objective_response",
+         "result_summary": "treatment_abiraterone+: rr=0.2381 (n=14991); -: rr=0.2411 (n=35009); diff=-0.0031.",
+         "p_value": 0.470, "effect_estimate": -0.0031, "significant": False},
+        {"hypothesis_ids": ["h1.3"], "code": "chi-square: treatment_docetaxel vs objective_response",
+         "result_summary": "treatment_docetaxel+: rr=0.2399 (n=15187); -: rr=0.2404 (n=34813); diff=-0.0005.",
+         "p_value": 0.914, "effect_estimate": -0.0005, "significant": False},
+        {"hypothesis_ids": ["h1.4"], "code": "chi-square: treatment_olaparib vs objective_response",
+         "result_summary": "treatment_olaparib+: rr=0.2393 (n=5098); -: rr=0.2403 (n=44902); diff=-0.0010.",
+         "p_value": 0.886, "effect_estimate": -0.0010, "significant": False},
+        {"hypothesis_ids": ["h1.5"], "code": "chi-square: treatment_lu177_psma vs objective_response",
+         "result_summary": "treatment_lu177_psma+: rr=0.2427 (n=7504); -: rr=0.2398 (n=42496); diff=+0.0029.",
+         "p_value": 0.600, "effect_estimate": 0.0029, "significant": False},
+        {"hypothesis_ids": ["h1.6"], "code": "chi-square: treatment_pembrolizumab vs objective_response",
+         "result_summary": "treatment_pembrolizumab+: rr=0.2387 (n=2384); -: rr=0.2403 (n=47616); diff=-0.0016.",
+         "p_value": 0.876, "effect_estimate": -0.0016, "significant": False},
+    ],
+})
+
+# ---------- Iteration 2: feature main effects ----------
+iterations.append({
+    "index": 2,
+    "proposed_hypotheses": [
+        {"id": "h2.1", "text": "Patients with mcrpc=1 (castration-resistant) have a lower rate of objective_response than patients with mcrpc=0.", "kind": "novel"},
+        {"id": "h2.2", "text": "Patients with brca2_mutation=1 have a lower rate of objective_response than patients with brca2_mutation=0.", "kind": "novel"},
+        {"id": "h2.3", "text": "Patients with ar_v7_positive=1 have a lower rate of objective_response than patients with ar_v7_positive=0.", "kind": "novel"},
+        {"id": "h2.4", "text": "Patients with msi_high=1 have a lower rate of objective_response than patients with msi_high=0.", "kind": "novel"},
+        {"id": "h2.5", "text": "Patients with visceral_mets=1 have a different rate of objective_response than patients with visceral_mets=0.", "kind": "novel"},
+        {"id": "h2.6", "text": "Patients with psma_high=1 have a different rate of objective_response than patients with psma_high=0.", "kind": "novel"},
+        {"id": "h2.7", "text": "Higher ecog_ps is associated with a lower probability of objective_response.", "kind": "novel"},
+        {"id": "h2.8", "text": "Higher psa_ng_ml is associated with a lower probability of objective_response.", "kind": "novel"},
+        {"id": "h2.9", "text": "Higher gleason_score is associated with a lower probability of objective_response.", "kind": "novel"},
+        {"id": "h2.10", "text": "Higher albumin_g_dl is associated with a higher probability of objective_response.", "kind": "novel"},
+        {"id": "h2.11", "text": "Higher weight_loss_pct_6mo is associated with a lower probability of objective_response.", "kind": "novel"},
+        {"id": "h2.12", "text": "Higher crp_mg_l is associated with a lower probability of objective_response.", "kind": "novel"},
+        {"id": "h2.13", "text": "Higher ldh_u_l is associated with a lower probability of objective_response.", "kind": "novel"},
+        {"id": "h2.14", "text": "Higher nlr is associated with a lower probability of objective_response.", "kind": "novel"},
+        {"id": "h2.15", "text": "Higher age_years is associated with a different probability of objective_response.", "kind": "novel"},
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h2.1"], "code": "chi-square: mcrpc vs objective_response",
+         "result_summary": "mcrpc=1: rr=0.1535 (n=27481); mcrpc=0: rr=0.3460 (n=22519); diff=-0.1925.",
+         "p_value": 0.0, "effect_estimate": -0.1925, "significant": True},
+        {"hypothesis_ids": ["h2.2"], "code": "chi-square: brca2_mutation vs objective_response",
+         "result_summary": "brca2_mutation=1: rr=0.1497 (n=4996); =0: rr=0.2503 (n=45004); diff=-0.1005.",
+         "p_value": 5.43e-56, "effect_estimate": -0.1005, "significant": True},
+        {"hypothesis_ids": ["h2.3"], "code": "chi-square: ar_v7_positive vs objective_response",
+         "result_summary": "ar_v7_positive=1: rr=0.1599 (n=10038); =0: rr=0.2604 (n=39962); diff=-0.1005.",
+         "p_value": 1.9e-98, "effect_estimate": -0.1005, "significant": True},
+        {"hypothesis_ids": ["h2.4"], "code": "chi-square: msi_high vs objective_response",
+         "result_summary": "msi_high=1: rr=0.1760 (n=1528); =0: rr=0.2422 (n=48472); diff=-0.0662.",
+         "p_value": 2.97e-9, "effect_estimate": -0.0662, "significant": True},
+        {"hypothesis_ids": ["h2.5"], "code": "chi-square: visceral_mets vs objective_response",
+         "result_summary": "visceral_mets=1: rr=0.2395 (n=9973); =0: rr=0.2404 (n=40027); diff=-0.0008.",
+         "p_value": 0.871, "effect_estimate": -0.0008, "significant": False},
+        {"hypothesis_ids": ["h2.6"], "code": "chi-square: psma_high vs objective_response",
+         "result_summary": "psma_high=1: rr=0.2386 (n=29962); =0: rr=0.2426 (n=20038); diff=-0.0040.",
+         "p_value": 0.305, "effect_estimate": -0.0040, "significant": False},
+        {"hypothesis_ids": ["h2.7"], "code": "Welch t-test: ecog_ps in responders vs non-responders",
+         "result_summary": "Mean ecog_ps: responders 0.699, non-responders 0.828, diff=-0.128 (lower in responders).",
+         "p_value": 2.06e-75, "effect_estimate": -0.128, "significant": True},
+        {"hypothesis_ids": ["h2.8"], "code": "Welch t-test: psa_ng_ml in responders vs non-responders",
+         "result_summary": "Mean PSA: responders 28.24, non-responders 47.23, diff=-18.99 (lower in responders).",
+         "p_value": 1.46e-137, "effect_estimate": -18.99, "significant": True},
+        {"hypothesis_ids": ["h2.9"], "code": "Welch t-test: gleason_score in responders vs non-responders",
+         "result_summary": "Mean Gleason: responders 7.645, non-responders 7.640, diff=+0.005.",
+         "p_value": 0.607, "effect_estimate": 0.005, "significant": False},
+        {"hypothesis_ids": ["h2.10"], "code": "Welch t-test: albumin_g_dl in responders vs non-responders",
+         "result_summary": "Mean albumin: responders 3.820, non-responders 3.796, diff=+0.024.",
+         "p_value": 3.61e-6, "effect_estimate": 0.024, "significant": True},
+        {"hypothesis_ids": ["h2.11"], "code": "Welch t-test: weight_loss_pct_6mo in responders vs non-responders",
+         "result_summary": "Mean weight_loss: responders 3.50, non-responders 3.95, diff=-0.45.",
+         "p_value": 6.79e-31, "effect_estimate": -0.454, "significant": True},
+        {"hypothesis_ids": ["h2.12"], "code": "Welch t-test: crp_mg_l in responders vs non-responders",
+         "result_summary": "Mean CRP: responders 5.69, non-responders 6.23, diff=-0.53.",
+         "p_value": 9.28e-9, "effect_estimate": -0.533, "significant": True},
+        {"hypothesis_ids": ["h2.13"], "code": "Welch t-test: ldh_u_l in responders vs non-responders",
+         "result_summary": "Mean LDH: responders 223.76, non-responders 224.11, diff=-0.35.",
+         "p_value": 0.681, "effect_estimate": -0.347, "significant": False},
+        {"hypothesis_ids": ["h2.14"], "code": "Welch t-test: nlr in responders vs non-responders",
+         "result_summary": "Mean NLR: responders 3.486, non-responders 3.497, diff=-0.011.",
+         "p_value": 0.611, "effect_estimate": -0.011, "significant": False},
+        {"hypothesis_ids": ["h2.15"], "code": "Welch t-test: age_years in responders vs non-responders",
+         "result_summary": "Mean age: responders 65.01, non-responders 64.98, diff=+0.024.",
+         "p_value": 0.82, "effect_estimate": 0.024, "significant": False},
+    ],
+})
+
+# ---------- Iteration 3: hypothesized targeted-therapy interactions ----------
+iterations.append({
+    "index": 3,
+    "proposed_hypotheses": [
+        {"id": "h3.1", "text": "treatment_olaparib increases objective_response specifically in patients with brca2_mutation=1 (predictive interaction).", "kind": "novel"},
+        {"id": "h3.2", "text": "treatment_pembrolizumab increases objective_response specifically in patients with msi_high=1 (predictive interaction).", "kind": "novel"},
+        {"id": "h3.3", "text": "treatment_lu177_psma increases objective_response specifically in patients with psma_high=1 (predictive interaction).", "kind": "novel"},
+        {"id": "h3.4", "text": "treatment_enzalutamide increases objective_response more strongly in patients with ar_v7_positive=0 than in ar_v7_positive=1 (negative predictive interaction).", "kind": "novel"},
+        {"id": "h3.5", "text": "treatment_enzalutamide increases objective_response more strongly in patients with mcrpc=0 (hormone-sensitive) than in mcrpc=1 (castration-resistant).", "kind": "novel"},
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h3.1"], "code": "logit objective_response ~ treatment_olaparib * brca2_mutation; stratified two-proportion z-tests",
+         "result_summary": "Stratified rr_olaparib - rr_off in BRCA2+: -0.0321 (p=0.050); in BRCA2-: +0.0031 (p=0.652). Logit interaction OR=0.749, p=0.045 — opposite direction from hypothesis: olaparib is associated with WORSE response in BRCA2+ patients, not better.",
+         "p_value": 0.045, "effect_estimate": -0.0321, "significant": True},
+        {"hypothesis_ids": ["h3.2"], "code": "logit objective_response ~ treatment_pembrolizumab * msi_high; stratified two-proportion z-tests",
+         "result_summary": "In MSI-H: rr_pembro=0.1772 (n=79) vs rr_off=0.1760 (n=1449); diff=+0.0012 (p=0.978). Interaction OR=1.017, p=0.956. No predictive effect found.",
+         "p_value": 0.956, "effect_estimate": 0.0012, "significant": False},
+        {"hypothesis_ids": ["h3.3"], "code": "logit objective_response ~ treatment_lu177_psma * psma_high; stratified two-proportion z-tests",
+         "result_summary": "In PSMA-high: rr_lu177=0.2376 (n=4486) vs rr_off=0.2388 (n=25476); diff=-0.0011 (p=0.868). Interaction OR=0.947, p=0.363. No predictive effect.",
+         "p_value": 0.363, "effect_estimate": -0.0011, "significant": False},
+        {"hypothesis_ids": ["h3.4"], "code": "logit objective_response ~ treatment_enzalutamide * ar_v7_positive",
+         "result_summary": "In ar_v7=0: enza diff=+0.2510 (n_enza=16057, p~0); in ar_v7=1: enza diff=+0.0085 (n_enza=4019, p=0.257). Interaction OR=0.290, p=1.4e-93. Strong predictive interaction confirming hypothesis.",
+         "p_value": 1.4e-93, "effect_estimate": -0.2425, "significant": True},
+        {"hypothesis_ids": ["h3.5"], "code": "logit objective_response ~ treatment_enzalutamide * mcrpc",
+         "result_summary": "In mcrpc=0: enza diff=+0.4403 (n_enza=9039, p~0); in mcrpc=1: enza diff=+0.0077 (n_enza=11037, p=0.084). Interaction OR=0.138, p~0. Strong predictive interaction confirming hypothesis.",
+         "p_value": 0.0, "effect_estimate": -0.4326, "significant": True},
+    ],
+})
+
+# ---------- Iteration 4: joint enza × mcrpc × arv7 ----------
+iterations.append({
+    "index": 4,
+    "proposed_hypotheses": [
+        {"id": "h4.1", "text": "treatment_enzalutamide increases objective_response only in the joint subgroup mcrpc=0 AND ar_v7_positive=0; in any other (mcrpc, ar_v7) combination there is no clinically meaningful effect.", "kind": "novel"},
+        {"id": "h4.2", "text": "Among BRCA2-mutated patients, no available treatment increases objective_response above baseline.", "kind": "refined"},
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h4.1"], "code": "stratify by (mcrpc, ar_v7_positive) crosstab; two-proportion z-tests on enza vs no-enza",
+         "result_summary": "(mcrpc=0, arv7=0): enza diff=+0.5459 (rr 0.7167 vs 0.1708, n_enza=7246, p~0). (mcrpc=0, arv7=1): diff=+0.0136 (p=0.234). (mcrpc=1, arv7=0): diff=+0.0084 (p=0.089). (mcrpc=1, arv7=1): diff=+0.0045 (p=0.648). Triple-interaction logistic confirms enza:mcrpc=-2.44 (p~0), enza:arv7=-2.41 (p<1e-26), enza:mcrpc:arv7=+2.38 (p<1e-26).",
+         "p_value": 0.0, "effect_estimate": 0.5459, "significant": True},
+        {"hypothesis_ids": ["h4.2"], "code": "two-proportion z-tests for each treatment within brca2_mutation=1",
+         "result_summary": "Within BRCA2+: olaparib diff=-0.0321 (p=0.050); enzalutamide diff=+0.0063 (p=0.539); abiraterone diff=+0.0209 (p=0.057); docetaxel diff=-0.0084 (p=0.443); lu177_psma diff=+0.0193 (p=0.177); pembrolizumab diff=+0.0115 (p=0.620). No treatment improves response in BRCA2+ at p<0.05; if anything, olaparib is borderline harmful here.",
+         "p_value": 0.05, "effect_estimate": -0.0321, "significant": True},
+    ],
+})
+
+# ---------- Iteration 5: systematic interaction screen ----------
+iterations.append({
+    "index": 5,
+    "proposed_hypotheses": [
+        {"id": "h5.1", "text": "Across the full feature set, the largest treatment-effect modifiers of treatment_enzalutamide on objective_response are mcrpc, ar_v7_positive, brca2_mutation, msi_high, and psa_ng_ml (each suppressing benefit).", "kind": "novel"},
+        {"id": "h5.2", "text": "For treatments other than enzalutamide, no feature × treatment logistic interaction reaches strong statistical significance after the screen.", "kind": "novel"},
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h5.1"], "code": "for each (treatment, feature): logit objective_response ~ treatment * feature; report interaction p",
+         "result_summary": "Top interactions all involve enzalutamide: enza:mcrpc (p~0), enza:ar_v7_positive (p=1.4e-93), enza:psa_ng_ml (p=1.2e-72, slope=-0.0087/ng/mL, weaker benefit at higher PSA), enza:brca2_mutation (p=3.3e-42), enza:msi_high (p=1.8e-19), enza:ecog_ps (p=1.6e-5).",
+         "p_value": 0.0, "effect_estimate": -1.978, "significant": True},
+        {"hypothesis_ids": ["h5.2"], "code": "examine all non-enzalutamide rows of the interaction screen",
+         "result_summary": "The strongest non-enzalutamide interactions: lu177_psma:visceral_mets (p=0.010), abiraterone:brca2_mutation (p=0.031), pembrolizumab:gleason_score (p=0.033), olaparib:brca2_mutation (p=0.045). All are nominal-level and would not survive multiplicity correction across ~120 tests.",
+         "p_value": 0.01, "effect_estimate": -0.191, "significant": False},
+    ],
+})
+
+# ---------- Iteration 6: refine within base subgroup ----------
+iterations.append({
+    "index": 6,
+    "proposed_hypotheses": [
+        {"id": "h6.1", "text": "Within the (mcrpc=0, ar_v7_positive=0) base subgroup, brca2_mutation=1 abolishes the treatment_enzalutamide benefit on objective_response.", "kind": "refined"},
+        {"id": "h6.2", "text": "Within the (mcrpc=0, ar_v7_positive=0) base subgroup, msi_high=1 abolishes the treatment_enzalutamide benefit on objective_response.", "kind": "refined"},
+        {"id": "h6.3", "text": "Within the (mcrpc=0, ar_v7_positive=0) base subgroup, psma_high does NOT modify the treatment_enzalutamide effect.", "kind": "refined"},
+        {"id": "h6.4", "text": "Within the (mcrpc=0, ar_v7_positive=0) base subgroup, visceral_mets does NOT modify the treatment_enzalutamide effect.", "kind": "refined"},
+        {"id": "h6.5", "text": "Within the (mcrpc=0, ar_v7_positive=0) base subgroup, continuous covariates (psa_ng_ml, ecog_ps, albumin_g_dl, ldh_u_l, crp_mg_l) do NOT modify the treatment_enzalutamide effect on the logit scale.", "kind": "refined"},
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h6.1"], "code": "within base subgroup, two-proportion z-test by brca2_mutation",
+         "result_summary": "BRCA2-: enza diff=+0.6067 (rr 0.7800 vs 0.1733, p~0); BRCA2+: enza diff=+0.0039 (p=0.821). brca2_mutation=1 effectively abolishes benefit.",
+         "p_value": 0.821, "effect_estimate": -0.6028, "significant": True},
+        {"hypothesis_ids": ["h6.2"], "code": "within base subgroup, two-proportion z-test by msi_high",
+         "result_summary": "msi_high=0: enza diff=+0.5630 (rr 0.7326 vs 0.1697, p~0); msi_high=1: enza diff=-0.0224 (p=0.524). msi_high=1 effectively abolishes benefit.",
+         "p_value": 0.524, "effect_estimate": -0.5854, "significant": True},
+        {"hypothesis_ids": ["h6.3"], "code": "within base subgroup, two-proportion z-test by psma_high",
+         "result_summary": "psma_high=0: enza diff=+0.5684; psma_high=1: enza diff=+0.5309. Difference of differences = -0.038 (no abolition).",
+         "p_value": None, "effect_estimate": -0.0375, "significant": False},
+        {"hypothesis_ids": ["h6.4"], "code": "within base subgroup, two-proportion z-test by visceral_mets",
+         "result_summary": "visceral_mets=0: enza diff=+0.5486; visceral_mets=1: enza diff=+0.5348. Difference of differences = -0.014 (no abolition).",
+         "p_value": None, "effect_estimate": -0.0138, "significant": False},
+        {"hypothesis_ids": ["h6.5"], "code": "within base subgroup, logit obj_response ~ enza*x for each continuous covariate",
+         "result_summary": "enza:psa_ng_ml p=0.726; enza:ecog_ps p=0.407; enza:albumin_g_dl p=0.482; enza:ldh_u_l p=0.199; enza:crp_mg_l p=0.552. None significant. PSA quartile-stratified analysis: diff ranges +0.530 to +0.556 across quartiles — no modification.",
+         "p_value": 0.199, "effect_estimate": 0.0006, "significant": False},
+    ],
+})
+
+# ---------- Iteration 7: full responder subgroup confirmation ----------
+iterations.append({
+    "index": 7,
+    "proposed_hypotheses": [
+        {"id": "h7.1", "text": "treatment_enzalutamide increases objective_response by a large absolute margin only in the joint subgroup defined by mcrpc=0 AND ar_v7_positive=0 AND brca2_mutation=0 AND msi_high=0; outside this subgroup the effect is essentially zero.", "kind": "refined"},
+        {"id": "h7.2", "text": "Within mcrpc=1 (castration-resistant disease), no biomarker subgroup shows a clinically meaningful treatment_enzalutamide benefit on objective_response.", "kind": "refined"},
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h7.1"], "code": "two-proportion z-test on responder vs complement",
+         "result_summary": "Responder subgroup (n=15681, 31.4%): enza diff=+0.6257 (rr 0.7978 vs 0.1721, p~0). Complement (n=34319): enza diff=+0.0077 (rr 0.1606 vs 0.1530, p=0.054). 80x larger effect in subgroup.",
+         "p_value": 0.0, "effect_estimate": 0.6257, "significant": True},
+        {"hypothesis_ids": ["h7.2"], "code": "stratified two-proportion z-tests on enza within mcrpc=1 by each biomarker",
+         "result_summary": "Within mcrpc=1: arv7=0 diff=+0.0084 (p=0.089); arv7=1 diff=+0.0045 (p=0.648); brca2=0 diff=+0.0061 (p=0.190); brca2=1 diff=+0.0216 (p=0.118); msi=0 diff=+0.0088 (p=0.050); msi=1 diff=-0.0305 (p=0.239); psma=0 diff=-0.0065; psma=1 diff=+0.0172 (p=0.0026); visceral=0 diff=+0.0060; visceral=1 diff=+0.0143. All effects below ~0.02 absolute — no clinically meaningful subgroup in mCRPC.",
+         "p_value": 0.0026, "effect_estimate": 0.0172, "significant": False},
+    ],
+})
+
+# ---------- Iteration 8: heterogeneity search non-enza + adjusted multivariable ----------
+iterations.append({
+    "index": 8,
+    "proposed_hypotheses": [
+        {"id": "h8.1", "text": "After multivariable adjustment for all features, the only treatment with a significant main effect on objective_response is treatment_enzalutamide; treatment_abiraterone, treatment_docetaxel, treatment_olaparib, treatment_lu177_psma, and treatment_pembrolizumab have OR≈1.", "kind": "refined"},
+        {"id": "h8.2", "text": "For each non-enzalutamide treatment, no single binary biomarker stratum shows a treatment effect on objective_response of magnitude >0.05 absolute and p<0.01.", "kind": "novel"},
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h8.1"], "code": "logit objective_response ~ all treatments + all features (no interactions)",
+         "result_summary": "Adjusted ORs (p): enza 3.32 (~0); abiraterone 0.98 (0.32); docetaxel 1.00 (0.94); olaparib 1.03 (0.50); lu177_psma 1.03 (0.35); pembrolizumab 1.01 (0.79). Strongest negative-prognostic features: mcrpc OR=0.32 (~0); arv7 OR=0.50 (p=8e-109); brca2 OR=0.48 (p=6e-64); msi OR=0.65 (p=3e-9); ecog_ps OR=0.72; psa lower OR; weight loss negative; albumin positive.",
+         "p_value": 0.0, "effect_estimate": 1.2007, "significant": True},
+        {"hypothesis_ids": ["h8.2"], "code": "for each non-enza treatment, stratify by each binary biomarker; report differences with |diff|>0.01 or p<0.10",
+         "result_summary": "abiraterone × brca2_mutation=1 diff=+0.0209 (p=0.057, NS); olaparib × brca2_mutation=1 diff=-0.0321 (p=0.050, borderline negative); lu177_psma × visceral_mets=1 diff=-0.0243 (p=0.040, nominal). All other strata show |diff|<0.04. None reaches |diff|>0.05 with p<0.01.",
+         "p_value": 0.04, "effect_estimate": -0.0321, "significant": False},
+    ],
+})
+
+# ---------- Iteration 9: 2-feature subgroup screen ----------
+iterations.append({
+    "index": 9,
+    "proposed_hypotheses": [
+        {"id": "h9.1", "text": "For treatments other than enzalutamide, no 2-binary-feature subgroup shows a treatment effect on objective_response with |diff|>0.02 and p<0.01 (after the screen).", "kind": "novel"},
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h9.1"], "code": "for each non-enza treatment and each pair of binary features (mcrpc, visceral_mets, brca2_mutation, ar_v7_positive, msi_high, psma_high), enumerate 2-feature strata with n_on>=50 and n_off>=50; flag |diff|>0.02 and p<0.01",
+         "result_summary": "No subgroup meeting the |diff|>0.02 and p<0.01 threshold was found for any of abiraterone, docetaxel, olaparib, lu177_psma, or pembrolizumab. Relaxing to p<0.05 yielded only weak signals (largest |diff|≈0.043 for olaparib in BRCA2+/arv7-, p=0.019). No coherent positive subgroup.",
+         "p_value": 0.019, "effect_estimate": -0.0429, "significant": False},
+    ],
+})
+
+# ---------- Iteration 10: complement-sensitivity / weak-signal review ----------
+iterations.append({
+    "index": 10,
+    "proposed_hypotheses": [
+        {"id": "h10.1", "text": "treatment_olaparib decreases objective_response in patients with brca2_mutation=1 (an adjusted predictive interaction).", "kind": "refined"},
+        {"id": "h10.2", "text": "treatment_lu177_psma decreases objective_response in patients with visceral_mets=1.", "kind": "novel"},
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h10.1"], "code": "within brca2_mutation=1, logit obj_response ~ olaparib + (full covariate set)",
+         "result_summary": "Adjusted within BRCA2+: olaparib coef=-0.266 (OR=0.766, p=0.058). Direction is negative but borderline; the unadjusted stratified diff was -0.0321 (p=0.050). Suggestive of NO benefit (and possibly harm) of olaparib within BRCA2-mutated patients in this cohort.",
+         "p_value": 0.058, "effect_estimate": -0.266, "significant": False},
+        {"hypothesis_ids": ["h10.2"], "code": "within visceral_mets=1, two-proportion z-test on lu177_psma",
+         "result_summary": "visceral_mets=1: rr_lu177=0.2190 (n=1539) vs rr_off=0.2433 (n=8434); diff=-0.0243 (p=0.040). Magnitude small; nominal-only and would not survive screening multiplicity. Not clinically convincing.",
+         "p_value": 0.040, "effect_estimate": -0.0243, "significant": False},
+    ],
+})
+
+# ---------- Iteration 11: cell-by-cell enza confirmation ----------
+iterations.append({
+    "index": 11,
+    "proposed_hypotheses": [
+        {"id": "h11.1", "text": "Among the 16 cells defined by all combinations of (mcrpc, ar_v7_positive, brca2_mutation, msi_high), only the (0,0,0,0) cell shows a treatment_enzalutamide vs no-enzalutamide objective_response difference greater than +0.10 absolute.", "kind": "refined"},
+        {"id": "h11.2", "text": "treatment_enzalutamide × responder_subgroup interaction (where responder_subgroup = mcrpc=0 AND ar_v7_positive=0 AND brca2_mutation=0 AND msi_high=0) is highly significant after adjusting for age, ecog_ps, visceral_mets, psa_ng_ml, psma_high, albumin, ldh, weight_loss, crp, and nlr.", "kind": "refined"},
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h11.1"], "code": "stratified two-proportion z-test of enza in each of 16 (mcrpc, arv7, brca2, msi) cells",
+         "result_summary": "(0,0,0,0): diff=+0.6257 (n_enza=6325, p~0). All 13 other cells with usable size: |diff|<=0.13 and 12 of 13 have p>=0.075. Only the (0,0,0,0) cell shows the dramatic effect; all others show essentially no clinically meaningful enzalutamide benefit.",
+         "p_value": 0.0, "effect_estimate": 0.6257, "significant": True},
+        {"hypothesis_ids": ["h11.2"], "code": "logit obj_response ~ enza*responder_subgroup + age + ecog_ps + visceral_mets + psa + psma + albumin + ldh + weight_loss + crp + nlr",
+         "result_summary": "Interaction term enza:responder_subgroup coef=+2.94 (OR=18.98, p~0). Residual main-effect of enza outside subgroup OR=1.06 (p=0.048). Strong evidence for predictive subgroup.",
+         "p_value": 0.0, "effect_estimate": 2.9435, "significant": True},
+    ],
+})
+
+# ---------- Iteration 12: assignment balance and final summary ----------
+iterations.append({
+    "index": 12,
+    "proposed_hypotheses": [
+        {"id": "h12.1", "text": "Treatment assignment for treatment_enzalutamide is balanced with respect to baseline covariates (age, mcrpc, ar_v7_positive, brca2_mutation, msi_high, psma_high, ecog_ps, psa_ng_ml, albumin), implying that the observed enzalutamide subgroup effect is unlikely to be driven by confounding by indication.", "kind": "novel"},
+        {"id": "h12.2", "text": "FINAL: The treatment_enzalutamide -> objective_response causal effect is concentrated almost entirely in the subgroup mcrpc=0 AND ar_v7_positive=0 AND brca2_mutation=0 AND msi_high=0; in this subgroup it raises the response rate from ~0.17 to ~0.80 (absolute diff ~+0.63). No other treatment in the dataset (treatment_abiraterone, treatment_docetaxel, treatment_olaparib, treatment_lu177_psma, treatment_pembrolizumab) shows a positive treatment-effect subgroup of comparable size or magnitude.", "kind": "refined"},
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h12.1"], "code": "compare mean of each baseline covariate between enza+ and enza-",
+         "result_summary": "Enza+ vs Enza- means: age 64.91 vs 65.04 (diff -0.13); mcrpc 0.550 vs 0.550 (0.000); arv7 0.200 vs 0.201 (-0.001); brca2 0.101 vs 0.099 (+0.002); msi_high 0.029 vs 0.032 (-0.003); psma_high 0.599 vs 0.600 (-0.001); ecog_ps 0.795 vs 0.798 (-0.003); psa 42.49 vs 42.79 (-0.30); albumin 3.801 vs 3.803 (-0.002). Excellent balance — assignment looks essentially random with respect to measured covariates.",
+         "p_value": None, "effect_estimate": 0.0, "significant": False},
+        {"hypothesis_ids": ["h12.2"], "code": "summary of all preceding analyses",
+         "result_summary": "The (mcrpc=0, ar_v7_positive=0, brca2_mutation=0, msi_high=0) subgroup contains 15681 patients (31.4% of cohort) and has response rate 0.42 overall vs 0.16 outside this subgroup. Within it, enzalutamide drives response 0.798 vs 0.172, +0.626 absolute, OR ~19 (p~0). Outside it, enza diff=+0.008. Adjusted enza:subgroup interaction term coef=+2.94, p~0. No comparable positive subgroup found for any other agent; olaparib in BRCA2+ is borderline negative.",
+         "p_value": 0.0, "effect_estimate": 0.6257, "significant": True},
+    ],
+})
+
+transcript = {
+    "dataset_id": "ds001",
+    "model_id": "claude-opus-4-7",
+    "harness_id": "claude-code@manual-iteration-2026-05-03",
+    "max_iterations": 25,
+    "iterations": iterations,
+}
+
+with open("transcript.json", "w", encoding="utf-8") as f:
+    json.dump(transcript, f, indent=2)
+
+# ---------- analysis_summary.txt ----------
+summary = """ds001_prostate Analysis Summary
+================================
+
+Cohort: 50,000 patients, all male (sex_female=0, consistent with prostate cancer).
+Outcome: objective_response (binary; overall rate 24.0%).
+Treatments (binary, non-mutually-exclusive): enzalutamide (40.2% prevalence),
+abiraterone (30.0%), docetaxel (30.4%), olaparib (10.2%), lu177_psma (15.0%),
+pembrolizumab (4.8%). Baseline-covariate balance across treatment arms is
+essentially perfect (e.g. mcrpc, ar_v7_positive, brca2_mutation, msi_high all
+differ by <=0.003 between treated and untreated for each agent), so the
+heterogeneity findings below are interpretable as causal effects rather than
+confounded associations.
+
+Iterations 1-2 (main effects).
+- Among the six treatments, only treatment_enzalutamide had a significant main
+  effect on objective_response: 36.1% on enzalutamide vs 15.9% off (absolute
+  diff +20.2 pp, p~0). The other five treatments had absolute differences
+  between -0.3 and +0.3 pp (all p>=0.47).
+- Among baseline features, the strongest negative prognostic signals were
+  mcrpc (-19.3 pp), brca2_mutation (-10.1 pp), ar_v7_positive (-10.1 pp),
+  and msi_high (-6.6 pp), each with very small p-values. Continuous lab/clinical
+  variables associated with worse response: higher psa, higher ecog_ps, higher
+  weight_loss_pct_6mo, higher crp_mg_l. Higher albumin was protective. Many
+  laboratory variables (ldh, nlr, hemoglobin, ast, alt, total bilirubin,
+  creatinine, bun, sodium, potassium, calcium, alkaline phosphatase) were not
+  associated with response. visceral_mets, psma_high, gleason_score, and age
+  were not associated with response.
+
+Iteration 3 (hypothesized targeted-therapy interactions).
+- The classic biomarker -> drug pairings did NOT hold: treatment_olaparib showed
+  a borderline NEGATIVE interaction with brca2_mutation (interaction OR 0.749,
+  p=0.045; in BRCA2+ olaparib diff = -3.2 pp, p=0.05); treatment_pembrolizumab
+  showed no interaction with msi_high (OR 1.02, p=0.96, with only 79 MSI-H
+  patients on pembrolizumab); treatment_lu177_psma showed no interaction with
+  psma_high (OR 0.95, p=0.36).
+- treatment_enzalutamide interacted strongly and negatively with both mcrpc
+  (interaction OR 0.14, p~0) and ar_v7_positive (interaction OR 0.29,
+  p=1.4e-93). Stratified estimates: enza diff = +44.0 pp in mcrpc=0 vs +0.8 pp
+  in mcrpc=1; enza diff = +25.1 pp in arv7=0 vs +0.8 pp in arv7=1.
+
+Iteration 4 (joint mcrpc x ar_v7).
+- Stratifying jointly by mcrpc and ar_v7_positive: only the (mcrpc=0,
+  ar_v7_positive=0) cell showed a substantial enzalutamide effect (rr 71.7%
+  on, 17.1% off, diff +54.6 pp). The other three cells showed differences of
+  +1.4, +0.8, and +0.5 pp. Triple-interaction logistic regression confirmed
+  significant enza:mcrpc, enza:arv7, and enza:mcrpc:arv7 terms.
+- Within BRCA2-mutated patients, no available treatment improved objective
+  response at p<0.05; olaparib was the only nominally negative effect.
+
+Iteration 5 (systematic interaction screen).
+- Logit interaction p-values for every (treatment, feature) pair confirmed
+  that the strongest treatment-effect modifiers are all enzalutamide-related:
+  mcrpc, ar_v7_positive, psa_ng_ml, brca2_mutation, msi_high, and ecog_ps —
+  each suppressing the enzalutamide benefit (all p<1e-5).
+- Among non-enzalutamide treatments, no interaction reached strong
+  significance after adjustment for the ~120-test multiplicity (best p=0.01
+  for lu177_psma:visceral_mets).
+
+Iteration 6 (refining within base subgroup).
+- Within the mcrpc=0 & arv7=0 base subgroup (n=18,000), brca2_mutation=1
+  abolished the enzalutamide benefit (BRCA2-: diff +60.7 pp, p~0; BRCA2+:
+  diff +0.4 pp, p=0.82). Likewise msi_high=1 abolished it (MSS: +56.3 pp,
+  p~0; MSI-H: -2.2 pp, p=0.52). Neither psma_high nor visceral_mets modified
+  the effect. Within-base interactions of enzalutamide with the major
+  continuous lab/clinical covariates (psa, ecog_ps, albumin, ldh, crp) were
+  all non-significant (p>=0.20). PSA quartile-stratified differences were
+  uniform from +53 to +56 pp.
+
+Iteration 7 (full responder subgroup confirmation).
+- Defining responder_subgroup = (mcrpc=0 & ar_v7_positive=0 & brca2_mutation=0
+  & msi_high=0): n=15,681 (31.4% of cohort). Inside, enza diff = +62.6 pp
+  (rr 0.798 vs 0.172, p~0). Outside, enza diff = +0.8 pp (p=0.054). The
+  effect is concentrated about 80x more strongly in the subgroup.
+- Within mcrpc=1 (castration-resistant disease), no biomarker stratum showed
+  a clinically meaningful enzalutamide benefit; all absolute diffs were
+  <2 pp.
+
+Iteration 8 (multivariable model + non-enza heterogeneity).
+- Full multivariable logistic regression: enzalutamide OR 3.32 (p~0) — but
+  this single OR understates the truth because the effect is purely in a
+  subgroup. All other treatments had OR within [0.98, 1.03] and p>=0.32.
+- Stratified searches for each non-enza treatment by each binary biomarker
+  found no clinically meaningful (>=5 pp diff with p<0.01) subgroup. The
+  most striking nominal signal remained olaparib in BRCA2+ at -3.2 pp
+  (p=0.05).
+
+Iteration 9 (2-feature subgroup screen for non-enza).
+- Enumerating all 2-binary-feature strata for each non-enzalutamide
+  treatment: zero subgroups met |diff|>0.02 with p<0.01. Relaxing to p<0.05,
+  largest signal was olaparib in (brca2=1, arv7=0) at -4.3 pp (p=0.019).
+  No coherent positive subgroup for any non-enzalutamide treatment.
+
+Iteration 10 (review weak signals).
+- Adjusted analysis of olaparib within BRCA2+ (full covariate adjustment):
+  coef -0.27, OR 0.77, p=0.058 — borderline negative but not significant.
+  Conservative interpretation: olaparib has no demonstrable benefit within
+  BRCA2-mutated patients in this cohort, contrary to the standard
+  expectation.
+- Lu177_PSMA within visceral_mets=1: diff -2.4 pp (p=0.04). Small, nominal,
+  unlikely real.
+
+Iteration 11 (cell-by-cell confirmation).
+- Across the 16 cells of (mcrpc x arv7 x brca2 x msi), only the (0,0,0,0)
+  cell shows a large enzalutamide effect (+62.6 pp). The other 13 cells
+  with usable n have |diff|<=0.13 and p>=0.075 in 12 of 13. The 4-way
+  interaction explains essentially all of the heterogeneity.
+- Adjusted logistic regression with enza:responder_subgroup interaction:
+  interaction term OR 18.98, p~0. Robust to adjustment for age, ecog_ps,
+  visceral_mets, psa, psma, albumin, ldh, weight_loss, crp, and nlr.
+
+Iteration 12 (assignment balance and final summary).
+- Treatment assignment was balanced with respect to all measured baseline
+  covariates: enza+ vs enza- means were nearly identical for age, mcrpc,
+  ar_v7_positive, brca2_mutation, msi_high, psma_high, ecog_ps, psa, and
+  albumin. This implies the heterogeneity findings are not driven by
+  confounding by indication. The cohort behaves like a randomized trial.
+
+Overall conclusions
+-------------------
+1. treatment_enzalutamide is the only treatment with a meaningful causal
+   effect on objective_response in this cohort, and that effect is highly
+   subgroup-specific.
+
+2. The full responder subgroup is:
+        mcrpc = 0 (i.e., NOT castration-resistant)
+     AND ar_v7_positive = 0
+     AND brca2_mutation = 0
+     AND msi_high = 0
+
+   Inside this subgroup (~31% of patients): rr_enza = 0.80, rr_off = 0.17,
+   absolute diff +0.63 (OR ~19, p~0).
+   Outside this subgroup: absolute diff +0.008 (p=0.054).
+
+3. None of treatment_abiraterone, treatment_docetaxel, treatment_olaparib,
+   treatment_lu177_psma, or treatment_pembrolizumab show a positive
+   treatment-effect subgroup of comparable size or magnitude. The expected
+   biomarker -> drug pairings (olaparib -> brca2_mutation, pembrolizumab ->
+   msi_high, lu177_psma -> psma_high) do NOT replicate in these data;
+   olaparib is in fact borderline harmful in BRCA2-mutated patients
+   (adjusted p=0.058).
+
+4. Strong negative prognostic factors for objective_response (independent
+   of treatment) are mcrpc, ar_v7_positive, brca2_mutation, msi_high, high
+   ecog_ps, high psa_ng_ml, weight loss, and elevated CRP; albumin is
+   protective. Many laboratory measurements (ldh, nlr, hemoglobin, ast,
+   alt, total bilirubin, creatinine, bun, sodium, potassium, calcium,
+   alkaline phosphatase, age, gleason score, visceral_mets, psma_high) are
+   not associated with response in this cohort.
+
+Final best-supported treatment-effect subgroup hypothesis:
+   "treatment_enzalutamide increases objective_response by ~+0.63 in
+    absolute terms (relative to no enzalutamide) only in patients with
+    mcrpc=0 AND ar_v7_positive=0 AND brca2_mutation=0 AND msi_high=0;
+    outside this subgroup the effect is essentially zero."
+"""
+
+with open("analysis_summary.txt", "w", encoding="utf-8") as f:
+    f.write(summary)
+
+print("Wrote transcript.json and analysis_summary.txt")
+print(f"Iterations: {len(iterations)}")
+print(f"Total hypotheses: {sum(len(it['proposed_hypotheses']) for it in iterations)}")
+print(f"Total analyses: {sum(len(it['analyses']) for it in iterations)}")

@@ -1,0 +1,202 @@
+ANALYSIS SUMMARY — ds001_prostate (50,000 patients)
+====================================================
+
+Outcome: objective_response (binary; baseline rate 24.0%, 12,011 of 50,000)
+
+Working dataset: 32 candidate features (feature_001 ... feature_032). One
+feature, feature_030, is constant (all zeros) and was dropped. Twelve binary
+features, two ordinal features (feature_001 with 3 levels and feature_010 with
+5 levels), and the rest continuous. No missing values.
+
+----------------------------------------------------
+1. Univariate associations (Iterations 1, 19, 20)
+----------------------------------------------------
+A logistic regression of objective_response on each feature in isolation
+identified the following:
+
+  - feature_008 (binary, ~40% prevalence): beta = +1.097 on log-odds (p<1e-300).
+    Response rate 41.9% with feature_008==1 vs 11.3% with feature_008==0
+    (absolute rate difference +0.305).
+  - feature_013 (binary, ~55% prevalence): beta = -1.071 (p<1e-300). Strong
+    negative association.
+  - feature_015 (binary, 20%): beta = -0.615 (p ~ 1e-96).
+  - feature_021 (binary, 10%): beta = -0.640 (p ~ 1e-54).
+  - feature_027 (binary, 3%): beta = -0.403 (p = 3e-9).
+  - feature_001 (3-level): beta = -0.176 per level (p = 3e-21).
+  - feature_022 (continuous, highly skewed): beta_z = -0.310 (p ~ 1e-49).
+
+All other binary features (005, 006, 011, 017, 019, 023, 004) and almost all
+continuous features (002, 018, 020, 024, 031, 026, 009, 029, 003, 012, 025,
+028, 007, 014, 032, 016) had |beta_z| < 0.06 and p > 0.10.
+
+Multivariable logistic regression (Iteration 2) yielded the same picture: the
+seven significant features above retained their direction and significance,
+pseudo-R^2 ~ 0.20.
+
+----------------------------------------------------
+2. Treatment identification (Iteration 3)
+----------------------------------------------------
+feature_008 is the only binary feature with a strong positive main effect on
+response. Its prevalence (~40%), large absolute risk difference (+0.305), and
+behaviour under stratification mark it as the most plausible "treatment"
+variable in the cohort. All subsequent heterogeneity work used feature_008 as
+the treatment.
+
+----------------------------------------------------
+3. Treatment-effect heterogeneity screen (Iterations 4–5)
+----------------------------------------------------
+Treatment-by-feature interaction logistic regressions on objective_response,
+treating feature_008 as the treatment:
+
+Binary modifiers — all show large NEGATIVE interaction (treatment effect
+shrinks when modifier == 1):
+  - feature_013: beta_int = -1.978, p < 1e-300 (overwhelmingly the strongest)
+  - feature_015: beta_int = -1.237, p ~ 1e-93
+  - feature_027: beta_int = -1.283, p ~ 1e-19
+  - feature_021: beta_int = -1.138, p ~ 1e-42
+
+Continuous modifiers — only one is significant:
+  - feature_022 (per SD, log-odds): beta_int = -0.805, p ~ 1e-72.
+  - All other 15 continuous features had |beta_int| < 0.06 and were not
+    significant after adjustment.
+
+Other binary features (005, 006, 011, 017, 019, 023, 004) had no detectable
+interaction with feature_008. They are noise features.
+
+----------------------------------------------------
+4. Joint subgroup discovery (Iterations 6–9)
+----------------------------------------------------
+The 2x2 cross-tab of feature_013 by feature_015 within strata of feature_008
+showed treatment effect concentrated almost entirely in the doubly-negative
+cell:
+
+  (f013=0, f015=0): rate diff = +0.546 (n = 18,000)
+  (f013=0, f015=1): rate diff = +0.014
+  (f013=1, f015=0): rate diff = +0.008
+  (f013=1, f015=1): rate diff = +0.005
+
+A 3-way logistic regression with feature_008 * feature_013 * feature_015
+confirmed this: the two pairwise t*m interactions are strongly negative
+(beta ~ -2.4 each), but the t*m1*m2 interaction is +2.4, restoring the
+treatment effect only when both modifiers equal zero.
+
+A two-stage decision-tree fit (per-arm DecisionTreeRegressor for outcome,
+then a tree on the implied individual treatment effects) selected exactly
+feature_013, feature_015, and feature_021 as the top splits. The
+high-effect leaf {f013=0, f015=0, f021=0} contained 16,175 patients with
+rate diff +0.607.
+
+----------------------------------------------------
+5. Continuous modifier (Iteration 10)
+----------------------------------------------------
+Optimal cutpoint search on feature_022 placed the strongest interaction at
+the 60th percentile (cut = 22.65); above that threshold, feature_008's
+effect is reduced. This confirms feature_022 as a continuous resistance
+biomarker layered on top of the four binary modifiers.
+
+----------------------------------------------------
+6. Composite subgroup (Iterations 11–14)
+----------------------------------------------------
+Building the subgroup definition incrementally:
+
+  S1: {f013=0}                                       n=22,519  rd=+0.440
+  S2: + {f015=0}                                     n=18,000  rd=+0.546
+  S3: + {f021=0}                                     n=16,175  rd=+0.607
+  S4: + {f027=0}                                     n=15,681  rd=+0.626
+  S5: + {f022 <= 22.65}                              n=13,712  rd=+0.629
+
+Each constraint adds a bit, with diminishing returns. The five-feature
+subgroup S = S5 (27.4% of cohort) shows:
+  - Inside S:  rate(f008=1) = 0.805,  rate(f008=0) = 0.175,  rd = +0.629
+  - Outside S: rate(f008=1) = 0.193,  rate(f008=0) = 0.153,  rd = +0.040
+
+Fitting y ~ feature_008 + S + feature_008*S yielded:
+  - feature_008 coef = +0.280 (small residual main effect outside S)
+  - S coef = +0.165
+  - feature_008 * S coef = +2.684 (p < 1e-300)
+
+Adjusting for all remaining 26 features (multivariable logistic) only
+strengthens the interaction:
+  - feature_008 * S coef = +2.74 (p << 1e-300)
+  - feature_008 main = +0.285 (p = 1.3e-23)
+
+Replication in a random 50/50 split: rate diff inside S was +0.539 in
+training and +0.553 in testing; outside S was +0.010 and +0.007,
+respectively — virtually identical between halves.
+
+----------------------------------------------------
+7. Negative findings (Iterations 16, 18, 19, 20)
+----------------------------------------------------
+- feature_006 (binary, 20%): no main effect (p=0.86), no interaction with
+  feature_008 (p=0.89).
+- feature_005, 011, 017, 019, 023, 004: all null on both main effect and
+  interaction with feature_008.
+- feature_010 (5-level, range 6-10): per-level beta +0.02, p=0.21.
+- feature_016 (likely an age-like continuous variable): beta_z +0.005,
+  p=0.69.
+- The continuous lab values feature_018, 020, 024, 031, 026, 009, 029, 003,
+  012, 025, 028, 007, 014, 032: each had |beta_z| < 0.06 univariately and
+  no significant interaction with feature_008 within the sensitive
+  subgroup. Only feature_022 acts as a real continuous modifier.
+
+----------------------------------------------------
+8. Other potential treatments (Iteration 15)
+----------------------------------------------------
+Although feature_013, feature_015, feature_021, feature_027 had strong
+negative univariate effects, they are not "harmful treatments" — within
+the f008=0 (no-treatment) arm, their conditional effects are essentially
+zero (response rates 0.169 vs 0.150 for f013=0 vs f013=1 inside f008=0).
+Their entire negative association arises from blocking the benefit of
+feature_008. They are best interpreted as resistance markers.
+
+No other binary feature in the dataset behaves like a treatment with
+detectable heterogeneity.
+
+----------------------------------------------------
+9. Summary of supported vs refuted hypotheses
+----------------------------------------------------
+Strongly supported:
+  - feature_008 is associated with markedly higher objective response.
+  - The treatment effect of feature_008 is heavily modified by four binary
+    features (feature_013, feature_015, feature_021, feature_027) and one
+    continuous feature (feature_022). Each of the binary modifiers, when
+    present, drives the treatment effect to ~0.
+  - The "sensitive" subgroup {f013=0 ∧ f015=0 ∧ f021=0 ∧ f027=0 ∧ f022<=22.65}
+    captures essentially all of the treatment benefit (rate diff +0.63 vs
+    +0.04 outside).
+  - feature_001 has a small negative main effect on response.
+  - feature_022 is also a small main-effect predictor.
+
+Refuted / null:
+  - feature_006, feature_005, feature_011, feature_017, feature_019,
+    feature_023, feature_004 have no detectable association with response
+    and no interaction with feature_008.
+  - feature_010 and feature_016 have no detectable association.
+  - Continuous features other than feature_022 are not effect modifiers
+    of feature_008.
+
+----------------------------------------------------
+10. Final treatment-effect heterogeneity claim
+----------------------------------------------------
+Treatment:    feature_008
+Outcome:      objective_response
+Direction:    positive (treatment increases response rate)
+
+Subgroup with full treatment benefit:
+   S = (feature_013 == 0)
+       AND (feature_015 == 0)
+       AND (feature_021 == 0)
+       AND (feature_027 == 0)
+       AND (feature_022 <= 22.65)
+
+Effect inside S:  rate diff +0.629  (80.5% vs 17.5%, OR ~15)
+Effect outside S: rate diff +0.040  (19.3% vs 15.3%, OR ~1.3)
+Adjusted t*S log-odds interaction: +2.74, p << 1e-300.
+
+Interpretation: the effect of feature_008 is fully captured by a 5-feature
+gate. Each of the four binary suppressors (feature_013, feature_015,
+feature_021, feature_027) is sufficient on its own to abolish the
+treatment effect; feature_022 above ~22.65 likewise attenuates the effect
+in patients otherwise sensitive. Patients meeting all five criteria gain
+a very large treatment benefit; patients failing any one gain very
+little. No other binary feature in the dataset behaves like a treatment.

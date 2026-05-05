@@ -1,0 +1,211 @@
+Analysis summary for ds001_crc (n = 50,000 patients; outcome: pfs_months)
+=========================================================================
+
+Overview
+--------
+The dataset contains 33 anonymized clinical features and one outcome,
+pfs_months (progression-free survival). I followed a propose-test-refine
+loop across nine analytical iterations: a marginal screen, a multivariable
+adjustment, identification of the treatment variable, a treatment-effect
+heterogeneity search across all features, refinement of the responsive
+subgroup, and a final sanity check that the candidate treatment is
+randomly assigned and unique.
+
+The dataset has a remarkably high explained-variance ceiling: a simple
+linear regression on all features achieves R^2 = 0.86, indicating that the
+underlying generative process is largely deterministic given the recorded
+features.
+
+Iteration 1 - Marginal screen
+-----------------------------
+A univariable screen (linear regression for continuous, Welch t-test for
+binary, ANOVA for the 3-level feature_001) identified strong (p << 1e-30)
+marginal associations for:
+  * feature_015 (continuous, range 30-90): +0.18 months per unit, r=0.77,
+    monotone across deciles from 1.3 (lowest) to 7.5 months (highest).
+  * feature_001 (3-level): mean PFS 5.27 / 4.05 / 2.91 across levels 0/1/2,
+    a consistent ~1.2 month decrement per level.
+  * feature_014 = 1 vs 0: -1.35 months (large adverse marker).
+  * feature_027 = 1 vs 0: +0.97 months. The only binary with a strong
+    positive direction - a candidate treatment.
+  * feature_025 (continuous): -0.073/unit (range 0-24.6).
+  * feature_019 (continuous, range 1.5-5.5): +0.47/unit.
+  * feature_023, feature_006, feature_022 (binaries): -0.33, -0.31, -0.23
+    when = 1.
+  * feature_005 (long-tailed continuous): small negative slope, p=3e-17.
+
+Many other features showed no marginal association (feature_007, _010,
+_012, _018, _020, _028, _002, _016, _003, _008, _004, _013, _026, _029,
+_033, _009, _030, _032, _017, _021 had p > 0.01 or trivial slopes).
+
+Iteration 2 - Probing top features
+----------------------------------
+* feature_015's relationship with PFS is approximately linear across
+  deciles - no obvious threshold.
+* feature_014's adverse effect (~-1.4 months) is roughly additive across
+  feature_001 levels - the effect is not modified by stage-like
+  feature_001.
+* feature_027's marginal benefit is roughly +0.9 months in every
+  feature_001 level (5.08 -> 6.01 in level 0; 3.86 -> 4.85 in level 1;
+  2.73 -> 3.63 in level 2), supporting it as a treatment whose benefit is
+  not stage-specific.
+
+Iteration 3 - Multivariable model
+---------------------------------
+OLS adjusted for all 33 features (feature_001 entered as two dummy
+indicators) yielded R^2 = 0.86. Independent predictors (p < 0.001):
+  feature_015        +0.176 / unit   (strong continuous prognostic)
+  feature_001 = 1    -1.196          (vs level 0)
+  feature_001 = 2    -2.329          (vs level 0)
+  feature_014 = 1    -1.362          (largest single-binary effect)
+  feature_027 = 1    +0.943          (treatment)
+  feature_019        +0.469 / unit
+  feature_025        -0.076 / unit
+  feature_006 = 1    -0.287
+  feature_023 = 1    -0.354
+  feature_022 = 1    -0.357
+  feature_005        -0.005 / unit
+  feature_021        -0.0004 / unit  (small)
+All other features attenuated to non-significance after adjustment.
+Crucially, feature_027's adjusted coefficient (+0.943) is essentially
+identical to its unadjusted estimate (+0.972), consistent with random
+treatment assignment (verified explicitly in iteration 8).
+
+Iteration 4 - Treatment-effect heterogeneity search
+---------------------------------------------------
+Per the protocol's requirement to search for treatment-effect
+heterogeneity, I screened every other feature for interaction with
+feature_027, both via stratified analysis and formal OLS interaction
+tests with adjustment for the strong main-effect predictors. The signal
+was extreme:
+  * feature_006 = 1 patients: feature_027 effect = +0.026 (p=0.52) vs
+    +1.480 (p=4e-274) when feature_006 = 0. OLS interaction t*feature_006
+    = -1.46 (p~0).
+  * feature_023 = 1: trt effect = +0.027 (p=0.46) vs +1.656 (p~0) when
+    feature_023 = 0. OLS interaction t*feature_023 = -1.63 (p~0).
+  * feature_022 = 1: trt effect = -0.156 (p=0.13) vs +1.027 (p~0) when
+    feature_022 = 0. OLS interaction t*feature_022 = -0.99 (p=5e-104).
+  * feature_005 (continuous): tertile-stratified trt effects of +1.78 /
+    +1.10 / +0.007 across low / mid / high. OLS t*feature_005 = -0.026
+    (p~0).
+  * No other continuous feature showed a clinically meaningful
+    interaction. Tertile-level treatment effects for feature_015,
+    feature_019, feature_025, feature_021, feature_032, feature_017,
+    feature_003, feature_030, feature_008, feature_004, feature_013,
+    feature_026, feature_029, feature_007, feature_033, feature_009 were
+    all within ~+/-0.10 months of each other.
+
+Iteration 5 - Joint mut_neg subgroup
+------------------------------------
+Combining the three resistance markers into a "triple-negative"
+indicator (feature_006 = 0 AND feature_023 = 0 AND feature_022 = 0)
+sharply separated benefit:
+  * mut_neg (n = 17,372; 34.7% of cohort): treatment effect = +2.76
+    months (4.12 -> 6.88).
+  * mut_pos (any of the three = 1): treatment effect = +0.030 months
+    (4.12 -> 4.15), p = 0.29 (null).
+Within mut_neg, the feature_005 modifier persisted: low/mid/high tertile
+effects = +5.06 / +2.99 / -0.01.
+
+Iteration 6 - Sharp threshold at feature_005 = 5
+------------------------------------------------
+A fine-grained threshold scan within mut_neg revealed an essentially
+step-function relationship: bin-level treatment effects from 0-5 are
+~+5 months in every bin (4.95, 5.10, 5.02, 5.08, 4.83), then collapse
+abruptly to ~0 from 5 upwards (-0.06, +0.09, +0.05, -0.11). Threshold
+test at feature_005 = 5: below-5 trt diff = +5.01 (n = 9326, p ~ 0);
+above-5 trt diff = +0.005 (n = 8046, p = 0.93). The OLS linear
+interaction (t*feature_005 = -0.0645/unit) misrepresents this shape,
+which is closer to a hard cutoff at 5.
+
+I also confirmed that feature_011's earlier appearance as an "amplifier"
+of the treatment effect (marginal +1.93 vs +0.94) was driven by its
+correlation with mut_neg status, not a true interaction. Within the
+fully responsive subgroup, feature_011 = 1 vs 0 changes the treatment
+effect only from +5.00 to +5.24 - statistically detectable but
+practically negligible.
+
+Iteration 7 - Final responsive subgroup
+---------------------------------------
+The complete responsive subgroup is:
+
+    feature_006 = 0  AND
+    feature_023 = 0  AND
+    feature_022 = 0  AND
+    feature_005 < 5
+
+Within this subgroup (n = 9326, 18.65% of the cohort):
+    mean PFS off-treatment = 4.088 months (n = 7423)
+    mean PFS on-treatment  = 9.101 months (n = 1903)
+    treatment effect       = +5.013 months  (p ~ 0)
+
+Outside this subgroup (n = 40,674, 81.35%):
+    treatment effect = +0.024 months (p = 0.38)  - null
+
+Decomposition of the pooled main effect:
+    0.1865 * 5.013 + 0.8135 * 0.024 = +0.95 months,
+matching the unadjusted pooled treatment effect of +0.97 almost exactly.
+The entire treatment benefit is contained in the responsive subgroup.
+
+Within-responsive-subgroup heterogeneity check: stratifying the +5-month
+treatment effect by every other feature (binary subsets and continuous
+tertiles) yielded effects ranging from +4.85 to +5.28 - essentially
+homogeneous. A few formal interaction p-values are detectable due to
+the large sample (e.g., t*feature_015 = +0.0054/unit, t*feature_001
+level 2 = -0.071, t*feature_014 = -0.028) but each implies less than
+0.3 months of variation across the feature range, far below the +5
+month main effect. The four-predicate subgroup is sufficient.
+
+Iteration 8 - Treatment-assignment sanity check
+-----------------------------------------------
+Treatment-arm balance: testing each of the 32 covariates against
+feature_027 with chi-square / t-test gave minimum p = 0.124 (feature_001).
+All others p > 0.10. Consistent with random assignment, and explains why
+adjusted and unadjusted treatment effects are essentially identical.
+
+Adjusted-main-effect screen of every other binary (with the major
+confounders held constant) showed adjusted |coef| < 0.03 (all p > 0.10)
+for every candidate other than feature_027. feature_027 is therefore
+the unique treatment variable in this dataset; the other binaries with
+real adjusted effects (feature_014, feature_006, feature_023, feature_022)
+function as biomarkers / prognostic factors.
+
+Iteration 9 - Necessity of each predicate
+-----------------------------------------
+Each of the four predicates is individually necessary for the +5-month
+benefit:
+  * (f006=1, f023=0, f022=0)              alone: trt diff = +0.083 (p=0.12)
+  * (f006=0, f023=1, f022=0)              alone: trt diff = +0.061 (p=0.17)
+  * (f006=0, f023=0, f022=1)              alone: trt diff = -0.204 (p=0.12)
+  * (mut_neg AND feature_005 >= 5)        alone: trt diff = -0.013 (p=0.85)
+None of these single-predicate violations recover the benefit. All four
+predicates are required.
+
+Refuted hypotheses
+------------------
+* feature_011 = 1 as an independent treatment-effect amplifier - refuted;
+  apparent boost was confounded with mut_neg status.
+* Continuous-feature modifiers other than feature_005 - all refuted;
+  no other continuous variable showed clinically meaningful interaction.
+* Other binary candidates as treatments - none had real adjusted main
+  effects beyond their prognostic role.
+
+Conclusions
+-----------
+1. Treatment variable: feature_027 (binary, ~20% prevalence, randomly
+   assigned).
+2. Pooled treatment effect on PFS: +0.97 months (unadjusted) and +0.94
+   months (adjusted).
+3. The pooled effect is a mixture: +5.0 months in a defined responsive
+   subgroup and 0 in everyone else.
+4. Responsive subgroup definition (the complete subgroup hypothesis):
+       feature_006 = 0  AND  feature_023 = 0  AND  feature_022 = 0
+       AND feature_005 < 5
+   constitutes 18.65% of the cohort. Treatment in this subgroup yields
+   an absolute PFS gain of approximately +5.01 months
+   (4.09 -> 9.10 months, p essentially 0).
+5. The non-responsive 81.35% of the cohort - any patient with at least
+   one of feature_006/_023/_022 positive, or with feature_005 >= 5 -
+   shows no treatment benefit at all. The responsive subgroup is the
+   complete, minimal definition of who benefits from feature_027 in
+   this cohort.

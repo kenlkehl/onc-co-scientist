@@ -1,0 +1,211 @@
+Oncology Dataset Analysis Summary — ds001_aml
+===============================================
+
+Cohort: 50,000 patients with AML. Outcome: binary objective_response (overall rate 18.75%).
+Six treatment indicators (not mutually exclusive): venetoclax_azacitidine (40.0%), 7+3 (45.2%),
+midostaurin (15.1%), gilteritinib (15.1%), ivosidenib (7.9%), enasidenib (7.9%); 20.1% of
+patients received no listed treatment. Patients can receive 0–6 of these treatments
+simultaneously (median 1, max 6).
+
+The protocol unfolded across 25 iterations: I first characterized univariate predictors of
+response, then asked whether each treatment had a main effect, then probed canonical
+biomarker–drug pairings, and finally ran systematic treatment-by-feature interaction screens
+and refined the most promising responder subgroup via leave-one-predicate-out checks.
+
+1. Univariate predictors of objective_response
+----------------------------------------------
+Iterations 1–2 mapped main effects of every feature on response.
+
+Significant POSITIVE univariate predictors (response higher when feature higher / present):
+  - npm1_mutation       +6.7 pp (23.5% vs 16.7%, p=5.8e-70) — strongest
+  - unfit_for_intensive +5.6 pp (22.1% vs 16.5%, p=1.9e-55) — counterintuitive direction
+                        in raw data; ultimately explained by venetoclax/azacitidine being
+                        unusually effective in this group (treatment-effect heterogeneity,
+                        not a true protective effect of frailty)
+  - albumin_g_dl        higher → higher response (r=+0.023, p=2.8e-7)
+  - alkaline_phosphatase mild positive (p=0.05)
+
+Significant NEGATIVE univariate predictors:
+  - ecog_ps             monotone: 23.1% (ECOG 0) → 17.4% (ECOG 1) → 12.9% (ECOG 2)
+  - tp53_mutation       -2.4 pp (p=3.5e-5)
+  - complex_karyotype   -2.3 pp (p=3.3e-6)
+  - blast_pct_marrow    higher → lower response (r=-0.037, p=2.3e-16)
+  - weight_loss_pct_6mo higher → lower response (r=-0.052, p=8.0e-31)
+  - crp_mg_l            higher → lower response (p=6.0e-6)
+  - wbc_k_per_ul        higher → lower response (p=1.8e-4)
+
+NULL (no univariate signal): age, sex_female, secondary_aml, flt3_itd, flt3_tkd,
+idh1_mutation, idh2_mutation, ldh, hemoglobin, AST/ALT, bilirubin, creatinine, BUN,
+sodium, potassium, calcium, NLR.
+
+2. Treatment main effects
+-------------------------
+Iteration 3 tested each treatment indicator alone:
+
+  - venetoclax_azacitidine  +5.4 pp (22.0% vs 16.6%, p=6.6e-51)  ← only positive signal
+  - 7+3                     +0.3 pp (p=0.47)   null
+  - midostaurin             -0.2 pp (p=0.67)   null
+  - gilteritinib            -0.7 pp (p=0.14)   null
+  - ivosidenib              +0.1 pp (p=0.93)   null
+  - enasidenib              -0.2 pp (p=0.79)   null
+
+Only venetoclax/azacitidine has any overall response benefit; the other five treatments
+show no measurable main effect.
+
+3. Canonical biomarker–drug subgroups
+-------------------------------------
+Iterations 4–5 tested whether the targeted therapies show their expected biology:
+  - midostaurin in FLT3-ITD+:    -1.5 pp (p=0.16)  — no canonical benefit
+  - midostaurin in FLT3-TKD+:    -0.5 pp (p=0.79)  — null
+  - gilteritinib in FLT3-ITD+:   +0.2 pp (p=0.84)  — null
+  - gilteritinib in FLT3-TKD+:   -3.5 pp (p=0.07)  — numerically negative
+  - ivosidenib in IDH1+:         -4.0 pp (p=0.07)  — numerically negative
+  - enasidenib in IDH2+:         +0.4 pp (p=0.84)  — null
+
+In this dataset the targeted therapies do NOT recapitulate their regulatory-trial efficacy
+in their canonical mutation subgroups. This is an important negative finding.
+
+4. Multivariable logistic regression
+------------------------------------
+Iteration 8 fit a logit model with all 35 features. Independent predictors:
+
+  Positive: npm1_mutation (+0.44), treatment_venetoclax_azacitidine (+0.36),
+            unfit_for_intensive (+0.37), albumin_g_dl (+0.12).
+  Negative: ecog_ps (-0.36), tp53_mutation (-0.19), complex_karyotype (-0.17),
+            blast_pct_marrow (-0.005/pp), weight_loss_pct_6mo (-0.037/pp),
+            crp_mg_l (-0.0065/mg/L), wbc_k_per_ul (-0.0018/k_per_uL).
+
+After adjustment, treatment_7plus3, midostaurin, gilteritinib, ivosidenib, and enasidenib
+all remained non-significant.
+
+5. Treatment-by-feature interaction screen
+------------------------------------------
+Iteration 9 added one tx × feature interaction at a time to the full logit and recorded
+significant interactions:
+
+  ven/aza × unfit_for_intensive   +0.90 (p = 4e-80)   ← largest by far
+  ven/aza × npm1_mutation         +1.08 (p = 4e-105)  ← largest by far
+  ven/aza × tp53_mutation         -0.45 (p = 4e-8)
+  ven/aza × complex_karyotype     -0.32 (p = 2e-6)
+  7+3 × complex_karyotype         -0.23 (p = 8e-4)
+  enasidenib × sex_female         +0.32 (p = 2.5e-4)
+  enasidenib × unfit              +0.18 (p = 0.04)    marginal
+  gilteritinib × unfit            +0.14 (p = 0.04)    marginal
+  ivosidenib × npm1               -0.19 (p = 0.04)    marginal
+
+The ven/aza interactions completely dominate the heterogeneity landscape. Magnitudes are
+large and p-values astronomical.
+
+6. Refining the ven/aza responder subgroup (iterations 6, 7, 10–13)
+-------------------------------------------------------------------
+Stratifying ven/aza effect cell-by-cell:
+
+  unfit=0, npm1=0:  diff -1.0 pp   (null)
+  unfit=0, npm1=1:  diff -0.3 pp   (null)
+  unfit=1, npm1=0:  diff +0.5 pp   (null)
+  unfit=1, npm1=1:  diff +47.4 pp  (63.3% on vs 16.0% off)  ← effect lives here
+
+Within unfit=1 AND npm1=1, further stratification:
+  tp53wt:          ven/aza diff +53.4 pp (69.1% vs 15.7%)
+  tp53+:           ven/aza diff  +0.6 pp (18.8% vs 18.3%)  — TP53 mutation kills the effect
+  non-complex:     ven/aza diff +55.6 pp (71.7% vs 16.1%)
+  complex:         ven/aza diff  +3.2 pp (18.4% vs 15.2%)  — complex karyotype kills the effect
+
+Combining all four predicates yields the joint subgroup:
+
+  unfit_for_intensive = 1
+  npm1_mutation       = 1
+  tp53_mutation       = 0
+  complex_karyotype   = 0
+
+Within this subgroup (n = 4,531; 9.1% of cohort):
+  ven/aza on:  78.6% response (n = 1,790)
+  ven/aza off: 15.8% response (n = 2,741)
+  Diff:        +62.8 pp
+  Chi-square p ≈ 0; adjusted logit OR = 21.0 (p << 1e-300).
+
+Outside this subgroup (n = 45,469; 90.9% of cohort):
+  ven/aza on:  16.4%
+  ven/aza off: 16.7%
+  Diff:        -0.3 pp (p = 0.42)  — the effect is fully absent.
+
+7. Necessity of each subgroup predicate (iterations 11, 12, 14, 22)
+-------------------------------------------------------------------
+Leave-one-out checks:
+  Drop unfit  → fit + npm1 + tp53wt + non-complex: ven/aza diff -0.3 pp (p=0.74) — null
+  Drop npm1   → unfit + npm1- + tp53wt + non-complex: ven/aza diff +0.5 pp — null
+  Add tp53    → unfit + npm1 + tp53+ + non-complex:   ven/aza diff +0.6 pp — null
+  Add complex → unfit + npm1 + tp53wt + complex:      ven/aza diff +3.2 pp — near null
+
+All four predicates are jointly required. Each predicate failure reduces the ven/aza
+response benefit to ≤3 pp.
+
+8. Robustness within the responder subgroup (iteration 15)
+----------------------------------------------------------
+Within unfit + npm1 + tp53wt + non-complex, the ven/aza effect is robust across:
+  - FLT3-ITD status, FLT3-TKD status (≈ +47 pp regardless)
+  - IDH1, IDH2 status (≈ +47 pp regardless)
+  - secondary_aml, sex_female (≈ +47 pp regardless)
+  - ECOG 0/1/2 (effect persists; +66, +62, +57 pp respectively)
+  - age (60–80 yo: +63 pp; 80+: +58 pp; <60: +66 pp)
+
+Inside the subgroup, the other treatments have no consistent independent effect:
+  midostaurin (p=1.0), gilteritinib (p=1.0), ivosidenib (p=0.5), 7+3 (p=0.8).
+  enasidenib weakly +5.9 pp (p=0.03) — likely chance given many tests.
+
+9. Other treatment-effect heterogeneity findings
+------------------------------------------------
+After exhaustive 2-way subgroup screens (iteration 19) and targeted single-modifier
+analyses (iterations 17, 18, 20, 23):
+
+  - 7+3 × complex_karyotype: in complex karyotype patients, 7+3 reduces response from
+    17.9% to 15.5% (-2.3 pp; adjusted interaction p = 8.3e-4). Modest, biologically
+    plausible: complex karyotype is chemorefractory.
+
+  - enasidenib in IDH2+ unfit patients: +6.0 pp (29.1% vs 23.1%, p ≈ 0.07). Suggestive
+    but small n=141 and not statistically robust.
+
+  - enasidenib × sex_female: adjusted interaction +0.32 (p=2.5e-4). Raw differences:
+    men -2.3 pp, women +2.5 pp. Statistically significant but small in absolute terms;
+    no obvious biological mechanism — likely a noise hit given the number of comparisons.
+
+  - No clean responder subgroup identifiable for midostaurin, gilteritinib, or ivosidenib.
+
+10. Final conclusions
+---------------------
+SUPPORTED hypotheses:
+  - NPM1 mutation, low ECOG, lab markers of fitness (high albumin, low blast %, low weight
+    loss, low CRP, low WBC) all predict higher response.
+  - TP53 mutation and complex karyotype predict lower response.
+  - venetoclax + azacitidine has a substantial positive main effect on objective_response.
+  - The venetoclax/azacitidine effect is overwhelmingly concentrated in a four-predicate
+    subgroup: unfit_for_intensive=1 AND npm1_mutation=1 AND tp53_mutation=0
+    AND complex_karyotype=0. Inside this subgroup ven/aza ≈ +63 pp absolute, OR ≈ 21;
+    outside it the effect is null.
+  - 7+3 is somewhat less effective in complex karyotype patients.
+
+REFUTED hypotheses:
+  - Targeted therapies do NOT show their canonical biomarker-matched response benefits
+    in this dataset (midostaurin/gilteritinib in FLT3+, ivosidenib in IDH1+,
+    enasidenib in IDH2+ all null or numerically reversed).
+  - 7+3 has no overall effect; it is not a universal response improver.
+  - Sex, age, secondary AML status, and most chemistry panels are not response predictors.
+
+FINAL TREATMENT-EFFECT-HETEROGENEITY HYPOTHESIS for objective_response:
+
+  Treatment:  treatment_venetoclax_azacitidine
+  Outcome:    objective_response (binary, increased)
+  Direction:  POSITIVE (response rate ~78.6% on ven/aza vs ~15.8% off ven/aza)
+  Subgroup defining predicates (all required):
+       unfit_for_intensive = 1
+       npm1_mutation       = 1
+       tp53_mutation       = 0
+       complex_karyotype   = 0
+  Subgroup size: 4,531 / 50,000 (9.1%)
+  Effect estimate inside subgroup: +62.8 pp absolute, adjusted OR = 21.0
+  Effect estimate outside subgroup: -0.3 pp, p = 0.42 (null)
+
+For the remaining treatments (7+3, midostaurin, gilteritinib, ivosidenib, enasidenib),
+no responder subgroup of comparable magnitude or robustness was identifiable. The most
+promising secondary signals — 7+3 attenuated by complex_karyotype, and enasidenib in
+unfit IDH2+ patients — are modest and do not approach the ven/aza signal.

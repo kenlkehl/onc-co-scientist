@@ -1,0 +1,150 @@
+Analysis summary — ds001_prostate (50,000 patients, 6 treatments, 4 biomarkers, binary objective_response)
+==========================================================================================================
+
+OVERVIEW
+--------
+The cohort is an all-male prostate-cancer dataset with overall objective-response rate 24.0%. The dataset
+contains six treatment indicators (enzalutamide, abiraterone, docetaxel, olaparib, lu177_psma,
+pembrolizumab), four genomic/expression biomarkers (BRCA2 mutation, AR-V7 positive, MSI-high, PSMA-high),
+and a panel of clinical features and labs. I worked through 25 iterations starting from main effects and
+ending with a systematic treatment-effect heterogeneity search.
+
+ITERATIONS 1–4: MAIN EFFECTS
+----------------------------
+Iter 1 (treatment main effects on response): only ENZALUTAMIDE shows a positive main effect
+(36.1% on vs 15.9% off, +20.2 pp absolute, p effectively 0). Abiraterone, docetaxel, olaparib,
+lu177-PSMA and pembrolizumab all have negligible main effects (within ±0.3pp, all p>0.45).
+
+Iter 2 (biomarker main effects): BRCA2-mutated patients have lower response (15.0% vs 25.0%,
+diff -10pp, p=5.4e-56); AR-V7-positive lower (16.0% vs 26.0%, diff -10pp, p=1.9e-98); MSI-high lower
+(17.6% vs 24.2%, p=3.0e-9); PSMA-high is null (p=0.31). These signals are univariate and partly
+confounded with treatment assignment, but they motivate a search for treatment-by-biomarker interactions.
+
+Iter 3 (clinical features): ECOG (β=-0.285 per unit, p=9.5e-73) and mCRPC status (response 34.6% in
+hormone-sensitive vs 15.4% in mCRPC, β=-1.07, p≈0) are the dominant prognostic features. Visceral
+metastases, age, and Gleason score are essentially flat.
+
+Iter 4 (labs): higher PSA (β=-0.0047, p=1.6e-94), greater 6-month weight loss (β=-0.031, p=3.4e-29),
+higher CRP (β=-0.007, p=5.6e-8), and lower albumin (β=+0.096, p=4.4e-6) are independently prognostic.
+LDH, NLR, alkaline phosphatase, AST/ALT, bilirubin, creatinine, BUN, sodium, potassium, calcium are flat.
+
+ITERATIONS 5–9: A-PRIORI TREATMENT × BIOMARKER INTERACTIONS
+-----------------------------------------------------------
+I tested the canonical clinical pairings:
+
+- Olaparib × BRCA2 (PARP-inhibitor expected benefit in BRCA2+): contrary to expectation, BRCA2+
+  patients on olaparib have 12.1% response vs 15.3% off (diff -3.2pp); BRCA2- shows null. Interaction
+  β=-0.289, p=0.045 — borderline, in the *negative* direction. Olaparib does NOT preferentially help
+  BRCA2-mutated patients in this cohort.
+- Pembrolizumab × MSI-high: pembro on=17.7%, off=17.6% in MSI-high; interaction p=0.96. Null.
+- Lu177-PSMA × PSMA-high: identical response on/off in PSMA-high (~23.8%); interaction p=0.36. Null.
+- Enzalutamide × AR-V7 (resistance hypothesis): AR-V7+ on enza=16.5%, off=15.7% (diff +0.8pp);
+  AR-V7- on enza=41.1%, off=16.0% (diff +25pp). Interaction β=-1.237, p=1.4e-93. Strong, in the
+  expected direction (AR-V7 abolishes enzalutamide benefit).
+- Abiraterone × AR-V7 and Docetaxel × AR-V7: both null (interaction p>0.3).
+
+ITERATION 10: MULTIVARIABLE ADJUSTED MODEL
+------------------------------------------
+A logistic model including all 25 features and 6 treatments confirms: enzalutamide β=+1.20 (p≈0); the
+other five treatments have adjusted coefficients of |β|<0.03 with p>0.30. Negative prognostic factors
+are mcrpc, brca2, ar_v7, msi_high, ecog, weight_loss, crp, psa; positive: albumin.
+
+ITERATIONS 11–14: BUILDING THE ENZALUTAMIDE SUBGROUP
+----------------------------------------------------
+- Enzalutamide × BRCA2 interaction: BRCA2+ on enza=15.3%, off=14.7% (null); BRCA2- on=38.5%, off=16.0%
+  (diff +22.5pp). Interaction β=-1.138, p=3.3e-42. BRCA2 mutation also fully blocks enzalutamide effect.
+- A 25 features × 5 (non-enzalutamide) treatments interaction screen turns up ZERO interactions at
+  p<0.01 — strong evidence that only enzalutamide carries treatment-effect heterogeneity in this cohort.
+- 3-way enza × AR-V7 × BRCA2 stratification: enzalutamide effect is +27.8pp (n=35,952) in AR-V7=0 &
+  BRCA2=0; +1–2pp (NS) in any cell where AR-V7=1 or BRCA2=1.
+- Adding mCRPC: within AR-V7=0 & BRCA2=0, mCRPC=0 enza on=78.0% vs off=17.3% (+60.7pp, n=16,175);
+  mCRPC=1 enza on=15.9% vs off=15.2% (+0.7pp, NS, n=19,777). mCRPC fully blocks the effect too.
+- Cross-treatment by mCRPC: in mCRPC=1 every treatment is within ±1pp; in mCRPC=0 only enzalutamide
+  shows benefit (+44pp), all others null.
+
+ITERATION 15: NULL EFFECTS WITHIN CANONICAL TARGET SUBGROUPS
+-------------------------------------------------------------
+- Olaparib in BRCA2+ mCRPC: 11.1% vs 15.2% (diff -4.1pp, NS).
+- Lu177-PSMA in PSMA-high mCRPC: 15.9% vs 15.0% (NS).
+- Pembrolizumab in MSI-high mCRPC: 8.9% vs 16.1% (NS, n_on=45 only).
+- Abiraterone in mCRPC by AR-V7: AR-V7- diff -0.4pp; AR-V7+ diff +1.9pp (NS).
+None of the targeted treatments has its expected biomarker-driven effect.
+
+ITERATIONS 16–18: SYSTEMATIC HETEROGENEITY SEARCH
+-------------------------------------------------
+Interaction screen (each treatment × each of 25 features, logit interaction p<0.01):
+  - Enzalutamide: 6 hits (mcrpc, ar_v7, psa, brca2, msi_high, ecog).
+  - All five other treatments: 0 hits.
+T-learner ITE (random-forest based) for each treatment, with decision-tree subgroup discovery on the
+estimated individual treatment effects:
+  - Enzalutamide: mean ITE = +0.488 in mcrpc=0 & AR-V7=0 & BRCA2=0; tree primary splits on mcrpc, BRCA2,
+    MSI, AR-V7 in that order — same subgroup recovered without supervision.
+  - Olaparib, pembrolizumab, lu177-PSMA, abiraterone, docetaxel: ITE distributions essentially centered
+    at zero (means -0.003 to +0.003), <2% of patients with ITE>0.10, no stable subgroup uncovered.
+
+ITERATIONS 19–22: ENZALUTAMIDE SUBGROUP — FINAL DEFINITION AND REFINEMENTS
+--------------------------------------------------------------------------
+Adding MSI-high as a third biomarker modifier within mCRPC=0 yields a clean joint logistic model:
+each of AR-V7=0, BRCA2=0, MSI-high=0 contributes an enzalutamide-by-modifier interaction of ≈-2.7
+(p<1e-19 each). Cell-by-cell within mCRPC=0:
+
+  AR-V7=0 & BRCA2=0 & MSI-high=0  → on=79.8% vs off=17.2%  (+62.6 pp, n=15,681)  ← clean subgroup
+  AR-V7=0 & BRCA2=0 & MSI-high=1  → on=18.5% vs off=21.0%  ( -2.5 pp, n=494)
+  AR-V7=0 & BRCA2=1 & MSI-high=0  → on=15.2% vs off=14.8%  ( +0.4 pp, n=1,775)
+  AR-V7=1 & BRCA2=0 & MSI-high=0  → on=18.2% vs off=16.1%  ( +2.1 pp, n=3,940)
+
+In the clean subgroup, the +62.6pp benefit is constant across PSA quartiles (Q1 +63.3pp → Q4 +61.8pp;
+adjusted enza:psa interaction p=0.94). The global enza:psa interaction observed earlier was confounded
+by mCRPC/AR-V7/BRCA2/MSI. Within the clean subgroup, ECOG, albumin, and weight loss remain general
+prognostic factors but do NOT modify the enzalutamide effect (effect persists across ECOG strata:
+ECOG 0 +62.8pp; ECOG 1 +60.2pp; ECOG 2 +57.0pp).
+
+ITERATIONS 23–25: CONFIRMING NULL EFFECTS AND FINAL SYNTHESIS
+-------------------------------------------------------------
+Adjusted (logistic) tests for the canonical biomarker pairings:
+  - Olaparib in BRCA2+, adjusted: β=-0.271, p=0.053 (borderline negative).
+  - Pembrolizumab in MSI-high: β=+0.018, p=0.95.
+  - Lu177-PSMA in PSMA-high: β=-0.003, p=0.94.
+  - Abiraterone in mCRPC: β=+0.004, p=0.92.
+  - Docetaxel overall: β=+0.002, p=0.94.
+
+OVERALL CONCLUSIONS
+-------------------
+Treatment effects.
+  • ENZALUTAMIDE: a single, large, well-characterized treatment-effect-heterogeneity finding. Response
+    increases from 17% to 80% (absolute +62.6 pp) ONLY in the joint subgroup
+        mcrpc = 0 AND ar_v7_positive = 0 AND brca2_mutation = 0 AND msi_high = 0
+    Outside this joint subgroup the effect is essentially null. AR-V7, BRCA2 and MSI-high act as
+    independent on/off switches: any one positive abrogates the effect; mCRPC also fully abrogates
+    the effect. The complete subgroup definition therefore contains four predicates, three biomarker
+    and one disease-state.
+  • OLAPARIB: no positive effect in any subgroup, including BRCA2-mutated patients. The only
+    borderline interaction is in the wrong direction (slightly fewer responses in BRCA2+ on olaparib).
+  • PEMBROLIZUMAB: no effect in any subgroup, including MSI-high.
+  • LU177-PSMA: no effect in any subgroup, including PSMA-high.
+  • ABIRATERONE: no effect in any subgroup, including AR-V7-defined splits or mCRPC.
+  • DOCETAXEL: no effect overall or in any subgroup tested.
+
+Prognostic effects (independent of treatment).
+  • Strong negative prognostics: mCRPC status (β=-1.13), BRCA2 mutation (β=-0.74), AR-V7 positive
+    (β=-0.69), MSI-high (β=-0.43), ECOG (β=-0.33 per unit), weight loss (β=-0.036 per %), CRP, PSA.
+  • Strong positive prognostic: serum albumin (β=+0.13 per g/dL).
+  • Null prognostics: age, Gleason score, visceral mets, LDH, NLR, alkaline phosphatase, transaminases,
+    bilirubin, creatinine, BUN, sodium, potassium, calcium, PSMA-high.
+
+Hypotheses supported.
+  • Enzalutamide benefit is large and concentrated in non-castrate-resistant, AR-V7-negative,
+    BRCA2-wildtype, MSI-stable patients.
+  • AR-V7 positivity and BRCA2 mutation each independently abrogate enzalutamide benefit (a known
+    AR-axis-resistance mechanism for AR-V7; an unexpected pattern for BRCA2 in this synthetic-looking
+    cohort, but the data are clear).
+  • Major non-treatment prognostic factors: mCRPC, BRCA2, AR-V7, MSI, ECOG, weight loss, CRP, PSA,
+    albumin.
+
+Hypotheses refuted.
+  • Olaparib does NOT preferentially help BRCA2-mutated patients.
+  • Pembrolizumab does NOT preferentially help MSI-high patients.
+  • Lu177-PSMA does NOT preferentially help PSMA-high patients.
+  • Abiraterone has NO meaningful effect overall or in AR-V7-defined splits.
+  • Higher PSA does NOT modify the enzalutamide effect once AR-V7/BRCA2/MSI/mCRPC are conditioned on.
+  • Visceral mets, age, Gleason score, LDH, NLR are NOT prognostic of objective response in this cohort.

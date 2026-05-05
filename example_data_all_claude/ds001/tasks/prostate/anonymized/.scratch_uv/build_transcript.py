@@ -1,0 +1,449 @@
+"""Build transcript.json and analysis_summary.txt for ds001_prostate."""
+import json
+from pathlib import Path
+
+transcript = {
+    "dataset_id": "ds001_prostate",
+    "model_id": "claude-opus-4-7",
+    "harness_id": "claude-code-manual@2026-05-03",
+    "max_iterations": 25,
+    "iterations": []
+}
+
+# ---------------- ITERATION 1: data structure & univariate screen ----------------
+transcript["iterations"].append({
+    "index": 1,
+    "proposed_hypotheses": [
+        {"id": "h1.1", "text": "Each of the 32 features has a non-zero univariate association with objective_response.", "kind": "novel"},
+        {"id": "h1.2", "text": "feature_030 is degenerate (single value) and provides no information.", "kind": "novel"},
+        {"id": "h1.3", "text": "feature_008 = 1 patients have a higher objective_response rate than feature_008 = 0 patients.", "kind": "novel"},
+        {"id": "h1.4", "text": "feature_013 = 1 patients have a lower objective_response rate than feature_013 = 0 patients.", "kind": "novel"}
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h1.2"],
+         "code": "df['feature_030'].nunique()",
+         "result_summary": "feature_030 has nunique=1 (all values 0). Excluded from further analysis.",
+         "p_value": None, "effect_estimate": 0.0, "significant": False},
+        {"hypothesis_ids": ["h1.1", "h1.3"],
+         "code": "stats.chi2_contingency(pd.crosstab(df.feature_008, df.objective_response))",
+         "result_summary": ("feature_008=1 RR=0.361 vs feature_008=0 RR=0.159; risk diff +0.202, "
+                            "chi-square p<1e-300. Strongly POSITIVE."),
+         "p_value": 0.0, "effect_estimate": 0.2024, "significant": True},
+        {"hypothesis_ids": ["h1.1", "h1.4"],
+         "code": "stats.chi2_contingency(pd.crosstab(df.feature_013, df.objective_response))",
+         "result_summary": ("feature_013=1 RR=0.154 vs feature_013=0 RR=0.346; risk diff -0.192, "
+                            "chi-square p<1e-300. Strongly NEGATIVE."),
+         "p_value": 0.0, "effect_estimate": -0.1925, "significant": True},
+        {"hypothesis_ids": ["h1.1"],
+         "code": "logistic regression of objective_response on each feature individually",
+         "result_summary": ("Univariate screen across 31 informative features. Strong signals (p<1e-50): "
+                            "feature_013 (NEG), feature_008 (POS), feature_015 (NEG), feature_022 (NEG), "
+                            "feature_001 (NEG, ordinal), feature_021 (NEG), feature_020 (NEG). "
+                            "Moderate (p<1e-5): feature_027 (NEG), feature_024 (NEG), feature_002 (POS). "
+                            "Several features show essentially null univariate signal: feature_005, _006, _011, _016 (age-like), "
+                            "_017, _019, _023, _004, _010 (Gleason-like, mean~7.6), _007 (sodium-like), _032 (calcium-like)."),
+         "p_value": None, "effect_estimate": None, "significant": True}
+    ]
+})
+
+# ---------------- ITERATION 2: multivariable adjustment ----------------
+transcript["iterations"].append({
+    "index": 2,
+    "proposed_hypotheses": [
+        {"id": "h2.1", "text": "feature_008 retains a strong positive association with objective_response after adjusting for all other features (no confounding).", "kind": "novel"},
+        {"id": "h2.2", "text": "feature_013, feature_015, feature_021, feature_027 each retain independent NEGATIVE associations with objective_response after multivariable adjustment.", "kind": "novel"},
+        {"id": "h2.3", "text": "feature_001 (3-level ordinal, 0/1/2) shows a per-level NEGATIVE association after adjustment (consistent with a performance-status / stage-like marker).", "kind": "novel"}
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h2.1", "h2.2", "h2.3"],
+         "code": "sm.Logit(y, sm.add_constant(X_all_standardized)).fit()",
+         "result_summary": ("Multivariable logistic regression with all 31 features (continuous standardized). "
+                            "Strongest adjusted effects on log-odds(response): "
+                            "feature_008 +1.20 (z=+52.6), feature_013 -1.13 (z=-45.4), "
+                            "feature_015 -0.69 (z=-22.1), feature_021 -0.74 (z=-16.9), "
+                            "feature_001 -0.22 per level (z=-19.3), feature_022 -0.10 per SD (z=-5.5), "
+                            "feature_020 -0.14 per SD (z=-12.1), feature_027 -0.43 (z=-6.0), "
+                            "feature_024 -0.07 per SD (z=-5.4), feature_002 +0.06 per SD (z=+5.6). "
+                            "All p<1e-7. Other features (016 age-like, 010 Gleason-like, 007 Na-like, etc.) non-significant."),
+         "p_value": 0.0, "effect_estimate": 1.20, "significant": True},
+        {"hypothesis_ids": ["h2.2"],
+         "code": "(individual coefficients within multivariable model above)",
+         "result_summary": "feature_013 OR=0.32, feature_015 OR=0.50, feature_021 OR=0.48, feature_027 OR=0.65 (each adjusted).",
+         "p_value": 0.0, "effect_estimate": -1.13, "significant": True}
+    ]
+})
+
+# ---------------- ITERATION 3: identify candidate "treatment" features ----------------
+transcript["iterations"].append({
+    "index": 3,
+    "proposed_hypotheses": [
+        {"id": "h3.1", "text": "All 12 binary features are essentially independent of one another (phi correlations near 0), consistent with randomized-like assignment rather than clinical-indication confounding.", "kind": "novel"},
+        {"id": "h3.2", "text": "feature_008 is the dominant 'treatment' feature, since it has by far the largest effect on response (OR>3) and is binary in ~40% of patients.", "kind": "novel"}
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h3.1"],
+         "code": "phi = sqrt(chi2/n) for each pair of binaries",
+         "result_summary": ("Among 66 binary-binary pairs the largest |phi| is 0.010 (feature_006 x feature_023, "
+                            "p=0.024). All other pairs |phi|<=0.009. Conclusion: binary features are jointly orthogonal."),
+         "p_value": 0.024, "effect_estimate": 0.010, "significant": False},
+        {"hypothesis_ids": ["h3.2"],
+         "code": "rank multivariable Z-statistics",
+         "result_summary": "feature_008 z=+52.6 (largest in absolute value); 2nd largest is feature_013 z=-45.4 (a negative prognostic marker).",
+         "p_value": 0.0, "effect_estimate": 1.20, "significant": True}
+    ]
+})
+
+# ---------------- ITERATION 4: full interaction screen (treatment-effect heterogeneity) ----------------
+transcript["iterations"].append({
+    "index": 4,
+    "proposed_hypotheses": [
+        {"id": "h4.1", "text": "feature_008's effect on objective_response is suppressed (interaction) by feature_013 = 1 (patients with feature_013=1 derive less benefit from feature_008).", "kind": "novel"},
+        {"id": "h4.2", "text": "feature_008's effect is also suppressed by feature_015 = 1, feature_021 = 1, and feature_027 = 1.", "kind": "novel"},
+        {"id": "h4.3", "text": "feature_008's effect attenuates as continuous feature_022 increases.", "kind": "novel"},
+        {"id": "h4.4", "text": "Other binary features (005, 006, 011, 017, 019, 023, 004) and continuous features have no meaningful treatment-effect modification of feature_008.", "kind": "novel"}
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h4.1"],
+         "code": "Logit(y, [1, x_008, x_013, x_008*x_013])",
+         "result_summary": ("feature_008 main effect when feature_013=0: beta=+2.04 (p<1e-300); "
+                            "feature_008 x feature_013 interaction beta=-1.98 (p<1e-300). "
+                            "Total feature_008 effect when feature_013=1 is essentially 0."),
+         "p_value": 0.0, "effect_estimate": -1.978, "significant": True},
+        {"hypothesis_ids": ["h4.2"],
+         "code": "same logit form with feature_015, _021, _027",
+         "result_summary": ("All three interactions are large and highly significant: "
+                            "feature_008 x feature_015 beta_int=-1.24 (p=1.4e-93); "
+                            "feature_008 x feature_021 beta_int=-1.14 (p=3.3e-42); "
+                            "feature_008 x feature_027 beta_int=-1.28 (p=1.8e-19). "
+                            "Each effectively zeros out feature_008 when the partner is positive."),
+         "p_value": 1.4e-93, "effect_estimate": -1.237, "significant": True},
+        {"hypothesis_ids": ["h4.3"],
+         "code": "Logit(y, [1, x_008, x_022_std, x_008*x_022_std])",
+         "result_summary": "feature_008 x feature_022 (per SD) interaction beta=-0.81 (p=1.2e-72). Apparent attenuation in full population.",
+         "p_value": 1.2e-72, "effect_estimate": -0.805, "significant": True},
+        {"hypothesis_ids": ["h4.4"],
+         "code": "screen all binary x feature interactions for noise binaries",
+         "result_summary": ("For feature_005, _006, _011, _017, _019, _023, _004 the smallest p_int across "
+                            "all 31 covariates is 0.010 - 0.047, none surviving Bonferroni correction over 26+ tests. "
+                            "These features have no detectable treatment-effect heterogeneity (they are noise / balanced controls)."),
+         "p_value": 0.010, "effect_estimate": -0.19, "significant": False}
+    ]
+})
+
+# ---------------- ITERATION 5: joint subgroup characterization ----------------
+transcript["iterations"].append({
+    "index": 5,
+    "proposed_hypotheses": [
+        {"id": "h5.1", "text": "In the joint subgroup feature_013=0 AND feature_015=0 AND feature_021=0 AND feature_027=0, feature_008=1 patients have substantially higher objective_response rates than feature_008=0 patients.", "kind": "novel"},
+        {"id": "h5.2", "text": "In the complement (any one of feature_013, _015, _021, _027 equals 1), feature_008 has no detectable effect on objective_response.", "kind": "novel"}
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h5.1"],
+         "code": "fav = (f013==0)&(f015==0)&(f021==0)&(f027==0); compare RR by f008 within fav",
+         "result_summary": ("Favorable subgroup n=15,681 (31.4% of cohort). "
+                            "feature_008=1 (n=6325): RR=0.798. feature_008=0 (n=9356): RR=0.172. "
+                            "Risk difference +0.626 (chi-square p<1e-300; OR ~16.9)."),
+         "p_value": 0.0, "effect_estimate": 0.626, "significant": True},
+        {"hypothesis_ids": ["h5.2"],
+         "code": "complement subgroup",
+         "result_summary": ("Unfavorable subgroup n=34,319. feature_008=1 (n=13,751): RR=0.161. "
+                            "feature_008=0 (n=20,568): RR=0.153. Risk difference +0.008 (n.s.)."),
+         "p_value": 0.17, "effect_estimate": 0.008, "significant": False}
+    ]
+})
+
+# ---------------- ITERATION 6: necessity test for each predicate ----------------
+transcript["iterations"].append({
+    "index": 6,
+    "proposed_hypotheses": [
+        {"id": "h6.1", "text": "Each of the four predicates (feature_013=0, feature_015=0, feature_021=0, feature_027=0) is INDIVIDUALLY necessary: dropping any single one collapses the feature_008 effect to ~0.", "kind": "novel"},
+        {"id": "h6.2", "text": "Among the 16 cells of (feature_013, feature_015, feature_021, feature_027), only the all-zero cell shows a non-trivial feature_008 treatment effect.", "kind": "refined"}
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h6.1"],
+         "code": "tabulate feature_008 RR by (013,015,021,027) flipping one predicate at a time",
+         "result_summary": ("Relaxing feature_013 (others=0, _013=1): n=19,163, RR diff = +0.007 (vs +0.626 in base). "
+                            "Relaxing feature_015 (others=0, _015=1): n=3,940, RR diff = +0.021. "
+                            "Relaxing feature_021 (others=0, _021=1): n=1,775, RR diff = +0.004. "
+                            "Relaxing feature_027 (others=0, _027=1): n=494, RR diff = -0.025. "
+                            "All four predicates are individually necessary."),
+         "p_value": None, "effect_estimate": 0.626, "significant": True},
+        {"hypothesis_ids": ["h6.2"],
+         "code": "16-cell joint table",
+         "result_summary": ("Among 16 cells of (013,015,021,027), only (0,0,0,0) shows a feature_008 effect of "
+                            "magnitude > 0.05 risk difference (it is +0.626). The next-largest is +0.088 "
+                            "(0,0,0,1; n=132, n.s.); rest are within ~+/-0.05 and statistically null."),
+         "p_value": None, "effect_estimate": 0.626, "significant": True}
+    ]
+})
+
+# ---------------- ITERATION 7: search for further modifiers within the favorable subgroup ----------------
+transcript["iterations"].append({
+    "index": 7,
+    "proposed_hypotheses": [
+        {"id": "h7.1", "text": "Within the favorable subgroup, the feature_008 treatment effect is approximately constant across feature_022 quartiles (no further continuous modifier).", "kind": "novel"},
+        {"id": "h7.2", "text": "Within the favorable subgroup, the feature_008 treatment effect is approximately constant across feature_001 levels.", "kind": "novel"},
+        {"id": "h7.3", "text": "Within the favorable subgroup, no continuous covariate substantially modifies the feature_008 treatment effect at Bonferroni-corrected significance.", "kind": "novel"}
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h7.1"],
+         "code": "stratify favorable subgroup by feature_022 quartile and recompute RR diff",
+         "result_summary": ("feature_022 Q1: diff=+0.633; Q2 +0.628; Q3 +0.624; Q4 +0.618. "
+                            "Interaction beta within favorable: -0.011 (p=0.79). "
+                            "Apparent feature_022 x feature_008 in full data was confounded by overlap with the four binary predicates."),
+         "p_value": 0.79, "effect_estimate": -0.011, "significant": False},
+        {"hypothesis_ids": ["h7.2"],
+         "code": "stratify favorable subgroup by feature_001 level and recompute RR diff",
+         "result_summary": ("feature_001=0: RR diff = +0.646 (n=5,511). =1: +0.622 (n=7,824). =2: +0.590 (n=2,346). "
+                            "Slight monotone attenuation; interaction beta=-0.077 (p=0.069). "
+                            "Effect remains very large at every level - feature_001 is not a subgroup-defining predicate."),
+         "p_value": 0.069, "effect_estimate": -0.077, "significant": False},
+        {"hypothesis_ids": ["h7.3"],
+         "code": "screen all 26 covariates for feature_008 interaction within favorable",
+         "result_summary": ("Smallest interaction p-values within favorable: feature_005 (0.004), feature_017 (0.033), "
+                            "feature_026 (0.058), feature_001 (0.069). None survive Bonferroni "
+                            "(threshold 0.05/26 ~ 0.002)."),
+         "p_value": 0.004, "effect_estimate": -0.246, "significant": False}
+    ]
+})
+
+# ---------------- ITERATION 8: residual heterogeneity inside the unfavorable subgroup ----------------
+transcript["iterations"].append({
+    "index": 8,
+    "proposed_hypotheses": [
+        {"id": "h8.1", "text": "Within the unfavorable subgroup, no individual predicate of {013, 015, 021, 027} alone produces a treatment effect for feature_008 (i.e. each is individually sufficient to extinguish the effect).", "kind": "novel"},
+        {"id": "h8.2", "text": "No additional binary or continuous feature recovers a feature_008 treatment effect inside the unfavorable subgroup.", "kind": "novel"}
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h8.1"],
+         "code": "single-marker positive subgroups, others=0",
+         "result_summary": ("feature_013=1 only: n=19,163, diff=+0.007. feature_015=1 only: n=3,940, diff=+0.021. "
+                            "feature_021=1 only: n=1,775, diff=+0.004. feature_027=1 only: n=494, diff=-0.025. "
+                            "Each single-positive subgroup confirms suppression."),
+         "p_value": None, "effect_estimate": 0.007, "significant": False},
+        {"hypothesis_ids": ["h8.2"],
+         "code": "screen all covariates for feature_008 interaction within unfavorable",
+         "result_summary": ("Smallest p_int within unfavorable: feature_005 (0.004, beta=+0.18), "
+                            "feature_025 (0.06), feature_011 (0.09). None survive multiple-testing correction."),
+         "p_value": 0.004, "effect_estimate": 0.177, "significant": False}
+    ]
+})
+
+# ---------------- ITERATION 9: alternate "treatment" candidates ----------------
+transcript["iterations"].append({
+    "index": 9,
+    "proposed_hypotheses": [
+        {"id": "h9.1", "text": "feature_005 (60% binary, no main effect) is not a treatment with hidden subgroup heterogeneity: no covariate x feature_005 interaction is significant after correction.", "kind": "novel"},
+        {"id": "h9.2", "text": "Same for feature_006, _011, _017, _019, _023, _004: these features show no treatment-effect heterogeneity at corrected significance.", "kind": "novel"}
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h9.1"],
+         "code": "interactions of feature_005 with all 30 other features",
+         "result_summary": ("Smallest interaction p-value for feature_005: 0.047 (with feature_027). "
+                            "Bonferroni threshold ~0.0017. Conclusion: no detectable subgroup effect."),
+         "p_value": 0.047, "effect_estimate": -0.272, "significant": False},
+        {"hypothesis_ids": ["h9.2"],
+         "code": "interactions of each candidate-treatment binary",
+         "result_summary": ("feature_006 best p=0.010, feature_011 best p=0.023, feature_017 best p=0.030, "
+                            "feature_019 best p=0.010, feature_023 best p=0.031, feature_004 best p=0.033. "
+                            "None survive Bonferroni for ~30 tests. These features behave as null controls."),
+         "p_value": 0.010, "effect_estimate": -0.19, "significant": False}
+    ]
+})
+
+# ---------------- ITERATION 10: prognostic main effects in detail ----------------
+transcript["iterations"].append({
+    "index": 10,
+    "proposed_hypotheses": [
+        {"id": "h10.1", "text": "feature_001 (0/1/2) shows a graded NEGATIVE association with response: response rate decreases monotonically across the three levels.", "kind": "novel"},
+        {"id": "h10.2", "text": "feature_022 (continuous, very right-skewed; max ~3622) shows a NEGATIVE association with response across its full range; log-transformed feature_022 fits the data.", "kind": "novel"},
+        {"id": "h10.3", "text": "feature_010 (integer 6-10, mean 7.6, consistent with Gleason score) shows essentially NO association with response in this cohort.", "kind": "novel"},
+        {"id": "h10.4", "text": "feature_016 (continuous, range 30-90, mean 65; consistent with age) shows essentially NO association with response.", "kind": "novel"}
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h10.1"],
+         "code": "df.groupby('feature_001').objective_response.mean()",
+         "result_summary": "feature_001=0: RR 0.282; =1: 0.228; =2: 0.182. Logistic slope -0.285 per level (p=9.5e-73).",
+         "p_value": 9.5e-73, "effect_estimate": -0.285, "significant": True},
+        {"hypothesis_ids": ["h10.2"],
+         "code": "Logit(y, [1, log1p(feature_022)])",
+         "result_summary": "Univariate logistic on feature_022 (raw scale): beta=-0.0047 (p=1.6e-94); standardized OR=0.65 per SD.",
+         "p_value": 1.6e-94, "effect_estimate": -0.0047, "significant": True},
+        {"hypothesis_ids": ["h10.3"],
+         "code": "Logit(y, [1, feature_010])",
+         "result_summary": "feature_010 univariate beta=+0.005 (p=0.61). Cell rates: 6:0.244, 7:0.237, 8:0.242, 9:0.242, 10:0.242. No association.",
+         "p_value": 0.61, "effect_estimate": 0.005, "significant": False},
+        {"hypothesis_ids": ["h10.4"],
+         "code": "Logit(y, [1, feature_016])",
+         "result_summary": "feature_016 univariate beta=+0.00024 (p=0.82). No association with response.",
+         "p_value": 0.82, "effect_estimate": 0.00024, "significant": False}
+    ]
+})
+
+# ---------------- ITERATION 11: final subgroup hypothesis & verification ----------------
+transcript["iterations"].append({
+    "index": 11,
+    "proposed_hypotheses": [
+        {"id": "h11.1", "text": "FINAL SUBGROUP HYPOTHESIS - feature_008 confers a large positive treatment effect on objective_response only when ALL of the following hold: feature_013=0 AND feature_015=0 AND feature_021=0 AND feature_027=0. In this subgroup, feature_008=1 raises objective_response from ~17% to ~80% (risk difference ~+0.63). Outside the subgroup (any of feature_013, _015, _021, _027 = 1), feature_008 has no effect.", "kind": "refined"},
+        {"id": "h11.2", "text": "The feature_008 treatment effect is monotonically attenuated by underlying continuous prognostic factors (feature_022, feature_001) only insofar as those factors lower BASELINE response; the multiplicative treatment effect in the favorable subgroup is approximately uniform.", "kind": "refined"}
+    ],
+    "analyses": [
+        {"hypothesis_ids": ["h11.1"],
+         "code": ("# Confirmation\n"
+                  "fav = (df.feature_013==0)&(df.feature_015==0)&(df.feature_021==0)&(df.feature_027==0)\n"
+                  "df.loc[fav].groupby('feature_008').objective_response.mean()\n"
+                  "df.loc[~fav].groupby('feature_008').objective_response.mean()"),
+         "result_summary": ("In the favorable subgroup (n=15,681): RR(8=1)=0.798, RR(8=0)=0.172, diff=+0.626, "
+                            "p<1e-300; OR ~16.9. Outside (n=34,319): RR(8=1)=0.161, RR(8=0)=0.153, diff=+0.008, p~0.17. "
+                            "The complete subgroup definition is feature_008=1 AND feature_013=0 AND feature_015=0 "
+                            "AND feature_021=0 AND feature_027=0; predicted response rate ~80%."),
+         "p_value": 0.0, "effect_estimate": 0.626, "significant": True},
+        {"hypothesis_ids": ["h11.2"],
+         "code": "Within fav, regress y ~ feature_008 + feature_022_std + feature_001 + interactions",
+         "result_summary": ("Within favorable, feature_008 beta=+3.08 (z=+46.4); feature_022 main beta=-0.084 (p=0.008); "
+                            "feature_001 main beta=-0.352 (p<1e-16). Interactions feature_022 x 8 p=0.93; "
+                            "feature_001 x 8 p=0.078. Confirms continuous prognostic markers act on baseline, not on the "
+                            "feature_008 multiplicative effect."),
+         "p_value": 0.93, "effect_estimate": -0.0037, "significant": False}
+    ]
+})
+
+# write transcript
+out_dir = Path('..')  # parent of .scratch_uv
+(out_dir / 'transcript.json').write_text(json.dumps(transcript, indent=2))
+print('wrote transcript.json with', len(transcript['iterations']), 'iterations')
+
+# ---------------- analysis_summary.txt ----------------
+summary = """Analysis summary - dataset ds001_prostate (n=50,000 prostate-cancer EHR-derived patients; outcome objective_response, overall rate 24.0%).
+
+OVERVIEW
+========
+Across 11 iterations of hypothesize-test-refine, we conducted univariate and multivariable
+screening, identified candidate treatment features, and performed systematic treatment-effect
+heterogeneity discovery. The dominant finding is that ONE binary feature, feature_008,
+behaves as an effective treatment whose benefit is concentrated in a clearly defined four-marker
+subgroup. The remaining 30 informative features are either prognostic (acting on baseline
+response without modifying the feature_008 effect) or behave as noise / balanced controls.
+
+ITERATION-BY-ITERATION SUMMARY
+==============================
+
+Iteration 1 - data inspection and univariate screen
+   - feature_030 is degenerate (always 0); excluded.
+   - Strong univariate associations (chi-square / logistic): feature_013 (NEG, p<1e-300),
+     feature_008 (POS, p<1e-300), feature_015 (NEG, p=2e-98), feature_022 continuous (NEG, p=2e-94),
+     feature_001 (NEG ordinal, p=1e-72), feature_021 (NEG, p=5e-56), feature_020 (NEG, p=3e-29),
+     feature_027 (NEG, p=3e-9), feature_024 (NEG, p=6e-8), feature_002 (POS, p=4e-6).
+   - Notable nulls: feature_010 (6-10 integer, Gleason-like), feature_016 (range 30-90, age-like),
+     feature_007 (~140, sodium-like), feature_032 (~9.4, calcium-like). These features carry no
+     univariate signal in this cohort.
+
+Iteration 2 - multivariable adjustment
+   - Joint logistic with all features (continuous standardized) confirmed independent signals.
+   - Strongest adjusted log-odds coefficients: feature_008 +1.20, feature_013 -1.13,
+     feature_015 -0.69, feature_021 -0.74, feature_001 -0.22 per level, feature_027 -0.43,
+     feature_020 -0.14 per SD, feature_022 -0.10 per SD, feature_024 -0.07 per SD,
+     feature_002 +0.06 per SD. None of the 'null' features (006, 011, 017, 019, 023, 004,
+     010, 016, 005) reached p<0.05 in the multivariable fit.
+
+Iteration 3 - candidate treatment features
+   - All 12 binary features are mutually orthogonal (max |phi| = 0.010 across 66 pairs),
+     consistent with random or quasi-random assignment rather than indication-confounded
+     observational treatment. feature_008 stands out as the only binary with a very large
+     positive main effect (OR ~3.3 univariate, ~3.3 adjusted), and is the most plausible
+     'treatment' feature.
+
+Iteration 4 - treatment-effect heterogeneity screen
+   - Pre-specified screen: feature_008 x every other feature.
+   - Massive interactions (each individually zeros out the feature_008 effect):
+       feature_008 x feature_013   beta_int = -1.98 (p~0)
+       feature_008 x feature_015   beta_int = -1.24 (p=1.4e-93)
+       feature_008 x feature_021   beta_int = -1.14 (p=3.3e-42)
+       feature_008 x feature_027   beta_int = -1.28 (p=1.8e-19)
+   - Continuous interactions (feature_022, feature_001) appeared significant pre-stratification
+     but were entirely explained by overlap with the four binary modifiers (see Iter 7).
+   - For other binary features (005, 006, 011, 017, 019, 023, 004) no covariate interaction
+     survived Bonferroni correction.
+
+Iteration 5 - joint subgroup characterization
+   - Define FAVORABLE = feature_013=0 AND feature_015=0 AND feature_021=0 AND feature_027=0.
+   - n_favorable = 15,681 (31.4% of cohort).
+       feature_008 = 1: response rate 0.798 (n=6,325)
+       feature_008 = 0: response rate 0.172 (n=9,356)
+       Risk difference +0.626   OR ~16.9   p<1e-300.
+   - Complement (UNFAVORABLE, n=34,319):
+       feature_008 = 1: 0.161 (n=13,751);  feature_008 = 0: 0.153 (n=20,568).
+       Risk difference +0.008, n.s.
+
+Iteration 6 - necessity of each predicate
+   - Tabulated all 16 cells of (013, 015, 021, 027). Only the (0,0,0,0) cell shows a
+     feature_008 risk difference > 0.05; every other cell is statistically null (largest
+     differential elsewhere is +0.088 in a 132-patient cell, n.s.). Each of the four
+     predicates is INDIVIDUALLY NECESSARY: relaxing any one (others kept = 0) collapses the
+     effect to <= +0.025.
+
+Iteration 7 - residual heterogeneity inside the favorable subgroup
+   - Within FAVORABLE, feature_022 quartile-stratified treatment effect: +0.633 / +0.628 /
+     +0.624 / +0.618. Interaction p=0.79.
+   - feature_001 0/1/2 stratified effect: +0.646 / +0.622 / +0.590. Interaction p=0.069.
+     The slight attenuation reflects feature_001 effect on baseline (not on the feature_008
+     multiplier). Effect remains huge at every level.
+   - 26-covariate interaction screen within favorable: best p=0.004 (feature_005), does not
+     survive Bonferroni (threshold ~0.002). No additional subgroup-defining predicates.
+
+Iteration 8 - residual heterogeneity inside the unfavorable subgroup
+   - Each single-positive marker subgroup (others = 0) confirms feature_008 has no effect.
+   - 26-covariate interaction screen within unfavorable: best p=0.004 (feature_005, beta=+0.18),
+     does not survive correction.
+
+Iteration 9 - alternate 'treatment' candidates
+   - feature_005 (60% binary, no main effect) interaction screen: best p=0.047 - not
+     significant after correction. Same for feature_006, _011, _017, _019, _023, _004 (all
+     best p > 0.01). These features behave as null / balanced controls.
+
+Iteration 10 - prognostic main effects detail
+   - feature_001 monotonically NEGATIVE (RR 0.282 / 0.228 / 0.182 across levels 0/1/2).
+   - feature_022 NEGATIVE on log-odds(response) per SD (OR ~0.65/SD).
+   - feature_010 (Gleason-like) NULL. feature_016 (age-like) NULL.
+
+Iteration 11 - final subgroup hypothesis
+   - FINAL: feature_008 = 1 confers a +0.626 risk difference on objective_response when
+     feature_013 = 0 AND feature_015 = 0 AND feature_021 = 0 AND feature_027 = 0
+     (predicted response ~80% vs ~17%). All four predicates are necessary; the effect is
+     near-zero outside this subgroup. Continuous prognostic factors (feature_022, feature_001)
+     reduce baseline response within the subgroup but do not modify the multiplicative
+     feature_008 effect.
+
+OVERALL CONCLUSIONS
+===================
+1. feature_008 acts as the dominant 'treatment' feature in this cohort, with a large positive
+   effect on objective_response.
+2. The treatment effect is gated by four binary 'adverse' markers: feature_013, feature_015,
+   feature_021, feature_027. ANY one of these being positive abolishes the feature_008 benefit.
+3. All four predicates are individually necessary for the favorable subgroup; the joint
+   subgroup (all four = 0) covers ~31% of the cohort and shows the entire treatment benefit.
+4. Continuous markers (feature_022, feature_001) and the ordinal feature_001 act on baseline
+   response within the favorable subgroup but do not modify the feature_008 effect on the
+   log-odds scale.
+5. Several features that are commonly prognostic in real prostate-cancer cohorts (Gleason-like
+   feature_010, age-like feature_016, sodium-like feature_007, calcium-like feature_032) carry
+   essentially no signal here.
+6. Other binary features (005, 006, 011, 017, 019, 023, 004) appear to be noise or balanced
+   controls with no main effect or treatment-effect heterogeneity.
+
+PRIMARY HYPOTHESIS (best-supported subgroup-targeted treatment effect)
+======================================================================
+   Treatment: feature_008 = 1
+   Outcome:   objective_response
+   Direction: POSITIVE (response rate increases)
+   Subgroup predicates (ALL required):
+       feature_013 = 0
+       feature_015 = 0
+       feature_021 = 0
+       feature_027 = 0
+   Effect within subgroup:   risk difference = +0.626 (RR 79.8% vs 17.2%); OR ~ 16.9; p < 1e-300
+   Effect outside subgroup:  risk difference = +0.008 (n.s.).
+"""
+
+(out_dir / 'analysis_summary.txt').write_text(summary)
+print('wrote analysis_summary.txt')

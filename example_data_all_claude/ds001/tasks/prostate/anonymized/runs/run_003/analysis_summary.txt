@@ -1,0 +1,178 @@
+Oncology Dataset Analysis -- ds001_prostate
+============================================
+
+Cohort: 50,000 patients with one binary outcome (objective_response, overall rate
+24.0%) and 32 anonymized predictors. feature_030 is constant 0 and was dropped.
+The remaining 31 predictors comprise 11 binary integer features, two multi-level
+ordinal features (feature_001 with 3 levels, feature_010 with 5 levels spanning
+6-10), and 17 continuous features whose ranges resemble routine labs (e.g.,
+feature_016 ~age, feature_022 ~PSA, feature_002 ~albumin, feature_026 ~hemoglobin,
+feature_007 ~sodium, feature_014 ~potassium, feature_032 ~calcium, feature_025
+~creatinine).
+
+Treatment identification (iterations 1-2)
+-----------------------------------------
+Univariate screening of every binary feature for its main effect on
+objective_response identified feature_008 as the unambiguous treatment indicator:
+36.1% response with feature_008=1 vs 15.9% with feature_008=0 (RD=+0.20,
+logOR=+1.10, p~0). It is by far the largest positive effect among the binary
+features. Covariate-balance checks across all 31 other predictors stratified by
+feature_008 produced standardized differences <0.01 SD on every feature, with
+all p-values consistent with chance (smallest p=0.04 for one trivial-magnitude
+contrast). The pattern is consistent with random treatment assignment, so
+unadjusted treatment-effect estimates can be interpreted causally.
+
+Main-effect prognostic landscape (iterations 3-4)
+-------------------------------------------------
+Multivariable logistic regression of objective_response on all candidate
+predictors (with feature_001 and feature_010 entered as categorical) yielded the
+following independent associations (logOR, p):
+  feature_008  +1.20  (p ~ 0)         -- treatment
+  feature_013  -1.13  (p ~ 0)         -- strong negative prognostic
+  feature_015  -0.69  (p = 1.3e-108)
+  feature_021  -0.74  (p = 4.7e-64)
+  feature_001 (ordinal) negative, monotone (=2 logOR -0.65, =1 -0.33)
+  feature_027  -0.43  (p = 2.5e-09)
+  feature_022  -0.001 per unit (p = 3.3e-08)  -- continuous, PSA-like
+  feature_002  +0.13  per unit (p = 1.7e-08)  -- continuous, albumin-like
+  feature_020  -0.036 per unit (p = 1.7e-33)
+  feature_024  -0.0073 per unit (p = 9.0e-08)
+All other binary features (feature_006, feature_005, feature_023, feature_011,
+feature_017, feature_019, feature_004) and the lab-like features (feature_016,
+feature_018, feature_026, feature_009, feature_029, feature_003, feature_012,
+feature_025, feature_028, feature_007, feature_014, feature_032, feature_031)
+were not independent predictors of response. feature_010 (Gleason-grade-like) had
+no main effect on objective_response in either univariate or multivariable
+analysis.
+
+Treatment-effect heterogeneity: binary modifiers (iterations 5-6)
+-----------------------------------------------------------------
+Formal logistic interaction tests (T x feature) revealed four binary features
+that essentially abolish the feature_008 treatment effect when present:
+  feature_013: stratified RD f013=0 +0.440 / f013=1 +0.008; T*f013 logOR -1.98
+  feature_021: stratified RD f021=0 +0.225 / f021=1 +0.006; T*f021 logOR -1.14
+  feature_015: stratified RD f015=0 +0.251 / f015=1 +0.008; T*f015 logOR -1.24
+  feature_027: stratified RD f027=0 +0.209 / f027=1 -0.022; T*f027 logOR -1.28
+All four interaction p-values are <<1e-19. None of the other binary features
+shows clinically meaningful interaction with feature_008 (smallest interaction
+p was feature_011 at p=0.02 with logOR -0.11 -- a trivial magnitude).
+
+Treatment-effect heterogeneity: ordinal and continuous (iterations 7-8)
+----------------------------------------------------------------------
+On the absolute-risk-difference scale, treatment benefit was essentially flat
+across feature_001 (RD +0.207/+0.201/+0.198 for levels 0/1/2) and feature_010
+(RD +0.20-+0.23 for Gleason-like values 6-10). The logit-scale interaction with
+feature_001 was positive and significant (multiplicative effect preserved on a
+shrinking baseline). For continuous features, only feature_022 showed a strong
+full-cohort interaction (logOR -0.0087 per unit, p=1.2e-72); feature_025 reached
+p=0.04 with trivial magnitude. All other continuous features had interaction
+p-values >0.1.
+
+Joint subgroup discovery (iterations 9-10)
+------------------------------------------
+The 16-cell crosstab of (feature_013 x feature_021 x feature_015 x feature_027)
+revealed an essentially clean dichotomy. The all-zero cell (feature_013=0 AND
+feature_021=0 AND feature_015=0 AND feature_027=0; n=15,681; 31.4% of cohort)
+showed a treatment effect of RD=+0.626 (rT=0.798, rC=0.172). Every other cell
+had |RD| <= 0.09 with most within sampling noise of zero. A "necessity" check
+relaxing one constraint at a time confirmed that each of the four markers is
+required for benefit: pinning the other three to 0 and varying the relaxed
+marker, the marker=1 stratum always had RD <= 0.025. feature_013=1 is the most
+prevalent and dominant resistance condition.
+
+Within-subgroup heterogeneity check (iterations 11-12)
+------------------------------------------------------
+Within the favorable subgroup, no continuous feature modifies the treatment
+effect (all interaction p-values > 0.05; feature_022 tertiles within favorable
+gave RD +0.634/+0.619/+0.625 -- flat). The full-cohort feature_022 x T
+interaction is therefore mediated by the binary-marker structure and disappears
+once the resistance markers are excluded. Within favorable, every binary,
+ordinal, and lab-like stratification produced RD between +0.585 and +0.658 --
+no further meaningful heterogeneity. Two formal interactions reached p<0.05
+(feature_005 logOR -0.25, p=0.004; feature_017 logOR -0.29, p=0.03) but the
+absolute-scale RD difference between strata is <0.05, attributable to large
+sample size rather than clinical heterogeneity.
+
+Independent validation via tree-based ITE estimation (iteration 13)
+-------------------------------------------------------------------
+Two decision trees (max_depth=4, min_samples_leaf=200) trained separately on
+T=1 and T=0 patients yielded an estimated individual treatment effect
+ITE = p1 - p0 for every patient. Quintiles of estimated ITE matched observed
+risk differences tightly (Q1 estimated -0.031 vs observed -0.020; Q4 +0.437 vs
++0.441; Q5 +0.644 vs +0.614). The Q5 (highest-benefit) bin had feature_013=0
+in 100% of patients (vs Q1 78.5%), feature_021=0 in 100% (vs Q1 82.0%), and
+feature_015=0 in 100% (vs Q1 71.9%). The tree-based method independently
+rediscovered the same resistance-marker structure that the parametric
+interaction analyses uncovered.
+
+Prognostic vs predictive (iteration 14)
+---------------------------------------
+Off-treatment response rates fall monotonically with feature_001 (20%/15%/10%
+for levels 0/1/2) and across the highest-tertile of feature_022 (14.4% vs
+17.3% in the lowest tertile), and similarly for feature_020 and feature_024.
+These are clearly prognostic. Combined with the within-favorable invariance
+checks, they are NOT predictive of treatment benefit on the absolute risk
+difference scale.
+
+Final best-supported subgroup hypothesis (iteration 15)
+-------------------------------------------------------
+The treatment is feature_008.
+The outcome is objective_response (binary, higher is better).
+Direction: feature_008=1 increases objective_response.
+Predictive subgroup (where benefit is concentrated):
+  feature_013 = 0 AND feature_021 = 0 AND feature_015 = 0 AND feature_027 = 0
+In this subgroup (31.4% of the cohort, n=15,681): treated response rate 79.8%,
+control response rate 17.2%, RD = +0.626 (logistic interaction model gives
+T main effect logOR +2.58 when all four markers are 0, with each
+T*marker interaction strongly negative and p<<1e-19).
+Outside this subgroup (any of the four markers = 1): RD = +0.008 -- effectively
+no benefit. The four resistance markers act as a logical OR; a single one
+suffices to suppress treatment efficacy.
+
+Summary of supported vs refuted hypotheses
+------------------------------------------
+SUPPORTED:
+- feature_008 is an actively administered, randomized treatment with a strong
+  positive main effect on objective_response.
+- feature_013, feature_015, feature_021, feature_001, feature_027, feature_022,
+  feature_002, feature_020, and feature_024 are independent baseline
+  prognostic factors.
+- feature_013=1, feature_021=1, feature_015=1, and feature_027=1 each
+  independently abolish the feature_008 treatment effect (each is a resistance
+  marker).
+- The treatment-responsive subgroup is the conjunction
+  feature_013=0 AND feature_021=0 AND feature_015=0 AND feature_027=0;
+  benefit is +63 percentage points there and ~0 outside.
+- Tree-based heterogeneity discovery confirms the same subgroup independently.
+- feature_001 (ordinal, prognostic) and continuous lab-like features are
+  prognostic but not predictive on the absolute scale.
+
+REFUTED OR NULL:
+- feature_010 (Gleason-grade-like) has no main effect and does not modify the
+  treatment effect.
+- feature_006, feature_005, feature_023, feature_011, feature_017, feature_019,
+  feature_004 are neither prognostic nor (clinically) predictive.
+- Most lab-like continuous features (feature_016 age-like, feature_018,
+  feature_026, feature_009, feature_029, feature_003, feature_012, feature_025,
+  feature_028, feature_007, feature_014, feature_032, feature_031) are neither
+  prognostic in the multivariable model nor predictive of treatment benefit.
+- Within the favorable subgroup, feature_022 ceases to modify treatment effect,
+  refuting the hypothesis that PSA-like burden is itself an additional
+  predictive biomarker beyond the binary resistance-marker structure.
+
+Overall conclusion
+------------------
+This cohort behaves as a randomized comparison of feature_008 (treatment) vs
+no-treatment in patients with prostate-cancer-like features. Treatment is
+highly effective in a biomarker-defined subset (~31% of patients) characterized
+by the joint absence of four binary resistance markers (feature_013=0,
+feature_021=0, feature_015=0, feature_027=0); in this group, objective response
+roughly quintuples (17% -> 80%). In the remaining ~69% of patients, treatment
+provides essentially no benefit (RD < 0.01). The four resistance markers act as
+a logical OR -- any single positive marker is sufficient to cancel benefit --
+suggesting they may share a downstream resistance mechanism. Continuous and
+ordinal prognostic variables affect baseline response rate but do not modify
+absolute treatment benefit once the resistance-marker structure is conditioned
+upon. The clinical implication, if these markers are pre-treatment biomarkers,
+is that treatment should be reserved for the all-resistance-marker-negative
+subgroup; treating the marker-positive subgroup yields no expected benefit.

@@ -1,0 +1,213 @@
+ANALYSIS SUMMARY — ds001_prostate (50,000 patients, anonymized features)
+========================================================================
+
+OUTCOME
+-------
+Single binary outcome: objective_response.
+Overall ORR = 0.2402 (12,011 / 50,000 responders).
+
+DATASET STRUCTURE
+-----------------
+33 informative features (feature_030 had a single value of 0 in every row and
+was dropped from all regressions). Twelve features are binary and one is
+3-category (feature_001 with values 0/1/2). The remaining features are
+continuous lab/biometric variables; some were highly right-skewed
+(feature_022, feature_024) and were log1p-transformed for regressions.
+
+
+HEADLINE FINDING
+================
+
+There is one and only one feature that behaves like an effective therapy in
+this cohort: feature_008. Its effect on objective_response is highly
+heterogeneous and is *entirely* concentrated in a four-criterion patient
+subgroup. Outside that subgroup the treatment has essentially zero effect.
+
+  Favorable subgroup (15,681 patients, 31.4% of cohort):
+      feature_013 = 0  AND  feature_015 = 0  AND
+      feature_021 = 0  AND  feature_027 = 0
+      → ORR(feature_008 = 1) = 0.7978
+      → ORR(feature_008 = 0) = 0.1721
+      → Δ ORR = +0.626  (chi-square p ≈ 0; LPM interaction t = 84.8)
+
+  Unfavorable subgroup (34,319 patients):
+      Any one or more of feature_013/015/021/027 = 1
+      → Δ ORR(feature_008) ≈ +0.008 (p ≈ 0.05–0.10 depending on adjustment;
+         clinically negligible)
+
+Each of the four "suppressor" features is independently necessary for the
+subgroup definition: holding the other three at zero and toggling any one
+suppressor from 0 to 1 collapses the treatment effect from +0.63 to ≤+0.025.
+This was confirmed both with stratified ORR comparisons and with a model-free
+T-learner gradient-boosting + regression-tree subgroup discovery, which
+spontaneously selected feature_013, feature_015, and feature_021 as the top
+splits driving individual treatment-effect heterogeneity (mean ITE in
+favorable leaves ≈ 0.55–0.60 vs ≈ 0 elsewhere). feature_027 (3% prevalence)
+was missed by the tree only because of the leaf-size constraint, but
+targeted analyses unambiguously confirm it as an additional suppressor.
+
+
+HYPOTHESIS TRAJECTORY ACROSS 25 ITERATIONS
+==========================================
+
+Iteration 1: Baseline. Established overall ORR (0.240) and noted feature_030
+has zero variance.
+
+Iterations 2–4: Main-effect screen.
+- feature_008 = 1 raised ORR from 0.159 → 0.361 (Δ +0.202): clear positive
+  signal, almost certainly an active anti-cancer therapy.
+- feature_013 = 1 (55% prevalence) lowered ORR from 0.346 → 0.154 (Δ -0.192).
+- Smaller adverse main effects: feature_021 (Δ -0.10), feature_015
+  (Δ -0.10), feature_027 (Δ -0.07).
+- feature_001 (3-category) showed a strict monotonic gradient: ORR 0.282 →
+  0.228 → 0.182 (consistent with an ECOG-like performance status).
+- Among continuous features, feature_022 (highly skewed, range 0.12–3622;
+  consistent with PSA) was the strongest prognostic factor (mean 47.2 in
+  non-responders vs 28.2 in responders, p ≈ 1e-137). feature_002
+  (3.8 ± 0.5; albumin-like) was modestly positive; feature_020 and
+  log(feature_024) (AST/ALT-like) were modestly negative.
+- Hypothesis that feature_010 (integer 6–10; Gleason-like) predicts response
+  was REFUTED: no association at all.
+
+Iteration 5: Multivariable logistic regression confirmed the same set of
+independent predictors and showed that feature_023, feature_011, feature_017,
+feature_019, feature_004 (all binary, prevalences 5–30%) carry NO independent
+main-effect signal.
+
+Iterations 6–9: Heterogeneity of feature_008. The interaction
+feature_008 × feature_013 was overwhelming (Δ +0.44 when feature_013 = 0
+vs +0.01 when feature_013 = 1). Stratifying further within feature_013 = 0,
+each of feature_021, feature_015, feature_027 individually flips the
+treatment effect off when set to 1 (interaction p-values 1e-78, 1e-163,
+1e-27 respectively). The four-suppressor subgroup definition was assembled,
+each suppressor verified necessary by a leave-one-out toggle test, and the
+joint subgroup effect quantified at Δ +0.626.
+
+Iteration 10: Search for residual modifiers within the favorable subgroup.
+Only weak signals (feature_005 and feature_017 with nominal p ≈ 0.004 and
+0.033) — small magnitude (within-favorable ORR(T=1) shifts only by ~0.03–
+0.04 between modifier strata). The four-suppressor definition is not
+materially improved by additional refinements.
+
+Iteration 11: Tree-based subgroup discovery (T-learner GBC + regression
+tree on ITE) independently recovered feature_013, feature_015,
+feature_021 as the dominant splits, supporting the finding.
+
+Iteration 12: The five non-008 candidate-treatment binary features
+(feature_023, feature_011, feature_017, feature_019, feature_004) have NO
+detectable treatment effect on objective_response — neither overall, nor in
+any subgroup defined by other features, nor in any pairwise combination.
+At a Bonferroni-style threshold (p < 0.01) NONE of their interactions with
+the modifier panel were significant.
+
+Iterations 13–18: Confirming that other clinical features
+(feature_006, feature_005, age (feature_016), sodium/potassium/calcium
+analogues (feature_007/014/032), creatinine/bilirubin analogues
+(feature_025/012), feature_018, feature_026 hemoglobin-like, feature_010
+Gleason-like) carry no independent association with objective_response after
+multivariable adjustment.
+
+Iterations 19–22: Refinement and consolidation.
+- Within the favorable subgroup, feature_001 is an additive prognostic
+  factor (ORR 0.475 → 0.410 → 0.355 across categories) but does NOT modify
+  the treatment effect of feature_008 (interaction p = 0.07, n.s. after
+  multiple testing).
+- Higher log(feature_022) and higher feature_020 lower ORR independently in
+  the multivariable model, but their interactions with feature_008 are not
+  significant — they are prognostic, not predictive.
+- Within the unfavorable subgroup, feature_008 has at most a +0.01 absolute
+  effect even with full adjustment (logit coef +0.062, z = 2.04).
+- The four suppressor variables themselves are largely effect modifiers
+  rather than prognostic factors: among the feature_008 = 0 control arm,
+  their direct ORR effects are small (|Δ| ≤ 0.026).
+- No synergistic combinations among the inactive candidate treatments.
+
+Iteration 23: Selection-bias check. The probability of receiving feature_008
+is essentially identical in the favorable subgroup (40.3%) and the
+unfavorable subgroup (40.1%); chi-square p = 0.58. The dramatic interaction
+is therefore not driven by differential treatment selection across
+suppressor strata.
+
+Iterations 24–25: Final consolidated subgroup hypothesis (h33) and
+prognostic-adjustment sensitivity check (h34). Within the favorable subgroup,
+adjusting for feature_001, feature_002, feature_020, log(feature_022), and
+log(feature_024) leaves the absolute treatment effect of feature_008
+essentially unchanged at +0.625 (LPM t = 100.0; logit coef +3.02, z = 70.2).
+The headline finding is robust to confounding by the major prognostic
+covariates.
+
+
+SUPPORTED vs REFUTED HYPOTHESES (SHORT INDEX)
+=============================================
+
+SUPPORTED
+- h3: feature_008 raises ORR.
+- h4: feature_013 = 1 lowers ORR.
+- h5: log(feature_022) lowers ORR.
+- h6: feature_002 raises ORR.
+- h7: feature_020 lowers ORR.
+- h9: feature_001 ordinal: higher → lower ORR.
+- h10: log(feature_024) lowers ORR.
+- h11: identified set of independent predictors (multivariable).
+- h12: feature_008 × feature_013 strong negative interaction.
+- h13: feature_021, feature_015, feature_027 each suppress feature_008 effect.
+- h14, h28, h33: the four-suppressor subgroup defines feature_008 effect.
+- h15: each suppressor independently necessary (leave-one-out).
+- h16: no further large modifiers within favorable subgroup.
+- h17: tree-based discovery recovers the same subgroup structure.
+- h18: feature_023/011/017/019/004 have no detectable treatment effect.
+- h19: feature_006, feature_005 are not high-impact modifiers.
+- h20: feature_001 acts additively, not as a treatment-effect modifier.
+- h21, h22: log(feature_022) and feature_020 are prognostic, not predictive.
+- h23, h24: feature_016 (age-like) and feature_018 are not independent
+  predictors.
+- h26, h27: renal/electrolyte/hemoglobin features have no independent role.
+- h29: no clinically meaningful feature_008 effect outside favorable subgroup.
+- h31: no synergistic candidate-treatment combinations.
+- h32: no selection bias in feature_008 assignment across subgroups.
+- h34: subgroup-restricted treatment effect is robust to prognostic
+  adjustment.
+
+REFUTED
+- h8: feature_010 (Gleason-like) was expected to predict response but did
+  not (p = 0.61).
+
+PARTIALLY SUPPORTED
+- h30: the four suppressors are primarily effect modifiers; their direct
+  prognostic effects are small.
+
+
+CONCLUSIONS — TREATMENT–BIOMARKER–OUTCOME RELATIONSHIPS
+=======================================================
+
+1. **One effective therapy.** feature_008 is the only feature in the panel
+   that produces a large positive shift in objective_response.
+
+2. **Effect is fully gated by four binary clinical/biomarker features.** The
+   feature_008 benefit is essentially zero unless the patient simultaneously
+   has feature_013 = 0, feature_015 = 0, feature_021 = 0, AND
+   feature_027 = 0. Each of these four "suppressor" features acts
+   independently and at very different prevalences (55%, 20%, 10%, 3%), and
+   each is individually necessary for treatment benefit. Inside the
+   four-suppressor subgroup the absolute response increase from feature_008
+   is +63 percentage points (17% → 80%); outside it the effect is
+   indistinguishable from zero.
+
+3. **Prognostic vs predictive.** Several features (feature_001,
+   log(feature_022), feature_002, feature_020, log(feature_024)) are strong
+   PROGNOSTIC factors but not PREDICTIVE: they shift baseline ORR but do not
+   modify the feature_008 treatment effect.
+
+4. **Inactive candidate therapies.** The five other binary features that
+   prevalence-wise look like therapies (feature_023, feature_011, feature_017,
+   feature_019, feature_004) have neither main effects nor any detectable
+   subgroup or combination effects on objective_response in this cohort.
+
+5. **Some clinical priors do not hold.** feature_010 (which by range 6–10
+   resembles Gleason score) shows no association with objective_response
+   here. feature_016 (age-like), feature_026 (hemoglobin-like), and the
+   renal/electrolyte panel are likewise uninformative after adjustment.
+
+The single most important, highest-quality finding from this dataset is the
+four-suppressor subgroup definition of feature_008's treatment effect on
+objective_response.

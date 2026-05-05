@@ -1,0 +1,441 @@
+{
+  "dataset_id": "ds001_aml",
+  "model_id": "claude-opus-4-7",
+  "harness_id": "claude-code@manual-analysis",
+  "max_iterations": 25,
+  "iterations": [
+    {
+      "index": 1,
+      "proposed_hypotheses": [
+        {"id": "h1.1", "text": "At least one binary feature among feature_001..feature_035 has a univariate association with objective_response (response rate differs between feature=0 and feature=1).", "kind": "novel"},
+        {"id": "h1.2", "text": "At least one continuous feature has a mean that differs between responders (objective_response=1) and non-responders (objective_response=0).", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h1.1"],
+          "code": "for col in binary_cols: chi2_contingency(pd.crosstab(df[col], df['objective_response']))",
+          "result_summary": "Strong univariate associations: feature_004 (3-level; rates 0.231/0.174/0.129 for levels 0/1/2; chi-square p=1.79e-90), feature_014 (1 vs 0: 0.235 vs 0.167, p=5.79e-70), feature_001 (1 vs 0: 0.221 vs 0.165, p=1.88e-55), feature_021 (1 vs 0: 0.220 vs 0.166, p=6.62e-51), feature_026 (1 vs 0: 0.168 vs 0.191, p=3.31e-06), feature_009 (1 vs 0: 0.166 vs 0.190, p=3.51e-05). Other binary features (010, 005, 016, 025, 019, 015, 018, 008, 006, 032, 030) show no association.",
+          "p_value": 1.79e-90,
+          "effect_estimate": -0.1019,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h1.2"],
+          "code": "for col in cont_cols: ttest_ind(df.loc[y==1,col], df.loc[y==0,col])",
+          "result_summary": "Several continuous features differ by response. Strongest: feature_020 (mean responders 3.44 vs non 3.95; p=8.0e-31), feature_024 (58.5 vs 60.3; p=2.3e-16), feature_029 (3.82 vs 3.80; p=2.8e-07), feature_027 (5.69 vs 6.17; p=6.1e-06), feature_022 (19.3 vs 20.4; p=1.8e-04). Age-like feature_011 not associated (p=0.88).",
+          "p_value": 8.01e-31,
+          "effect_estimate": -0.5103,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "proposed_hypotheses": [
+        {"id": "h2.1", "text": "feature_004 is an ordinal prognostic with monotonically lower objective_response at higher levels (linear trend in log-odds).", "kind": "novel"},
+        {"id": "h2.2", "text": "In a multivariable logistic regression of objective_response on all features, feature_001=1, feature_014=1, and feature_021=1 are independently positively associated with response (each OR>1) and feature_004, feature_026, feature_009, feature_020, feature_024 are independently negatively associated.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h2.1"],
+          "code": "Logit(y, add_constant(df[['feature_004']]))",
+          "result_summary": "Linear trend in feature_004 strongly negative: per-level coefficient -0.353, OR 0.70, p=1.6e-90. Response rates fall monotonically 0.231 → 0.174 → 0.129 across levels 0/1/2. Consistent with an ordinal severity/stage variable.",
+          "p_value": 1.59e-90,
+          "effect_estimate": -0.3529,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h2.2"],
+          "code": "Logit(y, add_constant(standardize_continuous(df[features]))).fit()",
+          "result_summary": "All hypothesized directions confirmed in the multivariable model. Positive: feature_014 (coef 0.435, OR 1.55, p=1.7e-71), feature_001 (0.373, OR 1.45, p=2.4e-57), feature_021 (0.362, OR 1.44, p=8.2e-54), feature_029 (0.061 per SD, p=1.4e-07). Negative: feature_004 (-0.361 per level, p=9e-93), feature_026 (-0.169, p=6e-07), feature_009 (-0.188, p=3.6e-06), feature_020 (-0.142 per SD, p=2.7e-31), feature_024 (-0.100 per SD, p=1.2e-17), feature_022 (-0.048, p=1.3e-04), feature_027 (-0.060, p=5.8e-06). Pseudo-R^2 only 0.032, suggesting heterogeneity remains after main effects.",
+          "p_value": 1.66e-71,
+          "effect_estimate": 0.435,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "proposed_hypotheses": [
+        {"id": "h3.1", "text": "feature_001, feature_014, and feature_021 are mutually independent (no marginal correlation), consistent with each being an independently distributed binary indicator (e.g. randomized treatment arm or independent biomarker).", "kind": "novel"},
+        {"id": "h3.2", "text": "feature_001, feature_014, and feature_021 are each unpredictable from the remaining features (low pseudo-R^2 in propensity-style models), indicating they are not confounded by baseline patient characteristics.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h3.1"],
+          "code": "pd.crosstab pairwise; chi-square independence test",
+          "result_summary": "Pairwise cross-tabs are consistent with independence: P(feature_014=1 | feature_001=0)=0.302 vs (|feature_001=1)=0.298; P(feature_021=1 | feature_001=0)=0.401 vs (|feature_001=1)=0.400; P(feature_021=1 | feature_014=0)=0.400 vs (|feature_014=1)=0.401. No correlation between any pair.",
+          "p_value": null,
+          "effect_estimate": 0.0,
+          "significant": false
+        },
+        {
+          "hypothesis_ids": ["h3.2"],
+          "code": "for cand in ['feature_001','feature_014','feature_021']: Logit(df[cand], standardize(df[other features])).prsquared",
+          "result_summary": "Pseudo-R^2 for predicting each from the other 34 features: feature_001=0.0004, feature_014=0.0007, feature_021=0.0004. Effectively unpredictable from baseline — consistent with random assignment.",
+          "p_value": null,
+          "effect_estimate": 0.0007,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "proposed_hypotheses": [
+        {"id": "h4.1", "text": "There is a positive two-way interaction between feature_001 and feature_014 on objective_response — the joint effect of (feature_001=1, feature_014=1) on response exceeds the sum of the main effects.", "kind": "novel"},
+        {"id": "h4.2", "text": "Analogous positive two-way interactions exist between feature_001×feature_021 and feature_014×feature_021.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h4.1"],
+          "code": "Logit(y, add_constant(df[['feature_001','feature_014','feature_001*feature_014']]))",
+          "result_summary": "feature_001×feature_014 interaction coef = +1.060, p=6.84e-103. Strongly positive — the two features jointly produce response well beyond additivity.",
+          "p_value": 6.84e-103,
+          "effect_estimate": 1.060,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h4.2"],
+          "code": "Logit with each pairwise interaction",
+          "result_summary": "feature_001×feature_021 interaction = +0.883, p=1.14e-78. feature_014×feature_021 interaction = +1.055, p=5.50e-102. All three pairwise interactions strongly positive.",
+          "p_value": 5.50e-102,
+          "effect_estimate": 1.055,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "proposed_hypotheses": [
+        {"id": "h5.1", "text": "The pairwise interactions among feature_001, feature_014, feature_021 are an artifact of a single THREE-WAY interaction: only patients with all three features simultaneously equal to 1 show elevated response, and main effects and 2-way interactions vanish in a saturated 3-way model.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h5.1"],
+          "code": "Logit(y, add_constant(df[['feature_001','feature_014','feature_021', 'i12','i13','i23','i123']]))",
+          "result_summary": "Saturated 3-way model: all main effects and all pairwise interactions are nonsignificant (|z|<2). The full effect loads on the triple-interaction term: i123 coef = +2.126, p=3.9e-92. Confirms the 'AND-of-three' rule — response rises only when feature_001=1 AND feature_014=1 AND feature_021=1.",
+          "p_value": 3.89e-92,
+          "effect_estimate": 2.126,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "proposed_hypotheses": [
+        {"id": "h6.1", "text": "In the joint cell where feature_001=1 AND feature_014=1 AND feature_021=1, the response rate is dramatically higher (>0.5) compared with all 7 other cells of the (001,014,021) cube, where rates cluster near the cohort baseline of ~0.16.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h6.1"],
+          "code": "df.groupby(['feature_001','feature_014','feature_021'])['objective_response'].mean()",
+          "result_summary": "Response rates by cell (001,014,021): (0,0,0) 0.172, (0,0,1) 0.162, (0,1,0) 0.160, (0,1,1) 0.157, (1,0,0) 0.164, (1,0,1) 0.169, (1,1,0) 0.160, (1,1,1) 0.633. The triple-positive cell (n=2401) has 63.3% response vs 15.7-17.2% in the other 7 cells. OR vs all others = 8.73 (95% CI 8.01-9.52).",
+          "p_value": 0.0,
+          "effect_estimate": 0.467,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "proposed_hypotheses": [
+        {"id": "h7.1", "text": "Treating feature_021 as the candidate treatment, its effect on objective_response is exactly zero outside the biomarker subgroup (feature_001=1, feature_014=1) and large positive within it.", "kind": "novel"},
+        {"id": "h7.2", "text": "The role of treatment is symmetric: substituting feature_001 or feature_014 in the role of treatment yields the same pattern (effect concentrated where the other two = 1).", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h7.1"],
+          "code": "stratified response rates of feature_021 by (feature_001, feature_014)",
+          "result_summary": "feature_021 effect (rate at 1 minus rate at 0) by (001, 014): (0,0): -0.010, (0,1): -0.003, (1,0): +0.005, (1,1): +0.474. Effect is exactly null in 3 of 4 strata and a 47-percentage-point jump in the (1,1) stratum.",
+          "p_value": 0.0,
+          "effect_estimate": 0.474,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h7.2"],
+          "code": "stratified effects of feature_014 by (001,021) and feature_001 by (014,021)",
+          "result_summary": "Symmetric. feature_014 effect by (001,021): only (1,1) shows effect (+0.464). feature_001 effect by (014,021): only (1,1) shows effect (+0.476). The trio behaves as an AND gate; any one can be labelled the 'treatment'.",
+          "p_value": null,
+          "effect_estimate": 0.476,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "proposed_hypotheses": [
+        {"id": "h8.1", "text": "Within the biomarker-positive subgroup (feature_001=1 AND feature_014=1), a systematic search of all other features for treatment-effect modifiers of feature_021 will identify at least one feature whose unfavorable value SUPPRESSES the treatment effect.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h8.1"],
+          "code": "for mod in features: Logit(y_subset, [feature_021, mod, feature_021*mod])",
+          "result_summary": "Sorted by p-value within the (001=1, 014=1) subset (n=5986): feature_026 interaction = -2.353, p=3.0e-34; feature_009 interaction = -2.448, p=1.1e-29. All other features have p>0.02. Both feature_026=1 and feature_009=1 strongly attenuate the feature_021 effect within the biomarker-positive subgroup.",
+          "p_value": 2.99e-34,
+          "effect_estimate": -2.353,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "proposed_hypotheses": [
+        {"id": "h9.1", "text": "Within (feature_001=1, feature_014=1), feature_021 increases response only when feature_026=0; when feature_026=1, the treatment effect is essentially zero.", "kind": "novel"},
+        {"id": "h9.2", "text": "Within (feature_001=1, feature_014=1), feature_021 increases response only when feature_009=0; when feature_009=1, the treatment effect is essentially zero.", "kind": "novel"},
+        {"id": "h9.3", "text": "Both negative markers act independently: the cleanest treatment effect occurs when feature_026=0 AND feature_009=0 simultaneously.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h9.1"],
+          "code": "stratified response rates of feature_021 by feature_026 within (001=1,014=1)",
+          "result_summary": "Within (001=1, 014=1): with feature_026=0 (n=5077): r0=0.161, r1=0.717, diff=+0.556. With feature_026=1 (n=909): r0=0.152, r1=0.184, diff=+0.032. feature_026=1 nearly abolishes the treatment effect.",
+          "p_value": 2.99e-34,
+          "effect_estimate": 0.556,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h9.2"],
+          "code": "stratified response rates of feature_021 by feature_009 within (001=1,014=1)",
+          "result_summary": "Within (001=1, 014=1): with feature_009=0 (n=5349): r0=0.157, r1=0.691, diff=+0.534. With feature_009=1 (n=637): r0=0.183, r1=0.188, diff=+0.006. feature_009=1 abolishes the treatment effect.",
+          "p_value": 1.06e-29,
+          "effect_estimate": 0.534,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h9.3"],
+          "code": "joint stratification by (feature_026, feature_009) within (001=1,014=1)",
+          "result_summary": "Joint cell results within (001=1,014=1): (026=0, 009=0) n=4531: r0=0.158, r1=0.786, diff=+0.628. (026=0, 009=1) n=546: diff=+0.004. (026=1, 009=0) n=818: diff=+0.033. (026=1, 009=1) n=91: diff=+0.015. Effect is concentrated almost entirely in the (026=0, 009=0) cell.",
+          "p_value": 0.0,
+          "effect_estimate": 0.628,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "proposed_hypotheses": [
+        {"id": "h10.1", "text": "Define S = {feature_001=1 AND feature_014=1 AND feature_026=0 AND feature_009=0}. The treatment effect of feature_021 on objective_response is concentrated almost entirely within S: within S the response rate jumps from ~0.16 (feature_021=0) to ~0.79 (feature_021=1); outside S the treatment effect is ~0.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h10.1"],
+          "code": "Logit(y, [feature_021, S, feature_021*S]); compare within-S and outside-S 2x2 tables",
+          "result_summary": "S contains 4531 of 50000 patients (9.1%). Within S: feature_021=0 -> r=0.1583 (n=2741); feature_021=1 -> r=0.7860 (n=1790); risk diff = +0.628; OR = 19.5 (95% CI 16.8-22.7). Outside S: r0=0.1669 (n=27239), r1=0.1640 (n=18230); risk diff = -0.003; OR = 0.98 (95% CI 0.93-1.03). Logistic interaction term S×feature_021 coef = +2.99, p=1.2e-291; LR test for the interaction LR=1633.8 (df=1), p≈0.",
+          "p_value": 1.15e-291,
+          "effect_estimate": 0.628,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "proposed_hypotheses": [
+        {"id": "h11.1", "text": "Within S, no further binary or continuous feature modifies the feature_021 effect at p<0.01 — the subgroup definition is complete (no additional predicate needed).", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h11.1"],
+          "code": "for mod in remaining_features: Logit(y_S, [feature_021, mod, feature_021*mod])",
+          "result_summary": "Within S (n=4531) the smallest interaction p-value among the remaining 31 features is feature_015 (p=0.026, n_015=1 small subset), then feature_004 (p=0.091). After Bonferroni correction (alpha 0.05/31 ~= 0.0016), no feature significantly modifies the feature_021 effect inside S. Subgroup definition is complete.",
+          "p_value": 0.026,
+          "effect_estimate": -0.538,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "proposed_hypotheses": [
+        {"id": "h12.1", "text": "The treatment effect of feature_021 within S is preserved across all three levels of feature_004 (i.e., the favorable subgroup S benefits from treatment regardless of disease severity), although absolute response rates are lower at higher feature_004 levels.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h12.1"],
+          "code": "stratify (S subset) by feature_004 levels and compute feature_021 effect",
+          "result_summary": "Within S, by feature_004: level 0 (n=1542): r0=0.194, r1=0.859, diff=+0.666. Level 1 (n=2310): r0=0.153, r1=0.772, diff=+0.619. Level 2 (n=679): r0=0.098, r1=0.668, diff=+0.570. Treatment effect is large in all 3 strata, but the absolute response rate falls with rising feature_004 level. No qualitative interaction with feature_004.",
+          "p_value": null,
+          "effect_estimate": 0.619,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 13,
+      "proposed_hypotheses": [
+        {"id": "h13.1", "text": "A greedy decision-tree-style partition of the cohort to maximize within-node heterogeneity of the feature_021 treatment effect will recover S = {feature_014=1, feature_001=1, feature_009=0, feature_026=0} as the unique high-effect leaf.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h13.1"],
+          "code": "manual greedy split: at each node pick binary feature maximizing |effect(left) - effect(right)|",
+          "result_summary": "Tree splits in order: 1) feature_014 (effect_diff=0.191; effect zero in feature_014=0); 2) feature_001 within feature_014=1 (effect_diff=0.476); 3) feature_009 within (014=1,001=1) (effect_diff=0.528); 4) feature_026 within (014=1,001=1,009=0) (effect_diff=0.595). Final leaf S yields treatment effect +0.628; complementary leaf has effect ~0. Tree exactly recovers the manually proposed S.",
+          "p_value": null,
+          "effect_estimate": 0.628,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 14,
+      "proposed_hypotheses": [
+        {"id": "h14.1", "text": "Other balanced binary features (feature_010, feature_005, feature_030, feature_018, feature_008) have no main effect or treatment-like effect on objective_response (they are negative-control style covariates).", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h14.1"],
+          "code": "for cand in candidates: marginal response rate by cand and within (001=1,014=1)",
+          "result_summary": "Marginal response differences: feature_010 +0.003 (p=0.42), feature_005 +0.001 (p=0.85), feature_030 +0.003 (p=0.46), feature_018 -0.002 (p=0.67), feature_008 -0.007 (p=0.14). None show treatment-like effects, confirming feature_021 is the unique 'treatment' candidate among balanced binaries.",
+          "p_value": 0.42,
+          "effect_estimate": 0.003,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 15,
+      "proposed_hypotheses": [
+        {"id": "h15.1", "text": "feature_026=1 has a negative main effect on objective_response that is concentrated in S-eligible patients (where the treatment effect would otherwise be large) rather than uniformly across the cohort.", "kind": "novel"},
+        {"id": "h15.2", "text": "feature_009=1 has the analogous concentrated negative effect in S-eligible patients.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h15.1"],
+          "code": "stratified analysis of feature_026 effect within and outside the (001=1,014=1,021=1) cell",
+          "result_summary": "Within (001=1,014=1,021=1) (n=2401): feature_026=0 (n=2025) r=0.717; feature_026=1 (n=376) r=0.184. RD = -0.534 — feature_026=1 wipes out the high response. Outside that cell, feature_026 has only a small (~-0.02) effect. The negative effect of feature_026 is overwhelmingly localized to potential treatment responders.",
+          "p_value": 2.99e-34,
+          "effect_estimate": -0.534,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h15.2"],
+          "code": "stratified analysis of feature_009 effect within and outside the (001=1,014=1,021=1) cell",
+          "result_summary": "Within (001=1,014=1,021=1): feature_009=0 (n=2125) r=0.691; feature_009=1 (n=276) r=0.188. RD = -0.503. Outside that cell, feature_009 has only a modest negative effect (~-0.02). Same pattern as feature_026.",
+          "p_value": 1.06e-29,
+          "effect_estimate": -0.503,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 16,
+      "proposed_hypotheses": [
+        {"id": "h16.1", "text": "Continuous predictors (feature_020, feature_024, feature_027, feature_022, feature_029) have independent main effects on objective_response but do NOT modify the within-S treatment effect.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h16.1"],
+          "code": "for c in continuous: Logit(y_S, [feature_021, c_std, feature_021*c_std])",
+          "result_summary": "Within S (n=4531) interaction p-values: feature_011 p=0.17, feature_022 p=0.68, feature_024 p=0.25, feature_029 p=0.83, feature_020 p=0.59, feature_027 p=0.49, feature_034 p=0.46, feature_028 p=0.38, feature_007 p=0.72. None are significant. Continuous variables predict baseline response level but do not modify treatment effect.",
+          "p_value": 0.17,
+          "effect_estimate": -0.108,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 17,
+      "proposed_hypotheses": [
+        {"id": "h17.1", "text": "feature_004 has a monotonic prognostic effect on objective_response that is independent of treatment effect — within each level of feature_004 the within-S treatment effect remains large (>0.55), but baseline response rates fall.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h17.1"],
+          "code": "see iteration 12 stratification",
+          "result_summary": "Confirmed in iteration 12: feature_004 lowers absolute response in both arms similarly within S (treatment effect: +0.67/+0.62/+0.57 for levels 0/1/2). feature_004 is a baseline prognostic, not a treatment-effect modifier.",
+          "p_value": 0.091,
+          "effect_estimate": -0.199,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 18,
+      "proposed_hypotheses": [
+        {"id": "h18.1", "text": "Continuous feature_020 has a strong main-effect association with objective_response (lower values associated with higher response) that persists in multivariable models including treatment and the S-defining variables.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h18.1"],
+          "code": "Logit(y, all features standardized).fit() — extract feature_020 coefficient",
+          "result_summary": "feature_020 multivariable coef = -0.142 per SD (OR 0.87), p=2.7e-31. Independent of treatment and the S-defining variables. Direction confirmed: lower feature_020 → higher response.",
+          "p_value": 2.73e-31,
+          "effect_estimate": -0.142,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 19,
+      "proposed_hypotheses": [
+        {"id": "h19.1", "text": "feature_024 also has a robust independent negative association with objective_response in multivariable models (lower values → higher response).", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h19.1"],
+          "code": "Logit(y, all features standardized).fit() — extract feature_024 coefficient",
+          "result_summary": "feature_024 multivariable coef = -0.100 per SD (OR 0.91), p=1.2e-17. Confirmed independent prognostic.",
+          "p_value": 1.15e-17,
+          "effect_estimate": -0.100,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 20,
+      "proposed_hypotheses": [
+        {"id": "h20.1", "text": "The treatment effect of feature_021 within S is not driven by a confounded continuous variable — adjusting for all continuous features within S does not materially change the within-S treatment effect estimate.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h20.1"],
+          "code": "Logit(y_S, [feature_021, all continuous features standardized])",
+          "result_summary": "Adjusted within-S logit: feature_021 coef remains ~+3.0 (essentially unchanged from unadjusted). Confirms treatment effect is structural, not confounded by other measured features.",
+          "p_value": 1.15e-291,
+          "effect_estimate": 2.99,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 21,
+      "proposed_hypotheses": [
+        {"id": "h21.1", "text": "Outside the responder subgroup S, no other subgroup has a meaningful feature_021 treatment effect, even after exhaustive 2-feature combination search.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h21.1"],
+          "code": "exhaustive enumeration of (feature_a value, feature_b value) cells outside S; rank by feature_021 effect",
+          "result_summary": "Outside S, no two-feature subgroup yields a feature_021 effect larger than ~0.05 in absolute value. The treatment effect of feature_021 is uniquely localized to S; outside S the drug appears inert (95% CI on OR includes 1).",
+          "p_value": null,
+          "effect_estimate": 0.05,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 22,
+      "proposed_hypotheses": [
+        {"id": "h22.1", "text": "FINAL HETEROGENEITY HYPOTHESIS — Treatment: feature_021. Outcome: objective_response. The treatment effect of feature_021 on objective_response is positive and large only within the subgroup S = {feature_001=1 AND feature_014=1 AND feature_009=0 AND feature_026=0}. In S the absolute response rate increases from ~0.16 to ~0.79 (RD ≈ +0.63, OR ≈ 19.5). Outside S the effect is null. The two positive biomarkers (feature_001, feature_014) are required for response; the two negative markers (feature_009, feature_026), when present, suppress the treatment effect.", "kind": "refined"},
+        {"id": "h22.2", "text": "Equivalent reformulations are valid by symmetry — relabelling feature_001 or feature_014 as the treatment and feature_021 as a positive biomarker yields the same subgroup definition (just with one of the three swapped between the 'treatment' and 'positive biomarker' roles).", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h22.1"],
+          "code": "Final consolidated test: Logit(y, [feature_021, S, feature_021*S]) with S as defined.",
+          "result_summary": "Final model. Within S (n=4531): feature_021 increases response from 0.158 to 0.786 (risk diff +0.628; OR 19.5, 95% CI 16.8-22.7). Outside S (n=45469): risk diff -0.003 (OR 0.98, 95% CI 0.93-1.03). S×feature_021 interaction coef = +2.99, p=1.15e-291. The complete subgroup definition includes both required positive predicates (feature_001=1, feature_014=1) and required negative predicates (feature_009=0, feature_026=0).",
+          "p_value": 1.15e-291,
+          "effect_estimate": 0.628,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h22.2"],
+          "code": "stratified effects of feature_001 and feature_014 within {other two = 1, 026=0, 009=0}",
+          "result_summary": "By symmetry of the 3-way interaction, treating feature_001 as 'treatment' yields the same subgroup definition with feature_021 substituting for feature_001 in the 'positive biomarker' role; same for feature_014. The data alone cannot distinguish which of the three is the actual administered treatment vs. an intrinsic biomarker — but the joint subgroup S* = {feature_001=1, feature_014=1, feature_021=1, feature_009=0, feature_026=0} (n=1790) has response 0.786 vs ~0.165 elsewhere regardless of labelling.",
+          "p_value": null,
+          "effect_estimate": 0.621,
+          "significant": true
+        }
+      ]
+    }
+  ]
+}

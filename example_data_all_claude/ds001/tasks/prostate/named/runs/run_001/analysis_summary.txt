@@ -1,0 +1,188 @@
+ANALYSIS SUMMARY — ds001_prostate (n=50,000)
+==============================================
+
+DATASET OVERVIEW
+----------------
+The cohort is a prostate-cancer EHR aggregation. Sex is uniformly male
+(sex_female=0 for all 50,000 records). The single binary outcome is
+objective_response (mean 0.240). Six treatment indicators are present
+(enzalutamide 40.2%, abiraterone 30.0%, docetaxel 30.4%, olaparib 10.2%,
+lu177-PSMA 15.0%, pembrolizumab 4.8%) and patients can receive multiple
+treatments simultaneously. Key biomarkers include mcrpc (54.96%),
+visceral_mets (20.0%), brca2_mutation (10.0%), ar_v7_positive (20.1%),
+msi_high (3.06%), psma_high (59.9%). No missing values.
+
+WORKFLOW
+--------
+Across 25 iterations the analysis progressed from main effects (treatment
+and feature) through pre-specified mechanistic interactions, joint
+multi-feature subgroup discovery, exhaustive 2-feature subgroup scans, and
+random-forest T-learner heterogeneity estimation.
+
+MAIN EFFECTS ON OBJECTIVE_RESPONSE
+----------------------------------
+Treatments (chi-squared, unadjusted risk difference):
+  enzalutamide   +0.2024  p<1e-300  (rate 0.361 vs 0.159)  STRONG +
+  abiraterone    -0.0031  p=0.47    null
+  docetaxel      -0.0005  p=0.91    null
+  olaparib       -0.0010  p=0.89    null
+  lu177-PSMA     +0.0029  p=0.60    null
+  pembrolizumab  -0.0016  p=0.88    null
+
+Continuous prognostic features (mean responder vs non-responder):
+  psa_ng_ml         28.2 vs 47.2 (-19.0)  p=1.5e-137  STRONG -
+  weight_loss_pct   3.50 vs 3.95 (-0.45)  p=6.8e-31   STRONG -
+  crp_mg_l          5.69 vs 6.23 (-0.53)  p=9.3e-09   -
+  albumin_g_dl      3.82 vs 3.80 (+0.02)  p=3.6e-06   +
+  age, ldh, nlr, hemoglobin, AST, ALT, bilirubin, creatinine, BUN,
+  sodium, potassium, calcium, alk-phos: all null (p>0.05)
+
+Categorical/ordinal prognostic features:
+  ecog_ps  0/1/2 → 0.282/0.228/0.181   p=1.1e-82   -
+  mcrpc=1  vs 0: 0.154 vs 0.346        p<1e-300    STRONG -
+  brca2+   vs -: 0.150 vs 0.250        p=5.0e-64   -
+  ar_v7+   vs -: 0.160 vs 0.260        p=1.1e-108  -
+  msi-high vs MSS: 0.176 vs 0.242      p=2.5e-09   -
+  psma_high, visceral_mets, gleason_score: all null
+
+A full multivariable logistic regression confirms these features are
+independent prognostic factors and that treatment_enzalutamide is the
+only treatment whose adjusted coefficient is non-null (beta=+1.20, OR
+3.32). The other five treatments have adjusted coefficients with p>0.3.
+
+PRE-SPECIFIED MECHANISTIC INTERACTIONS
+--------------------------------------
+The dataset includes treatments designed to target specific biomarkers.
+We tested each pre-specified pair:
+
+  olaparib  × brca2_mutation     interaction beta=-0.289, p=0.045
+                                 (within BRCA2+, olaparib rate 0.121 vs
+                                 0.153; numerically WORSE on olaparib).
+                                 The mechanistic prior (benefit in
+                                 BRCA2+) is NOT supported.
+
+  pembrolizumab × msi_high       interaction beta=+0.017, p=0.96
+                                 (within MSI-H, pembrolizumab rate 0.177
+                                 vs 0.176). NULL.
+
+  lu177-PSMA × psma_high         interaction beta=-0.054, p=0.36
+                                 (within PSMA-high, Lu177 rate 0.238 vs
+                                 0.239). NULL.
+
+None of these biologically-motivated pairings showed a positive treatment
+effect. The data are consistent with these four treatments having no
+effect on objective_response in any subgroup.
+
+ENZALUTAMIDE TREATMENT-EFFECT HETEROGENEITY
+-------------------------------------------
+A systematic interaction screen (treatment × feature logits) revealed that
+the enzalutamide main effect is fully concentrated in a four-predicate
+subgroup. Each of mcrpc, brca2_mutation, ar_v7_positive, and msi_high
+contributes a strongly significant negative interaction with enzalutamide:
+
+  enz × mcrpc          beta=-1.978, p<1e-300
+  enz × ar_v7_positive beta=-1.237, p=1.4e-93
+  enz × brca2_mutation beta=-1.138, p=3.0e-42
+  enz × msi_high       beta=-1.286, p=1.4e-19
+
+Univariate stratification confirms each suppressor:
+  mcrpc=0:   enz risk diff +0.440 ; mcrpc=1:   +0.008
+  ar_v7=0:   enz risk diff +0.251 ; ar_v7=1:   +0.009
+  brca2=0:   enz risk diff +0.225 ; brca2=1:   +0.006
+  msi_high=0:enz risk diff +0.209 ; msi_high=1:-0.022
+
+Joint stratification shows the effect grows as more "favorable" levels
+are stacked. The full conjunction (mcrpc=0 AND brca2=0 AND ar_v7=0 AND
+msi_high=0; n=15,681) yields:
+
+  enzalutamide on:  response 0.798  (n=6,325)
+  enzalutamide off: response 0.172  (n=9,356)
+  risk difference: +0.626 (chi-squared p<1e-300)
+
+Outside the favorable subgroup (any one unfavorable level present;
+n=34,319):
+
+  enzalutamide on:  response 0.161  (n=13,751)
+  enzalutamide off: response 0.153  (n=20,568)
+  risk difference: +0.008 (p=0.06)
+
+Drop-one analysis confirms each predicate is necessary: removing any
+single predicate from the conjunction admits patients with the
+unfavorable level, and within that admitted stratum the enzalutamide
+risk difference collapses to <+0.01. Within the favorable subgroup,
+visceral_mets, psma_high, and gleason_score do not further modify the
+enzalutamide effect (residual differences <0.04 across strata). ECOG
+shows a small monotone gradient inside the favorable subgroup
+(ECOG 0/1/2 → enz risk diff +0.646/+0.622/+0.590) but the enzalutamide
+benefit remains very large at every ECOG level.
+
+A continuous-feature interaction screen flagged psa_ng_ml × enzalutamide
+(beta=-0.81, p=1.2e-72), but this is fully explained by membership in
+the favorable subgroup: within favorable patients PSA does not modulate
+the enzalutamide effect (interaction p=0.79; risk difference stable in
+[+0.618, +0.633] across PSA quartiles). High PSA is correlated with
+mCRPC and other unfavorable markers, which is the source of the original
+PSA × enzalutamide signal.
+
+NON-ENZALUTAMIDE TREATMENTS — HETEROGENEITY SEARCH
+--------------------------------------------------
+For each of the five remaining treatments we ran:
+
+  • main effect tests (all p>=0.47, |risk diff| <0.005)
+  • biomarker-paired interaction logits (all null or borderline negative)
+  • random-forest T-learner CATE (estimated ATE within 0.005 of zero
+    for all five; CATE std ranges 0.028–0.058 but the apparent
+    quartile separation reflects baseline-prognosis confounding, since
+    enzalutamide-favorable patients tend to respond regardless of
+    co-treatment)
+  • exhaustive 2-feature binary subgroup search (best subgroup risk
+    difference for each treatment: abiraterone -0.049 p=0.18,
+    docetaxel -0.029 p=0.45, olaparib -0.071 p=0.19, lu177-PSMA
+    -0.039 p=0.054, pembrolizumab -0.048 p=0.078). All "best"
+    subgroups are negative-direction and non-significant.
+
+There is no convincing positive treatment effect for abiraterone,
+docetaxel, olaparib, lu177-PSMA, or pembrolizumab on objective_response
+in any subgroup we examined.
+
+WHAT WAS SUPPORTED VS REFUTED
+-----------------------------
+Supported:
+  • Enzalutamide raises objective_response (main effect +20 pp).
+  • Higher PSA, weight loss, CRP, ECOG, mCRPC, BRCA2+, AR-V7+, and
+    MSI-high are independently associated with lower objective_response.
+  • Higher albumin is associated with higher response.
+  • The enzalutamide treatment effect is concentrated in the
+    (mcrpc=0 & brca2=0 & ar_v7=0 & msi=0) subgroup with risk
+    difference ~+0.63; outside this subgroup the effect is essentially
+    zero.
+
+Refuted:
+  • The mechanistic prior that olaparib benefits BRCA2-mutated patients
+    is not supported here (response is numerically lower on olaparib in
+    BRCA2+, p=0.058).
+  • The mechanistic prior that pembrolizumab benefits MSI-high patients
+    is not supported (interaction p=0.96).
+  • The mechanistic prior that Lu177-PSMA benefits PSMA-high patients
+    is not supported (interaction p=0.36).
+  • Abiraterone, docetaxel, olaparib, lu177-PSMA, and pembrolizumab
+    have no detectable effect on objective_response in any subgroup.
+  • PSA-based modulation of the enzalutamide effect is fully explained
+    by the four-predicate favorable subgroup definition.
+  • Gleason score is not associated with response.
+  • visceral_mets and psma_high are not associated with response.
+
+FINAL SUBGROUP HYPOTHESIS (FOR THE ONE OUTCOME WITH USABLE TREATMENT
+VARIATION, OBJECTIVE_RESPONSE)
+--------------------------------------------------------------------
+Treatment: treatment_enzalutamide
+Outcome: objective_response (binary, higher is better)
+Direction: positive (enzalutamide increases response)
+Subgroup: mcrpc = 0 AND brca2_mutation = 0 AND ar_v7_positive = 0 AND
+          msi_high = 0
+Estimated within-subgroup risk difference: +0.626 (95% CI roughly
++0.61 to +0.64), p<1e-300.
+Outside subgroup: risk difference +0.008 (p=0.06), no treatment effect.
+Each of the four predicates is independently necessary; admitting any
+unfavorable level (mcrpc=1 OR brca2=1 OR ar_v7=1 OR msi=1) abolishes
+the enzalutamide effect.

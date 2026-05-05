@@ -1,0 +1,244 @@
+Analysis summary for ds001_crc (n=50,000, outcome = pfs_months)
+================================================================
+
+OVERVIEW
+--------
+The cohort comprises 50,000 patient records with 33 anonymized features
+(15 binary, 1 ternary, 17 continuous) and one outcome, pfs_months
+(progression-free survival in months; mean 4.31, sd 2.29). Across 25
+iterations of hypothesize-and-test, I built up a clear picture in which
+this dataset has (a) a small set of strong prognostic factors that act
+identically on and off treatment, (b) a single active treatment indicator
+(feature_027), and (c) a sharply defined four-feature responder subgroup
+inside which the treatment effect is enormous (+5 months PFS) and outside
+which it is statistically and clinically null.
+
+PROGNOSTIC FACTORS (act on PFS regardless of treatment)
+-------------------------------------------------------
+Iterations 1-3 screened all features against pfs_months and fit a full
+multivariable OLS (R^2 = 0.86). The independently significant prognostic
+predictors are:
+
+  - feature_015 (continuous, range 30-90, mean 65): the dominant single
+    predictor (Pearson r = +0.766; OLS coef +0.176 per unit, p effectively
+    0). Decile means rise monotonically from 1.33 (lowest decile) to 7.45
+    (highest). Its sign and range are consistent with a positively-coded
+    age-/duration-style variable in this synthetic encoding.
+  - feature_001 (ternary 0/1/2, likely performance status): mean
+    pfs_months by level = 5.27 / 4.05 / 2.91 (ANOVA F=3528, p=0). OLS
+    coef -1.17 per level.
+  - feature_014 (binary, prevalence 55%): -1.36 month difference
+    (p effectively 0). The largest binary prognostic effect.
+  - feature_019 (continuous, range 1.5-5.5, mean 3.8): +0.47 per unit
+    (r=+0.10, p=3.3e-115). Albumin-like profile.
+  - feature_025 (continuous, range 0-25, mean 3.8): -0.08 per unit
+    (r=-0.12, p=2.2e-167). Tumor-burden-like profile.
+  - feature_021, feature_023, feature_006, feature_022 contribute small
+    additional independent prognostic effects.
+
+The remaining lab-style features (feature_003, 004, 007, 008, 009, 013,
+017, 026, 029, 030, 032, 033) all have |Pearson r| < 0.013 with pfs_months
+and are non-significant in the multivariable model. These appear to be
+noise covariates in this dataset.
+
+TREATMENT IDENTIFICATION
+------------------------
+Iterations 4-5 separated likely-baseline features from likely-treatment
+features by checking balance across baselines. Six binary features
+(feature_010, feature_012, feature_018, feature_020, feature_024,
+feature_027) are precisely balanced across feature_001 (PS), feature_015,
+and feature_014 - consistent with random allocation. Of these, only
+feature_027 has a non-null marginal effect on pfs_months
+(+0.97 months, p=1.7e-216); the other five are flat (|effect|<0.05,
+p>0.08). I therefore treated feature_027 as the active treatment
+indicator and treated the other five as inert/random binary covariates.
+
+TREATMENT-EFFECT HETEROGENEITY (the central finding)
+----------------------------------------------------
+Iterations 6-11 systematically searched for effect modifiers of feature_027.
+
+A treatment-by-feature interaction screen across all 32 other features
+identified four binary biomarkers and one continuous biomarker as
+significant modifiers:
+
+  - feature_006: interaction coef -1.45, p=4e-168
+  - feature_023: interaction coef -1.63, p=8e-226
+  - feature_022: interaction coef -1.18, p=6e-23
+  - feature_011: interaction coef +0.99, p=1e-11 (later shown to be an
+    artifact of feature_011 enrichment in the WT3 subgroup; once WT3 is
+    conditioned on, feature_011 contributes nothing additional)
+  - feature_005 (continuous): interaction coef -0.025, p=9e-58
+
+Stratifying by the joint state of feature_006 x feature_023 x feature_022
+(iteration 8) showed that ALL of the treatment effect lives in the
+'triple wild-type' cell (006=0, 023=0, 022=0):
+
+  Cell (006, 023, 022)        n        treated effect on PFS
+  -----------------------------------------------------------
+  (0, 0, 0)                17,372       +2.76 months  (p ~ 0)
+  (0, 0, 1)                 1,481       -0.20         (p=0.12)
+  (0, 1, 0)                13,490       +0.06         (p=0.17)
+  (1, 0, 0)                 9,458       +0.08         (p=0.12)
+  (1, 0, 1)                   791       -0.07         (p=0.70)
+  (1, 1, 0)                 7,408       -0.04         (p=0.52)
+
+A single mutation in any of the three markers (006, 023, 022) abolishes
+the treatment benefit. All three must be wild-type. Iteration 11 verified
+necessity: in (006=1, others=0, low feature_005) the effect is +0.11; in
+(023=1, others=0, low feature_005) it is +0.07; in (022=1, others=0, low
+feature_005) it is -0.17. None of these single-mutant strata recovers
+benefit.
+
+Within the triple wild-type subgroup (n=17,372) (iteration 9), feature_005
+emerged as the dominant continuous within-WT3 modifier. A decile analysis
+of feature_005 within WT3 showed a sharp threshold:
+
+  feature_005 decile range          treated effect on PFS
+  ------------------------------------------------------
+  decile 0 (0.04 - 0.96)             +4.93 months
+  decile 1 (0.97 - 1.61)             +5.10
+  decile 2 (1.62 - 2.37)             +5.01
+  decile 3 (2.38 - 3.27)             +5.11
+  decile 4 (3.28 - 4.47)             +5.01
+  decile 5 (4.48 - 6.02)             +1.75
+  decile 6 (6.03 - 8.24)             -0.05
+  decile 7 (8.25 - 12.18)            +0.02
+  decile 8 (12.19 - 20.62)           +0.04
+  decile 9 (20.63 - 442.29)          -0.08
+
+The treatment benefit is essentially constant at +5 months for
+feature_005 below ~5, transitions sharply between 5 and 6, and is
+extinguished above 6. A threshold sweep (iteration 11) confirmed
+feature_005<=5 as a clean cutoff: above 5 within WT3 the effect is
+~0.0 (-0.002 with n=8,034); below 5 within WT3 it is +5.014.
+
+FINAL RESPONDER SUBGROUP
+------------------------
+Iterations 10-13 codified the responder definition:
+
+  Responder = (feature_006 = 0) AND (feature_023 = 0) AND
+              (feature_022 = 0) AND (feature_005 <= 5)
+
+Stratified estimates of the feature_027 effect on pfs_months:
+
+  Inside responder (n = 9,338; treated=1,905, untreated=7,433):
+    on  = 9.103 months
+    off = 4.089 months
+    effect = +5.014 months  (95% CI ~ +4.91 to +5.12, p ~ 0)
+
+  Outside responder (n = 40,662):
+    on  = 4.147 months
+    off = 4.123 months
+    effect = +0.024 months  (95% CI ~ -0.03 to +0.07, p = 0.36, not
+                             statistically significant)
+
+The interaction coefficient on T x responder in OLS is +4.99 (t=83.9,
+p=0). This single subgroup-by-treatment term, combined with five
+prognostic main effects, yields R^2 = 0.993 for pfs_months - effectively
+the entire deterministic structure of the outcome.
+
+OFF-TREATMENT BASELINE CHECK
+----------------------------
+Iteration 12 verified that the responder subgroup is genuinely effect-
+modifying (not just prognostically favorable). Among feature_027=0
+patients, mean pfs_months is 4.107, 4.124, 4.149, and 4.089 across the
+four (WT3, low_feature_005) cells - within 0.07 months of each other.
+The biomarker subgroup carries no off-treatment prognostic advantage; it
+is purely a treatment-effect-modification subgroup.
+
+OTHER CANDIDATE TREATMENTS
+--------------------------
+Iteration 7 ran a parallel interaction screen for each of the other five
+balanced binary features (feature_010, feature_012, feature_018,
+feature_020, feature_024). None showed any interaction surviving even a
+nominal Bonferroni adjustment for ~30 features tested. They behave as
+inert randomization markers (or perhaps stratification factors with no
+biological signal). The data thus contain a single active treatment
+(feature_027) with a single biomarker-gated effect.
+
+PURELY-PROGNOSTIC FEATURES DO NOT MODIFY TREATMENT
+---------------------------------------------------
+Iterations 14, 16, 17 confirmed that the strong prognostic predictors
+(feature_015, feature_001, feature_014) do not modify the feature_027
+effect: their interaction p-values with feature_027 are 0.28, 0.89, and
+0.15 respectively. Within the responder subgroup the +5 month treatment
+benefit is approximately constant across feature_001 levels (4.87, 5.09,
+4.81 for PS 0, 1, 2). Iteration 21 showed the on-treatment regression
+within responder has the same prognostic slope structure as off-treatment
+with an intercept shift of +4.98 months.
+
+A COMPACT GENERATIVE MODEL
+--------------------------
+The data are well described by an additive prognostic + multiplicative
+biomarker-gated treatment model:
+
+  E[pfs_months] = a + 0.176 * feature_015
+                    - 1.166 * feature_001
+                    - 1.368 * feature_014
+                    + 0.485 * feature_019
+                    - 0.078 * feature_025
+                    + 4.98 * feature_027 * I(feature_006=0)
+                                         * I(feature_023=0)
+                                         * I(feature_022=0)
+                                         * I(feature_005<=5)
+                    + (small additional prognostic terms)
+                    + epsilon
+
+This has R^2 ~ 0.99 against the observed pfs_months.
+
+CLINICAL INTERPRETATION
+-----------------------
+The triple-biomarker gating + tumor-burden-like quantitative threshold is
+the classical structure of biomarker-selected targeted therapy in
+metastatic colorectal cancer (e.g., anti-EGFR therapy requires triple
+RAS/BRAF wild-type, and benefit additionally depends on tumor burden).
+With the labels stripped, the analysis recovers this exact pattern from
+the data alone:
+
+  - feature_027 is the candidate treatment.
+  - feature_006, feature_023, feature_022 each act as required wild-type
+    'permission' biomarkers (any one mutation abolishes benefit).
+  - feature_005 (the highly right-skewed continuous lab) acts as a
+    quantitative gate near a value of 5 - patients above it derive no
+    benefit even when wild-type for the three binary markers.
+  - feature_001 (PS), feature_015 (likely age), feature_014, feature_019
+    (likely albumin), and feature_025 (likely tumor burden) are prognostic
+    main effects that the treatment does not interact with.
+
+CONCLUSIONS - HYPOTHESES SUPPORTED VS REFUTED
+---------------------------------------------
+Supported:
+  - feature_015 strongly +ve prognostic (h2_2)
+  - feature_001 ordinal -ve prognostic (h2_1)
+  - feature_014, 019, 025 prognostic (h1_1, h2_3, h2_4)
+  - feature_027 has a marginal +ve effect (h1_2)
+  - feature_006, 023, 022 each gate the feature_027 effect (h6_1-h6_3)
+  - feature_005 attenuates feature_027 effect within WT3 (h6_5, h9_1, h11_1)
+  - Triple wild-type AND feature_005<=5 is the responder subgroup (h10_1, h22_1, h24_1)
+  - feature_010, 012, 018, 020, 024 are inert binary covariates (h5_1, h7_1)
+  - feature_015, 001, 014 are non-modifiers of treatment (h16_1, h17_1, h17_2)
+  - Off-treatment PFS is balanced across the responder strata (h12_1)
+  - The 4-condition responder is jointly necessary (h22_1)
+
+Refuted / refined:
+  - The marginal +ve interaction of feature_011 with feature_027 (h6_4)
+    initially looked like an effect modifier, but turned out to be an
+    artifact of feature_011 enrichment in the WT3 subgroup; conditioned
+    on WT3 it adds nothing.
+  - Within-WT3 modifier candidates feature_031, 014, 017 (raised in
+    iteration 9) are far weaker than feature_005 and do not survive a
+    Bonferroni correction across the within-subgroup screen; they were
+    not retained in the final responder definition.
+
+FINAL TREATMENT-EFFECT SUBGROUP HYPOTHESIS (per task brief)
+-----------------------------------------------------------
+For the outcome pfs_months and the treatment indicator feature_027, the
+best-supported responder subgroup definition is:
+
+  feature_006 = 0  AND  feature_023 = 0  AND  feature_022 = 0
+   AND  feature_005 <= 5
+
+In this subgroup, the feature_027 vs no-feature_027 contrast on pfs_months
+is approximately +5.01 months (positive direction), with the entire
+treatment effect concentrated here and an effectively zero effect outside
+the subgroup.

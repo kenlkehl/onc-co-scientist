@@ -1,0 +1,183 @@
+Analysis Summary — ds001_crc (50,000 patient cohort)
+=====================================================
+
+Outcome
+-------
+The dataset contains a single outcome, pfs_months (range 0.00-16.25, mean 4.31, sd 2.29).
+We treated it as a continuous progression-free survival time. Among 50,000 patients there
+are 1,403 zeros and only 1 patient at the maximum; we did not see a censoring indicator,
+so we modeled pfs_months directly with linear regression and t-tests/Mann-Whitney for
+comparisons.
+
+Dataset structure
+-----------------
+33 features, anonymized:
+- 16 binary (0/1)
+- 1 ordinal 3-level (feature_001, levels 0/1/2)
+- 16 continuous
+
+Distribution clues for likely clinical identity (used for narrative reasoning only — all
+analyses are on the anonymized labels):
+- feature_015 (30-90, mean 65): age-like in shape but POSITIVE rho with PFS (+0.79).
+- feature_001 (0/1/2, prevalence 0.35/0.50/0.15): performance status pattern.
+- feature_005 (0.04-777, mean 9.2, median 4.4): heavy right-skewed lab — fits CEA.
+- feature_019 (1.5-5.5, mean 3.8): albumin pattern.
+- feature_021 (48-830, mean 224): platelet pattern.
+- feature_025 (0-24.6, mean 3.8): WBC pattern.
+- feature_003 (6-18, mean 12.5): hemoglobin pattern.
+- feature_023, feature_006, feature_022 (binary, prevalences 42%/35%/4.5%): co-modify a
+  treatment effect — pattern consistent with KRAS / BRAF / NRAS mutations or similar
+  resistance markers in colorectal cancer.
+
+Univariate findings (Iter 1-2)
+------------------------------
+Strong univariate associations with pfs_months:
+- feature_015: Spearman rho = +0.785, p approx 0. PFS rises monotonically across deciles
+  (1.33 -> 7.45 months from lowest to highest decile).
+- feature_001 (PS-like, 0/1/2): rho = -0.360. Mean PFS 5.27, 4.05, 2.91 across levels.
+- feature_014 (binary): mean PFS 3.70 (=1) vs 5.06 (=0); diff -1.35.
+- feature_027 (binary, 20% prevalence): mean PFS 5.09 (=1) vs 4.12 (=0); diff +0.97.
+  ***Only common binary with a clearly positive PFS association — flagged as candidate
+  treatment.***
+- feature_019 (albumin-like): rho = +0.103, positive.
+- feature_025 (WBC-like): rho = -0.120, negative.
+- feature_023 (-0.05) and feature_006 (-0.05) modestly negative.
+
+Other binaries (feature_010, feature_012, feature_018, feature_020, feature_024,
+feature_031) had effectively null univariate effects.
+
+Multivariable model (Iter 3-4)
+------------------------------
+OLS pfs_months ~ all 33 features yielded R^2 = 0.859. Key adjusted coefficients:
+- feature_015: +0.176 / unit (t = +454)
+- feature_001: -1.171 / level (t = -206)
+- feature_014: -1.362 (t = -176)
+- feature_019: +0.469 / unit
+- feature_025: -0.076 / unit
+- feature_023: -0.354
+- feature_006: -0.287
+- feature_022: -0.357
+- feature_027: +0.943 (t = +98)  [largest positive adjusted coefficient among binaries]
+
+Most other binaries had |beta| < 0.04 with p > 0.10, consistent with no role.
+
+Treatment-027 was approximately balanced across all 33 covariates (every t-test or
+chi-square test p > 0.10), so the cohort behaves like a randomized cohort with respect
+to feature_027 — supporting causal interpretation of stratified effects.
+
+Heterogeneity discovery for feature_027 (Iter 5-9)
+--------------------------------------------------
+A full interaction screen of feature_027 against every other feature revealed:
+- feature_027 x feature_023: interaction beta = -1.629, p = 7.7e-226
+- feature_027 x feature_006: interaction beta = -1.454, p = 4.1e-168
+- feature_027 x feature_022: interaction beta = -1.183, p = 6.1e-23
+- feature_027 x feature_005 (continuous): interaction beta = -0.025/unit, p = 8.7e-58
+
+Stratified analysis on the 4 cells of feature_023 x feature_006:
+  (f023=0, f006=0): treated PFS 6.64 vs 4.12, diff = +2.52  *** large beneficial effect
+  (f023=0, f006=1): diff = +0.07 (null)
+  (f023=1, f006=0): diff = +0.06 (null)
+  (f023=1, f006=1): diff = -0.04 (null)
+
+Adding feature_022 to the stratification:
+  (0,0,0): diff = +2.76 (N=17,372, sharper effect)
+  (0,0,1): diff = -0.20 (null) — feature_022=1 abolishes the benefit even in wild-type.
+
+Adding feature_005 stratification within the wild-type subgroup, the treatment effect was
+strongly modified:
+  feature_005 deciles 1-5 (range 0.04 - 4.47): diff +4.93 to +5.11
+  decile 6 (4.47 - 6.02): diff +1.75
+  deciles 7-10 (>6.02): diff approximately 0
+
+A search over thresholds {2, 2.5, 3, 3.5, 4, 4.47, 5, 5.5, 6, 7} showed the cleanest split
+at feature_005 = 5: low side diff = +5.01, high side diff = -0.002.
+
+Final responder subgroup (Iter 10-11, 21)
+-----------------------------------------
+Defining responder = (feature_023=0 AND feature_006=0 AND feature_022=0 AND feature_005 <= 5):
+- N = 9,338 (18.7% of cohort)
+- Treated (feature_027=1, n=1,905): mean PFS 9.10, median 9.09
+- Control (feature_027=0, n=7,433): mean PFS 4.09, median 4.09
+- Welch t-test: diff = +5.014, p approx 0
+- Mann-Whitney one-sided: p approx 0
+
+Complement (N=40,662):
+- Treated mean 4.15, control mean 4.12, diff = +0.024, p = 0.36 — null.
+
+A 16-cell stratified table over (feature_023, feature_006, feature_022, feature_005<=5)
+showed the +5 month effect is fully concentrated in the (0,0,0,1) cell; all 11 other
+testable cells had |diff| <= 0.25 with p > 0.10.
+
+A nonparametric two-model gradient-boosting estimator of treatment-effect (mu_1(X) -
+mu_0(X)) produced a bimodal estimated tau distribution. The high-tau group (tau > 1)
+had feature_023 rate 0.000, feature_006 rate 0.006, feature_022 rate 0.008, feature_005
+mean 2.30; the low-tau group had feature_023 rate 0.516, feature_006 rate 0.434,
+feature_022 rate 0.054, feature_005 mean 10.81. All other 30 features were balanced
+across the two groups, confirming the manual subgroup definition.
+
+Predictive vs prognostic separation (Iter 13-18)
+-------------------------------------------------
+- feature_005 is purely PREDICTIVE (modifies treatment effect) and not prognostic. In
+  untreated patients within wild-type biomarker status, mean PFS is 4.09 (f005<=5) vs
+  4.15 (f005>5); difference is negligible.
+- feature_023, feature_006, feature_022 have small negative main effects but their main
+  role is to abolish the treatment_027 benefit.
+- feature_001 (PS-like), feature_014, feature_015 (age), feature_019 (albumin) are
+  PROGNOSTIC for baseline PFS but do NOT modify the treatment_027 effect:
+  - feature_001 levels: stratum-specific f027 effects 2.67 / 2.77 / 2.74 (in wild-type)
+  - feature_014: stratum diffs +5.03 vs +5.01 (in responder subgroup)
+  - feature_015 tertiles: +4.95 / +5.07 / +5.07 (in responder subgroup)
+  - feature_019 tertiles: +4.96 / +5.03 / +5.12 (in responder subgroup)
+  All differences across strata are <0.2 — these features do not refine the subgroup.
+- feature_011 (rare 3% binary) appears to interact with feature_027 in the full cohort
+  (interaction +0.99, p = 1.2e-11), but within the wild-type subgroup the effect is
+  similar regardless of feature_011 status (+2.75 vs +2.91), so feature_011 does not
+  add to the responder definition.
+
+Other binary features as candidate treatments (Iter 12)
+--------------------------------------------------------
+A systematic search across feature_010, feature_012, feature_018, feature_020,
+feature_024, feature_031 — testing single-modifier and dual-modifier subgroups — failed
+to identify any subgroup in which they had a treatment-like beneficial effect on PFS
+(no |diff| > 0.5 with p < 0.005). They are not treatments.
+
+Adjusted final model (Iter 18, 25)
+-----------------------------------
+OLS pfs_months ~ feature_027 + biom_neg + feature_027:biom_neg + feature_015 +
+feature_001 + feature_014 + feature_019 + feature_025
+
+(where biom_neg is the 0/1 indicator for the responder subgroup):
+- feature_027 main effect: -0.004 (p = 0.10) — null outside the subgroup
+- biom_neg main effect: -0.005 (p = 0.054) — essentially null (subgroup baseline = others)
+- feature_027 x biom_neg: +4.982 (t = 905.6) — the treatment effect lives entirely
+  within the subgroup
+- feature_015 retained at +0.176/unit
+- feature_001 at -1.166/level
+- feature_014 at -1.368
+- feature_019 at +0.485/unit
+- feature_025 at -0.078/unit
+
+Conclusions
+-----------
+Hypotheses supported:
+- feature_027 is a beneficial intervention (treatment) on pfs_months.
+- The treatment effect is entirely confined to a four-predicate subgroup:
+  feature_023=0 AND feature_006=0 AND feature_022=0 AND feature_005 <= 5.
+- The pattern is consistent with a targeted therapy in a context where feature_023,
+  feature_006, and feature_022 act like resistance mutations and feature_005 represents
+  disease activity / tumor burden such that values above approximately 5 negate the
+  therapy's benefit.
+
+Hypotheses refuted:
+- Any other binary in the dataset acts as a treatment.
+- feature_001 (PS), feature_014, feature_015 (age), feature_019 (albumin), feature_011
+  modify the treatment_027 effect.
+- feature_005 is prognostic in the absence of treatment.
+
+Best-supported final treatment-effect subgroup hypothesis (single statement):
+"In patients with feature_023=0 AND feature_006=0 AND feature_022=0 AND feature_005 <= 5,
+feature_027=1 increases pfs_months by approximately +5.0 months relative to feature_027=0
+(treated mean 9.10 vs control mean 4.09; Welch t-test p approx 0; Mann-Whitney p approx 0;
+N = 9,338). In every patient outside this subgroup the treatment_027 effect on pfs_months
+is zero within statistical noise (n=40,662; mean diff +0.024; p=0.36). All four predicates
+are necessary; relaxing any one yields a contaminated stratum with attenuated effect."

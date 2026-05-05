@@ -1,0 +1,184 @@
+Analysis Summary — ds001_crc (n = 50,000; outcome: pfs_months)
+================================================================
+
+Goal and approach
+-----------------
+The dataset contains 33 anonymized patient features (mix of binary, ordinal, and
+continuous variables) and a single outcome, pfs_months (progression-free survival
+in months). I worked through 25 iterations of propose -> test -> refine, starting
+from univariate associations, moving to multivariable adjustment, then to a
+systematic search for treatment-effect heterogeneity (interaction screen, joint
+interaction model, T-learner CATE tree, and exhaustive small-subgroup scan).
+
+Identifying the candidate treatment
+-----------------------------------
+Among the binary variables, feature_027 (prevalence ~20%) stood out as a plausible
+treatment indicator: it is one of the few binary features whose univariate
+association with pfs_months was strongly positive (mean PFS 5.09 vs 4.12 months,
+diff +0.97, p ~ 1.7e-216). All later iterations treated feature_027 as the
+candidate treatment.
+
+Iteration 1-2: Main effects
+---------------------------
+Strong univariate predictors of pfs_months:
+  - feature_015 (continuous 30-90):    Spearman rho = +0.79, p ~ 0.
+                                       Mean PFS rises from 1.33 mo (lowest decile)
+                                       to 7.45 mo (highest decile).
+  - feature_001 (ordinal 0/1/2):       rho = -0.36; mean PFS 5.27 -> 4.05 -> 2.91.
+  - feature_014 (binary, 55%):         diff = -1.35 mo (p ~ 0); strong negative
+                                       prognostic factor.
+  - feature_027 (treatment cand., 20%): diff = +0.97 mo (p ~ 1.7e-216).
+  - feature_023 (binary, 42%):         diff = -0.33 mo (p ~ 1.9e-58).
+  - feature_006 (binary, 35%):         diff = -0.31 mo (p ~ 1.0e-49).
+  - feature_025 (continuous):          rho = -0.12 (p ~ 5.6e-160).
+  - feature_019 (continuous):          rho = +0.10 (p ~ 4.4e-117).
+All directions held, all six were significant.
+
+Iteration 3: Multivariable adjustment
+-------------------------------------
+OLS for pfs_months on feature_027 + feature_015 + C(feature_001) + feature_014 +
+feature_025 + feature_019 + feature_023 + feature_006 (R^2 = 0.856):
+  - feature_027 adjusted coefficient: +0.94 mo (p ~ 0).
+  - feature_015 adjusted coefficient: +0.18 mo per unit (p ~ 0).
+  - feature_001 = 1 vs 0: -1.20 mo; feature_001 = 2 vs 0: -2.33 mo (both p ~ 0).
+The candidate treatment retains its positive effect after adjustment, confirming
+it is not a confounded marker of better baseline status.
+
+Iteration 4-5: Treatment-by-feature interactions (targeted)
+-----------------------------------------------------------
+Tested interactions of feature_027 with each top covariate, controlling for the
+remaining covariates:
+  - feature_027 x feature_023:  coef -1.63, p ~ 0  (effect erased when feature_023=1)
+  - feature_027 x feature_006:  coef -1.46, p ~ 0  (effect erased when feature_006=1)
+  - feature_027 x feature_001:  coef -0.05, p = 3e-04 (small)
+  - feature_027 x feature_014:  coef +0.03, p = 0.09 (NS)
+  - feature_027 x feature_019:  coef -0.08, p = 1.5e-05
+  - feature_027 x feature_015:  p = 0.19 (NS)
+  - feature_027 x feature_025:  p = 0.06 (NS)
+The two clearly dominant modifiers are feature_023 and feature_006.
+
+Iteration 6: Systematic interaction screen across all 33 features
+-----------------------------------------------------------------
+For each feature f, fit pfs_months ~ feature_027 * f + adjustment covariates and
+record the interaction-term p-value. Top hits (Bonferroni alpha = 0.05/32 = 0.0016):
+  feature_006   coef ~ -1.46  p ~ 0
+  feature_023   coef ~ -1.63  p ~ 0
+  feature_005   coef ~ -0.025 p ~ 0    (continuous: high feature_005 abolishes treatment effect)
+  feature_022   coef ~ -1.18  p ~ 6e-23
+  feature_019   coef ~ -0.08  p = 1.5e-05
+  feature_001   coef ~ -0.05  p = 3e-04
+Many features hit the Bonferroni threshold; the top three (feature_006, feature_023,
+feature_005) are the clearly dominant negative modifiers.
+
+Iteration 7-9: Stratified treatment-effect estimates and joint model
+--------------------------------------------------------------------
+Stratifying on feature_006 and on feature_023 confirmed the screen:
+  - Within feature_006 = 0:  feature_027 effect = +1.48 mo (p ~ 1e-274)
+  - Within feature_006 = 1:  feature_027 effect ~ negligible
+  - Within feature_023 = 0:  feature_027 effect = +1.66 mo (p ~ 6e-293)
+  - Within feature_023 = 1:  feature_027 effect ~ negligible
+Joint OLS with feature_027 interactions on (feature_006, feature_023, feature_005)
+gave a joint F = 6,399 (p ~ 0); each of these three modifiers contributed independently.
+
+Iteration 10-11: T-learner CATE tree
+------------------------------------
+Fit a gradient-boosted regressor separately on treated and control arms; took the
+difference as the predicted CATE; then fit a depth-3 regression tree on that
+predicted CATE to identify subgroups. The tree's top-CATE leaf was:
+
+    feature_005 <= 4.99  AND  feature_023 == 0  AND  feature_006 == 0
+       n = 10,100 (n_treated = 2,057)
+       empirical PFS:      ctrl = 4.09 mo,  trt = 8.72 mo
+       empirical diff:     +4.62 mo (p ~ 0)
+
+The tree's lowest-CATE leaf had no detectable benefit (diff -0.06, p = 0.50).
+The treatment x subgroup-indicator interaction in adjusted OLS was +4.61 (p ~ 0),
+and the adjusted treatment main effect outside the subgroup was -0.002 (p = 0.59) -
+i.e., feature_027 has essentially no effect outside the subgroup.
+
+Iteration 12-17: Confirmatory and stepwise subgroup refinement
+--------------------------------------------------------------
+Stratifying on feature_001 and feature_015 quartiles each showed a wider treatment
+effect at lower feature_001 / higher feature_015, but these gradients were modest
+compared with the dichotomies above. Building the subgroup additively
+(feature_001==0 + feature_014==0 + feature_023==0 + feature_006==0 + feature_022==0
++ feature_015 above median) raised the in-group effect to +2.7 mo, but never
+matched the cleaner CATE-tree subgroup which uses feature_005 instead of these
+prognostic variables.
+
+Iteration 18: Logistic check
+----------------------------
+Logistic regression of (pfs_months >= median) on the candidate treatment plus
+covariates: adjusted OR for feature_027 = 5.93 (p ~ 1e-260). Treatment effect is
+robust on the binary "above-median PFS" outcome.
+
+Iteration 19-20: Non-treatment biomarker pair interactions
+----------------------------------------------------------
+Pairwise OLS interactions on pfs_months among the top biomarkers found that the
+strongest non-treatment interaction was feature_023 x feature_006 (coef +0.45,
+p ~ 1.7e-25). The negative effects of feature_023 and feature_006 are partially
+non-additive on PFS. feature_015 also interacted with feature_001 (joint F = 51.5,
+p ~ 4e-23) - the negative slope of feature_001 on PFS is steeper at lower
+feature_015.
+
+Iteration 21: Highest-risk subgroup
+-----------------------------------
+In feature_001==2 AND feature_014==1 (n = 4,101), feature_027 still had a +0.95 mo
+effect (p ~ 3e-26). High clinical risk does NOT abolish the treatment effect; the
+specific biomarkers feature_023 and feature_006 do.
+
+Iteration 22-24: Comprehensive interaction model and small-subgroup search
+--------------------------------------------------------------------------
+"feature_027 x (eight key covariates)" OLS: joint F = 2,085, p ~ 0; all major
+interactions remain significant. Exhaustive scan over 3-way intersections of
+binary features identified small-n subgroups with diff up to +3.2 mo, but these
+were less robust and smaller than the CATE-tree subgroup.
+
+Iteration 25: Final best-supported subgroup
+-------------------------------------------
+Subgroup defined by:
+
+    feature_005 <= 4.99  AND  feature_023 == 0  AND  feature_006 == 0
+        n = 10,100 (2,057 on feature_027)
+        treatment effect on pfs_months: +4.62 months (p ~ 0)
+        adjusted interaction with subgroup indicator: +4.61 mo (p ~ 0)
+
+In the complementary group (n = 39,900):
+    treatment effect on pfs_months: +0.03 months (p = 0.26)
+
+Adding feature_022 == 0 to the rule (n = 9,326) raises the in-group effect to
++5.01 months and the adjusted interaction term to +4.98.
+
+Conclusions
+-----------
+1. feature_027 is the only feature with the profile of an active treatment in this
+   cohort: ~20% prevalence, large independent positive effect on pfs_months that
+   survives adjustment, and strong heterogeneity by biomarker.
+2. The strongest prognostic features are feature_015 (large positive), feature_001
+   (negative, ordinal), feature_014 (negative binary), feature_025 (negative
+   continuous), and feature_019 (positive continuous). Their main effects are
+   robust and largely additive.
+3. The treatment effect of feature_027 is overwhelmingly concentrated in patients
+   with feature_005 <= ~5, feature_023 == 0, and feature_006 == 0; these three
+   variables effectively "switch off" the treatment effect when any one of them
+   takes the unfavorable value. Outside that subgroup, feature_027 is no better
+   than control. This is a textbook predictive (not merely prognostic) biomarker
+   pattern: feature_023 and feature_006 are likely resistance markers, and
+   feature_005 a continuous correlate (above which the treatment ceases to
+   benefit). feature_022 == 0 incrementally enriches the responsive subgroup.
+4. The top biomarker pair interaction unrelated to treatment was feature_023 x
+   feature_006, suggesting these two markers are partially redundant prognostic
+   factors as well.
+5. The strongest treatment-effect heterogeneity is biomarker-driven, not
+   prognosis-driven: the highest-risk clinical subgroup (feature_001 = 2 and
+   feature_014 = 1) still benefits modestly from feature_027 (+0.95 mo), whereas
+   any of feature_023 = 1, feature_006 = 1, or feature_005 > 5 abolishes benefit.
+
+Final summary subgroup hypothesis (for transcript scoring)
+----------------------------------------------------------
+TREATMENT:  feature_027 (positive)
+OUTCOME:    pfs_months (longer)
+SUBGROUP:   feature_005 <= 4.99  AND  feature_023 == 0  AND  feature_006 == 0
+            (refined with feature_022 == 0)
+DIRECTION:  feature_027 increases pfs_months by approximately +4.6 to +5.0 months
+            within this subgroup; effect is essentially zero outside it.

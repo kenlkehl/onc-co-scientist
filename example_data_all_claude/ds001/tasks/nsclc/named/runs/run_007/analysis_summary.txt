@@ -1,0 +1,214 @@
+ds001_nsclc — Analysis Summary
+================================
+
+Cohort: 50,000 NSCLC patients aggregated from EHR/commercial data, with one PFS
+outcome (pfs_months) and 33 features spanning demographics, smoking, ECOG, stage,
+brain metastases, histology, mutations (EGFR, KRAS G12C, ALK, STK11, BRCA2),
+PD-L1 TPS, TMB, prognostic labs/inflammation markers, routine chemistries, and
+four binary treatment indicators (pembrolizumab, sotorasib, olaparib,
+osimertinib).
+
+I worked the propose-test-refine loop for 25 iterations. The arc of the
+investigation was: (1) main effects of features and treatments; (2) prespecified
+biomarker × treatment interactions; (3) systematic heterogeneity scans for each
+treatment; (4) targeted multi-feature subgroup definitions for any treatment
+where the marginal effect appeared concentrated.
+
+------------------------------------------------------------
+1. Main effects on PFS (iter 1–3)
+------------------------------------------------------------
+
+Strong, biologically plausible prognostic features:
+- ecog_ps: β = -1.10 mo per ECOG point (p ≈ 0). Largest single prognostic.
+- stage_iv: stage IV − non-stage IV = -1.44 mo (p ≈ 0).
+- has_brain_mets: -0.92 mo (p ≈ 0).
+- histology: adenocarcinoma − squamous = +0.86 mo (p ≈ 0).
+- weight_loss_pct_6mo: β = -0.073 mo per percent (p ≈ 7e-179).
+- albumin_g_dl: β = +0.44 mo per g/dL (p ≈ 3e-109).
+- smoking_status: never 3.67 mo, former 3.61, current 2.99 (ANOVA p ≈ 4e-187);
+  current smokers fare considerably worse.
+- age_years: small positive effect on PFS, β = +0.17 mo/yr (p ≈ 0). Counter-
+  intuitive at first glance; likely reflects selection of older patients toward
+  histologies/treatments that, conditional on the rest of the cohort, run
+  longer in this dataset.
+- sex_female: female − male = -0.20 mo (p ≈ 8e-25). Females have slightly
+  shorter PFS.
+
+Mutation/biomarker main effects:
+- KRAS G12C+: +0.78 mo (p ≈ 7e-94) — driven downstream by sotorasib effect.
+- ALK fusion+: -0.81 mo (p ≈ 6e-66) — ALK+ patients fare worse, presumably
+  because no ALK inhibitor is offered in the cohort.
+- EGFR mutation+: +0.19 mo (p ≈ 6e-11) — small overall benefit.
+- BRCA2+: -0.12 mo (p = 0.03) — small adverse effect.
+- TMB high: -0.19 mo (p ≈ 1e-17) — counter to the typical IO-prognostic story.
+- STK11 mutation: null overall (p = 0.74).
+- pdl1_tps continuous: null (β = +0.067, p = 0.16).
+
+Routine chemistries (hemoglobin, alkaline phosphatase, AST, ALT, total
+bilirubin, creatinine, BUN, sodium, potassium, calcium, CRP, NLR) were all
+non-significant at the univariable level. ldh_u_l was very weakly negative
+(β = -5e-4, p = 4e-5).
+
+A multivariable OLS using only clinical features (no treatments) gave R² =
+0.889, dominated by stage_iv, ECOG, brain mets, histology, smoking status,
+weight loss, and albumin.
+
+------------------------------------------------------------
+2. Treatment main effects (iter 4)
+------------------------------------------------------------
+
+- treatment_sotorasib: +0.32 mo (p ≈ 6e-49) — significant, but driven by the
+  KRAS G12C+ subgroup (see below).
+- treatment_pembrolizumab: -0.035 mo (p = 0.08) — null/slightly adverse.
+- treatment_olaparib: -0.025 mo (p = 0.26) — null.
+- treatment_osimertinib: +0.004 mo (p = 0.87) — null.
+
+Adding treatments and their canonical biomarker interactions to the
+multivariable model raised R² to 0.927; the only significant treatment term was
+sotorasib × KRAS G12C (β = +2.53, p ≈ 0).
+
+------------------------------------------------------------
+3. Pre-specified biomarker × treatment interactions (iter 5–10)
+------------------------------------------------------------
+
+- Pembro × PD-L1 TPS: interaction p = 0.22; effect in PD-L1 ≥ 0.5 stratum =
+  -0.07 mo (p = 0.11). No benefit.
+- Pembro × TMB high: interaction p = 0.68; TMB-high stratum -0.05 mo
+  (p = 0.20). No benefit.
+- Pembro × STK11: interaction p = 0.77; both strata null.
+- Sotorasib × KRAS G12C: interaction β = +2.56, p ≈ 0. KRAS G12C+ stratum:
+  +2.55 mo (p ≈ 2e-202; n = 2246 treated, 4122 control). KRAS-: -0.005 mo
+  (p = 0.80). The entire population-level benefit lives in KRAS G12C+ patients.
+- Olaparib × BRCA2: interaction p = 0.78; BRCA2+ stratum +0.010 mo (p = 0.93).
+  No benefit even in BRCA2+ patients.
+- Osimertinib × EGFR: interaction p = 0.76; EGFR+ stratum -0.014 mo (p = 0.81).
+  No benefit even in EGFR+ patients.
+
+Among the four treatments, sotorasib was the only one with any
+biomarker-conditioned effect. Olaparib and osimertinib showed no benefit even
+in their canonical biomarker-positive subgroups, an unusual but consistent
+result across stratified and three-way models.
+
+------------------------------------------------------------
+4. Systematic heterogeneity scans (iter 13–16)
+------------------------------------------------------------
+
+For each treatment I ran pfs_months ~ trt × modifier across 13 candidate
+modifiers (sex, ECOG, stage IV, brain mets, EGFR, KRAS G12C, ALK, STK11, BRCA2,
+TMB high, PD-L1 high, smoking status, histology). Highlights:
+
+Pembrolizumab: only one nominal interaction, with stage_iv (β = +0.108, p =
+0.0068). Within stage_iv = 0, pembro − control = -0.10 mo (p = 0.002); within
+stage_iv = 1, +0.006 (p = 0.81). Clinically modest (slight harm in earlier
+stage). No biomarker interaction reached significance.
+
+Sotorasib: in addition to KRAS G12C, several modifiers showed strong
+interactions:
+  - sex_female: β = -0.56, p ≈ 5e-41 (largest non-KRAS modifier)
+  - smoking_status (vs current): never β = -0.50, p = 3e-14; former β = -0.21,
+    p = 7e-6
+  - histology squamous: β = +0.17, p = 2e-4
+  - ALK fusion: β = -0.49, p = 4e-7 (but very small subgroup)
+  - BRCA2 mutation: β = -0.33, p = 0.006
+  - EGFR mutation: β = -0.24, p = 1e-4
+  These interactions live almost entirely inside the KRAS G12C+ subgroup
+  (where the active effect is).
+
+Olaparib: no interaction reached p < 0.05 (smallest p = 0.073 with STK11). No
+heterogeneity detectable.
+
+Osimertinib: two nominal interactions reached p < 0.05 (osi × ALK fusion p =
+0.017; osi × BRCA2 p = 0.05), but stratified means in EGFR+ and EGFR− subgroups
+remained null. No clinically meaningful heterogeneity.
+
+------------------------------------------------------------
+5. Targeted multi-feature subgroups (iter 17–24)
+------------------------------------------------------------
+
+Pembrolizumab "best biomarker-favorable" compound subgroup
+  (pdl1_tps ≥ 0.5 AND tmb_high = 1 AND stk11_mutation = 0):
+  +0.06 mo, n = 1373 vs 1341, p = 0.52. Not significant. Within this PD-L1-
+  high stratum the 3-way model (pembro × tmb_high × stk11_mutation) gave a
+  pembro main β = -0.156 (p = 0.005) and a positive pembro:tmb β = +0.21
+  (p = 0.04), consistent with no clinically useful pembro benefit.
+
+Osimertinib × EGFR × brain mets: all four (EGFR, brain mets) cells are null;
+3-way interaction p = 0.70.
+
+Sotorasib × KRAS × STK11: KRAS+/STK11 wt +2.59 mo (p ≈ 0); KRAS+/STK11 mut
++2.33 mo (p ≈ 4e-25); 3-way β = -0.27, p = 0.13. STK11 only weakly attenuates
+the sotorasib effect within KRAS+; the drug remains highly active in STK11-
+mutant KRAS G12C+ patients.
+
+Olaparib × BRCA2 × histology and other BRCA2+ refinements (sex, ECOG, adeno)
+all produced null subgroup means, confirming that no sub-stratification of
+BRCA2+ recovers an olaparib effect.
+
+The decisive subgroup analysis came from sotorasib × KRAS × sex_female:
+
+  KRAS G12C+, male:    +4.644 mo  (n_treated = 1237, n_control = 2271, p ≈ 0)
+  KRAS G12C+, female:  -0.012 mo  (n_treated = 1009, n_control = 1851, p = 0.88)
+  3-way interaction soto:kras:sex_female: β = -4.69, p ≈ 0.
+
+That is, the entire population-level sotorasib effect is carried by KRAS G12C+
+males. Female sex completely suppresses the effect even in KRAS G12C+ patients.
+Further refinement within KRAS G12C+ males (current smoker, squamous histology,
+ALK-/BRCA2-) did not change the magnitude meaningfully (e.g., +4.99 mo in the
+KRAS+/male/ALK-/BRCA2- subgroup), so male sex appears to be the binding
+modifier.
+
+------------------------------------------------------------
+6. Final treatment-effect-subgroup hypotheses (iter 25)
+------------------------------------------------------------
+
+Pembrolizumab: no subgroup with a clinically meaningful and statistically
+  significant PFS benefit. Best-supported negative claim. (Within the canonical
+  IO-favorable subgroup PD-L1 ≥ 0.5 AND TMB high AND STK11 wt, pembro effect =
+  +0.06 mo, p = 0.52.)
+
+Sotorasib: positive PFS effect of approximately +4.6 months is concentrated in
+  patients with kras_g12c = 1 AND sex_female = 0 (male sex). Female sex is
+  the unfavorable feature that nullifies the treatment effect within the
+  KRAS G12C+ stratum. STK11 mutation only modestly attenuates the effect
+  (~+2.3 mo) and is not part of the binding subgroup definition.
+
+Olaparib: no subgroup in this cohort exhibits a significant olaparib benefit
+  on PFS, including BRCA2 mutation+ (+0.01 mo, p = 0.93) and any further
+  refinement (sex, ECOG, histology, STK11).
+
+Osimertinib: no subgroup exhibits a significant osimertinib benefit on PFS,
+  including EGFR mutation+ (-0.01 mo, p = 0.81) and any refinement
+  (smoking, histology, stage, brain mets, sex).
+
+------------------------------------------------------------
+7. Overall conclusions
+------------------------------------------------------------
+
+Across 25 iterations the dataset's structure can be summarized as follows.
+
+(a) Prognostic signal is large and dominated by the expected EHR features:
+ECOG, stage IV, brain mets, histology, weight loss, albumin, smoking status. A
+clinical-only multivariable model already explains 89% of PFS variance; adding
+treatment effects buys only ~4 percentage points more.
+
+(b) Of the four treatments in the cohort, only sotorasib has a real PFS effect,
+and that effect is conditional on KRAS G12C+ AND male sex. The sex dependence
+is the most striking finding: in KRAS G12C+ males the effect is +4.6 months,
+which is large in absolute terms; in KRAS G12C+ females it is essentially zero.
+Female sex acts as a complete suppressor of an otherwise dramatic biomarker-
+matched response.
+
+(c) Pembrolizumab, olaparib, and osimertinib fail to produce a measurable PFS
+benefit even in their canonical biomarker-favorable subgroups (PD-L1 high /
+TMB high / STK11 wt for pembro; BRCA2+ for olap; EGFR+ for osi). Heterogeneity
+scans, three-way models, and compound subgroups all converge on the same
+negative finding for these three. This pattern is unusual relative to clinical
+trial data and likely reflects either the way these treatments are assigned
+in this synthetic/EHR cohort (e.g., channeling toward sicker patients) or the
+specific data-generating process used to create the dataset.
+
+(d) The single most actionable refined hypothesis from this analysis is the
+sotorasib × KRAS G12C × sex_female interaction. If interpreted causally it
+would suggest that the data-generating process embeds a biological or
+prescribing pathway in which the sotorasib benefit operates only in KRAS G12C+
+males. Verifying or rejecting this would be the obvious next step.

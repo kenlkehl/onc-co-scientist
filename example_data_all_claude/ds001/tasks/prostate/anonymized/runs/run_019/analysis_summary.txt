@@ -1,0 +1,214 @@
+Oncology Dataset Analysis Summary - ds001_prostate
+==================================================
+
+Cohort: 50,000 patients, 32 de-identified features (one constant: feature_030),
+single binary outcome objective_response (overall rate 24.0%).
+
+OVERVIEW OF APPROACH
+--------------------
+I worked through 15 propose-test-refine iterations. The hypothesis stream began
+with a marginal univariate screen of every feature against objective_response,
+then moved to multivariable adjustment, then to a search for treatment-effect
+heterogeneity. The treatment-heterogeneity search produced the most informative
+result, so the final iterations were dedicated to nailing down a precise joint
+subgroup definition for the treatment effect.
+
+I. UNIVARIATE LANDSCAPE (iters 1-2)
+-----------------------------------
+Binary features with strong, significant marginal associations with response:
+  - feature_013 = 1 -> 15.4% response vs 0 -> 34.6% (diff -19.2 pp; chi2 p ~ 0).
+  - feature_008 = 1 -> 36.1% vs 0 -> 15.9% (diff +20.2 pp; chi2 p ~ 0).
+  - feature_015 = 1 -> 16.0% vs 0 -> 26.0% (diff -10.0 pp; p = 1.9e-98).
+  - feature_021 = 1 -> 15.0% vs 0 -> 25.0% (diff -10.1 pp; p = 5.4e-56).
+  - feature_027 = 1 -> 17.6% vs 0 -> 24.2% (diff -6.6 pp; p = 3.0e-09).
+
+Binary features with no detectable marginal association (chi2 p > 0.30):
+  feature_006, feature_005, feature_023, feature_011, feature_017, feature_019,
+  feature_004. These remained candidates for "hidden" treatments with
+  heterogeneous effects, but iter 14 ruled that out.
+
+Multilevel features:
+  - feature_001 (3-level ordinal: 0/1/2): monotonic decrease in response
+    (0 -> 28.2%, 1 -> 22.8%, 2 -> 18.2%; chi2 p = 5e-72). Looks prognostic
+    (e.g., performance status / stage-like).
+  - feature_010 (5-level, values 6-10; range and integer-only structure
+    consistent with a Gleason-score-like variable in this prostate cohort):
+    NO association (p = 0.77).
+  - feature_030: constant = 0; uninformative.
+
+Continuous features with strong response associations:
+  - feature_022 (range 0.12 - 3622, heavy-tailed) - much LOWER in responders
+    (mean 28 vs 47; p = 1.5e-137). Its scale and distribution are consistent
+    with a tumor-burden marker (e.g., PSA-like).
+  - feature_020 (range 0-25): lower in responders (3.50 vs 3.95; p = 7e-31).
+  - feature_024 (heavy-tailed): lower in responders (5.7 vs 6.2; p = 9e-09).
+  - feature_002 (range 1.5-5.5): slightly higher in responders
+    (3.820 vs 3.796; p = 4e-06).
+  All other continuous features (feature_016 age-like, feature_018, feature_009,
+  feature_026 hemoglobin-like, feature_028, feature_007 sodium-like,
+  feature_014, feature_032, feature_031, feature_025, feature_003, feature_012,
+  feature_029) showed |t| < 1.6 and p > 0.07 - i.e., no marginal association.
+
+II. MULTIVARIABLE MODEL (iter 3)
+--------------------------------
+A logistic regression with all non-degenerate features (continuous standardised;
+log1p of f022, f024, f018, f009 to handle skew) confirmed independent
+associations matching univariate directions for: feature_013 (OR 0.34),
+feature_008 (OR 3.33), feature_015 (OR 0.50), feature_021 (OR 0.48),
+feature_027 (OR 0.65), feature_001 (OR 0.72/level), feature_020, log(f022),
+log(f024), feature_002. Every other feature had multivariable p > 0.05 (most
+> 0.5). No surprise: the marginally null features remained null after
+adjustment.
+
+III. KEY DISCOVERY: TWO BIOMARKERS DEFINE A "RESPONDER" SUBGROUP (iter 4)
+-------------------------------------------------------------------------
+Cross-tabulating feature_013 x feature_008 against the outcome revealed a
+striking pattern:
+        feature_008=0      feature_008=1
+f013=0  0.169 (n=13480)    0.610 (n=9039)    <-- the responder cell
+f013=1  0.150 (n=16444)    0.158 (n=11037)
+The (f013=0, f008=1) cell has a response rate ~4x higher than the rest of the
+cohort. The other three cells are nearly identical (15-17%). A logistic model
+with f013, f008, and the f013xf008 interaction confirms a huge synergy
+(interaction OR 0.056, p ~ 0): the favorable effect of feature_008=1 is
+extinguished when feature_013=1.
+
+IV. TREATMENT-EFFECT HETEROGENEITY SEARCH (iters 5-8)
+-----------------------------------------------------
+I treated feature_015, feature_021, feature_027 as candidate treatments
+(low-prevalence binary, negative main effect on response), and screened their
+interactions with every other feature using treatment-by-feature logistic
+interactions on the full cohort. The two strongest interactions for ALL THREE
+treatments were with feature_008 (negative coefficient: treatment is more
+harmful when feature_008=1) and feature_013 (positive coefficient: treatment
+is less harmful when feature_013=1).
+
+Stratified within (feature_013, feature_008) cells, the treatment effects
+collapsed cleanly:
+
+  feature_015 effect:
+    f013=0: -0.222 pp (p = 9e-173); f013=1: -0.001 (p = 0.87)
+    f008=1: -0.246 pp (p = 2e-184); f008=0: -0.003 (p = 0.58)
+
+  feature_021 effect:
+    f013=0: -0.216 pp (p = 2e-93); f013=1: -0.006 (p = 0.41)
+    f008=1: -0.231 pp (p = 6e-94); f008=0: -0.013 (p = 0.07)
+
+  feature_027 effect:
+    f013=0: -0.152 pp (p = 2e-16); f013=1: +0.004 (p = 0.79)
+    f008=1: -0.205 pp (p = 7e-24); f008=0: +0.026 (p = 0.03)
+
+Iter 6 confirmed treatments are essentially balanced across the four
+(f013, f008) cells (each treatment's prevalence varies only in the third
+decimal place across cells), so this is real effect modification, not
+confounding by indication.
+
+A logistic model with the full f013 x f008 x any_trt three-way interaction
+quantified the structure: three-way interaction coef = +2.89 (p = 1.7e-158),
+two-way f008:any_trt = -2.89, and f013:f008 = -2.89. Reading off the cell
+ORs, treatment OR is ~0.05 in (f013=0, f008=1) and ~1 in every other cell.
+
+V. JOINT SUBGROUP FOR THE TREATMENT EFFECT (iter 7)
+---------------------------------------------------
+Defining the binary subgroup as "feature_013=0 AND feature_008=1"
+(n = 9039, 18.1% of cohort):
+
+  Untreated (no f015, no f021, no f027): n=6325, response 79.8%
+  Treated (any of f015, f021, f027 = 1): n=2714, response 17.1%
+  Risk difference = -62.7 pp, OR = 0.052 (Fisher exact p ~ 0)
+
+Each treatment alone (others off) within the subgroup:
+  feature_015 alone: 18.2% (diff -61.5 pp vs untreated baseline 79.8%)
+  feature_021 alone: 15.2% (diff -64.6 pp)
+  feature_027 alone: 18.5% (diff -61.3 pp)
+  Two or more: 14.0%
+  The three treatments produce nearly identical, non-additive harms.
+
+Outside the subgroup (the other 40,961 patients):
+  (013=0, 008=0): treatment risk diff -0.009, p = 0.20
+  (013=1, 008=0): -0.005, p = 0.41
+  (013=1, 008=1): -0.004, p = 0.58
+  Treatment effect is, for practical purposes, absent.
+
+VI. WITHIN-SUBGROUP CHECK (iters 9-12)
+--------------------------------------
+Within the (f013=0 AND f008=1) subgroup I screened every other feature for
+treatment-effect modification (logistic any_trt + feature + interaction).
+None survived multiple-testing correction; the smallest interaction p was
+feature_005 at 0.04 (Bonferroni threshold ~0.002). A shallow decision tree
+(max_depth=4, min_leaf=200) within the subgroup split first on any_trt and
+predicted class=1 (response) at every untreated leaf and class=0 at every
+treated leaf - regardless of any further feature. This confirms that any_trt
+is the dominant within-subgroup driver and that no additional variable
+sharpens the subgroup definition.
+
+The features that DO matter inside the untreated subgroup are prognostic, not
+predictive: feature_001 (OR 0.63 per level, p=2e-23), feature_020 (OR 0.84
+per std, p=5e-09), log feature_022 (OR 0.89 per log-std, p=3e-04), feature_024
+(OR 0.91 per std, p=5e-04), feature_002 (OR 1.08 per std, p=0.016).
+
+The unstratified treatment x feature_022 interaction (p = 1e-16) was an
+artifact: feature_022 is correlated with feature_013 (mean f022 = 12 in
+f013=0 vs 68 in f013=1; r = 0.30). Within the subgroup, the trt x log_f022
+interaction is non-significant (p = 0.17).
+
+VII. NULL CHECKS ON OTHER BINARIES (iter 14)
+--------------------------------------------
+The marginally null binaries (feature_006, feature_017, feature_019,
+feature_004, feature_005, feature_023, feature_011) are not hidden treatments.
+Within every (f013, f008) cell their |risk difference| is < 0.015 and stratum
+p > 0.10. Only feature_015 / 021 / 027 show the heterogeneity pattern.
+
+VIII. FINAL TREATMENT-EFFECT SUBGROUP HYPOTHESIS
+------------------------------------------------
+TREATMENT: any_trt = 1 if any of feature_015, feature_021, feature_027 = 1;
+else 0.
+OUTCOME: objective_response (binary).
+SIGNED DIRECTION: treatment REDUCES response.
+SUBGROUP: feature_013 = 0 AND feature_008 = 1.
+
+  Inside the subgroup (n=9039, 18.1% of cohort):
+    untreated -> 79.8% response, treated -> 17.1% response
+    risk diff = -62.7 pp, OR = 0.052 (p ~ 0)
+
+  Outside the subgroup (n=40,961):
+    untreated -> 16.1%, treated -> 15.4%
+    risk diff = -0.6 pp (n.s.)
+
+The subgroup definition requires BOTH favorable predicates to be met
+(feature_013 = 0 AND feature_008 = 1). The unfavorable values feature_013 = 1
+and feature_008 = 0 each independently abolish the treatment effect; flipping
+either one is enough to suppress it.
+
+IX. WHAT WAS SUPPORTED, WHAT WAS REFUTED
+----------------------------------------
+Supported:
+  - Strong feature_013 x feature_008 synergy on baseline response.
+  - feature_015, feature_021, feature_027 reduce response only in the joint
+    subgroup; their main-effect signs are correct but magnitudes are diluted
+    in the marginal table.
+  - feature_001 is prognostic across all strata (3-level ordinal, dose-response
+    decrease in untreated subgroups regardless of f013/f008 status).
+  - Treatment prevalence is balanced across (f013, f008) cells - so the
+    heterogeneity is causal effect modification, not confounding.
+
+Refuted (or null):
+  - feature_022's apparent treatment x feature_022 interaction is an artifact
+    of correlation with feature_013; within the subgroup it is null.
+  - feature_001 is NOT a treatment-effect modifier - it is purely prognostic.
+  - feature_006, feature_005, feature_023, feature_011, feature_017,
+    feature_019, feature_004 are not "hidden treatments"; they have no
+    detectable effect overall or within any (f013, f008) cell.
+  - feature_010 (5-level) is unrelated to response (Gleason-grade-like, but
+    with no signal in this synthetic outcome).
+
+X. INTERPRETIVE NOTE
+--------------------
+The structure of the response model in this dataset is dominated by a
+single combinatorial rule: a high-baseline subgroup defined by two binary
+biomarkers (feature_013=0 AND feature_008=1), inside which any one of three
+binary treatments (feature_015, feature_021, feature_027) collapses the
+response from ~80% to ~17%. Outside that subgroup the treatments are inert.
+Continuous variables (feature_022, feature_020, feature_024) and the ordinal
+feature_001 add modest prognostic refinement inside the responder subgroup
+but do not modify the treatment effect.

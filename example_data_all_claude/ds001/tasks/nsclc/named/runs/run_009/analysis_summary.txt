@@ -1,0 +1,221 @@
+ds001_nsclc — Analysis summary
+===============================
+
+Cohort: 50,000 NSCLC patients, single PFS outcome (pfs_months, mean 3.43,
+median 3.32, range 0–15.3 months). Four treatments are coded as binary
+indicators (treatment_pembrolizumab, treatment_sotorasib, treatment_olaparib,
+treatment_osimertinib); patients can receive multiple treatments (max 4
+recorded; 19,090 patients on a single treatment, 16,344 on two, 7,903 on
+none). All baseline features are complete.
+
+Iterations 1–6 — Prognostic main effects on pfs_months
+-------------------------------------------------------
+The dataset contains very strong, clinically coherent baseline prognostic
+signals. Univariate OLS effect estimates (pfs_months per unit, signed):
+
+  ECOG 1 vs 0:            -1.14 months   p ≈ 0
+  ECOG 2 vs 0:            -2.17 months   p ≈ 0
+  stage_iv (1 vs 0):      -1.44 months   p ≈ 0
+  has_brain_mets:         -0.92 months   p ≈ 0
+  albumin_g_dl:           +0.44 / g/dL   p = 2.8e-109
+  weight_loss_pct_6mo:    -0.073 / %     p = 7.5e-179
+  ldh_u_l:                -0.00051 / U/L p = 3.6e-5
+  histology squamous:     -0.86          p ≈ 0
+  smoking current vs never:-0.69         p = 7.4e-106
+  smoking former vs never: -0.07         p = 0.019
+  age_years:              +0.170 / yr    p ≈ 0   (counter-intuitive sign)
+  sex_female:             -0.20          p = 2.4e-24 (counter-intuitive)
+  alk_fusion (1 vs 0):    -0.81          p = 2.9e-69
+  brca2_mutation:         -0.12          p = 0.041
+
+Two univariate findings deserve highlighting because they run opposite to
+typical clinical intuition: older age is associated with LONGER PFS
+(robust to adjustment, joint-model coef +0.168/year, t≈614), and female
+sex is associated with SHORTER PFS. CRP, NLR, and routine chemistries
+(hemoglobin, AlkP, AST, ALT, total bilirubin, creatinine, BUN, sodium,
+potassium, calcium) have null univariate effects. tmb_high has a
+univariate negative effect on PFS (-0.19, p = 9e-18) but this is fully
+explained by confounding (adjusted coef -0.006, p = 0.46).
+
+Iterations 7–8 — Treatment main effects
+----------------------------------------
+Unadjusted PFS difference (treated − untreated):
+
+  treatment_pembrolizumab:  -0.035  p = 0.081  (NS, slightly negative)
+  treatment_sotorasib:      +0.322  p = 1.6e-53 (positive overall)
+  treatment_olaparib:       -0.025  p = 0.255  (null)
+  treatment_osimertinib:    +0.004  p = 0.870  (null)
+
+After adjustment for the full prognostic covariate set, the pembrolizumab,
+olaparib, and osimertinib effects remain null (|coef|<0.01, all p > 0.37);
+sotorasib retains a +0.32 month adjusted effect (p ≈ 0). The sotorasib
+"main effect" is the marginalization of a strong predictive subgroup
+effect (see iterations 11–13).
+
+Iterations 9–14 — Targeted treatment-by-biomarker interactions
+---------------------------------------------------------------
+For each treatment we tested its canonical clinical biomarker. Only one of
+the four canonical pairs replicates the expected biology in this dataset.
+
+  treatment_sotorasib × kras_g12c:
+       interaction +2.558, p ≈ 0; subgroup difference within
+       kras_g12c=1: +2.55 months (p = 1.7e-202, n_on=2246, n_off=4122);
+       within kras_g12c=0: -0.005 months (p = 0.80, clean null).
+       This is a textbook predictive biomarker effect.
+
+  treatment_pembrolizumab × pdl1_tps (continuous):
+       interaction -0.116, p = 0.22 (NS, sign opposite to expectation).
+  treatment_pembrolizumab × tmb_high:
+       interaction -0.018, p = 0.69 (NS).
+  treatment_pembrolizumab × stk11_mutation:
+       interaction -0.016, p = 0.77 (NS).
+  treatment_pembrolizumab × egfr_mutation:
+       interaction +0.099, p = 0.10 (NS, and sign opposite to clinical
+       expectation that EGFR-mutant disease responds less to pembro).
+
+  treatment_osimertinib × egfr_mutation:
+       interaction -0.020, p = 0.76 (NS). No osimertinib benefit
+       within egfr_mutation=1 (subgroup diff -0.014, p = 0.81; n_on=1973).
+
+  treatment_olaparib × brca2_mutation:
+       interaction +0.037, p = 0.78 (NS). No olaparib benefit
+       within brca2_mutation=1 (subgroup diff +0.010, p = 0.93; n_on=417).
+
+Iterations 15–16 — Pembrolizumab subgroup probing
+--------------------------------------------------
+Stratified subgroup means for treatment_pembrolizumab:
+
+  pdl1_tps>=0.5:                diff -0.070  p = 0.11
+  pdl1_tps<0.5:                 diff -0.025  p = 0.26
+  tmb_high=1:                   diff -0.048  p = 0.20
+  tmb_high=0:                   diff -0.030  p = 0.20
+  stk11_mutation=0:             diff -0.032  p = 0.14
+  stk11_mutation=1:             diff -0.049  p = 0.34
+  egfr_mutation=0:              diff -0.048  p = 0.026 *
+  egfr_mutation=1:              diff +0.051  p = 0.34
+  smoking_status=never/former/current: all |diff|<0.05, all NS
+  histology=squamous:           diff -0.074  p = 0.043 * (wrong direction)
+  ecog_ps=1:                    diff -0.066  p = 0.013 * (wrong direction)
+  pdl1>=0.5 & stk11=0 (joint):  diff -0.095  p = 0.044 * (wrong direction)
+
+The few nominally "significant" pembrolizumab subgroup hits all point in
+the wrong direction (slight harm) and disappear with adjustment
+(adjusted within-stratum |coef| < 0.01, p ≥ 0.4 in every case). The
+triple interaction pembro × pdl1_tps × stk11_mutation is non-significant
+(p = 0.75).
+
+Iterations 17 — Exhaustive treatment × feature interaction screen
+------------------------------------------------------------------
+Each treatment was crossed with all 26 features in a separate two-way
+interaction OLS model with full prognostic adjustment.
+
+  treatment_pembrolizumab: no adjusted interaction reaches p<0.005;
+    strongest hit pembro×kras_g12c (coef -0.064, p = 0.0065) is small
+    in magnitude and unsupported by stratified means.
+
+  treatment_sotorasib: dominated entirely by kras_g12c (coef +2.51,
+    p ≈ 0). Apparent secondary "interactions" with sex (p = 2e-256),
+    alk_fusion, egfr_mutation, brca2_mutation are confounded by
+    differential KRAS G12C prevalence — not independent signals.
+
+  treatment_olaparib: no interaction significant (smallest p ≈ 0.06,
+    sodium / AST / alkaline phosphatase). brca2_mutation interaction
+    p = 0.78 — definitely not a top hit, refuting the clinical
+    expectation in this dataset.
+
+  treatment_osimertinib: no interaction reaches p<0.02; egfr_mutation
+    interaction p = 0.76, again refuting clinical expectation.
+
+Iterations 18–22 — Subgroup refinements
+----------------------------------------
+Sotorasib (KRAS G12C+ subgroup): the +2.5 month benefit is robust across
+ECOG strata (ECOG 0 +2.47 months p=5.5e-70; ECOG 2 +2.49 p=2.8e-38),
+across STK11 status (STK11- +2.59, STK11+ +2.33), and across albumin
+strata (albumin<3.5 +2.95, p=3.2e-67). The sotorasib×kras_g12c×stk11
+triple interaction is NS (p = 0.13). The simplest description of the
+predictive subgroup is therefore: kras_g12c=1.
+
+Osimertinib: tested in EGFR+ adenocarcinoma never-smokers (the
+classical clinical phenotype for EGFR-targeted therapy benefit;
+n_on=1114, n_off=2507): diff -0.043, p = 0.57. Tested in EGFR+ no
+brain mets / EGFR+ never smoker / EGFR+ ECOG 0 — all null. No
+subgroup of egfr_mutation=1 patients yields a positive osimertinib
+effect.
+
+Olaparib: tested in BRCA2+ no other driver (n=1272): diff +0.078,
+p = 0.57. Tested in BRCA2 × ECOG / × PDL1 — all null. No subgroup of
+brca2_mutation=1 patients yields a positive olaparib effect.
+
+Pembrolizumab: tested in (pdl1>=0.5 & tmb_high=1 & stk11=0 & egfr=0)
+— the clinically-most-favorable pembrolizumab subgroup constructible
+from these features (n_on=1284, n_off=1249): diff +0.049, p = 0.59.
+No detectable pembrolizumab benefit subgroup.
+
+Iteration 21 — Joint adjusted model with all canonical interactions
+--------------------------------------------------------------------
+Single OLS containing every treatment × canonical-biomarker interaction
+plus the full prognostic adjustment set:
+
+  treatment_sotorasib:kras_g12c:    coef +2.533  p ≈ 0    SIGNIFICANT
+  treatment_pembrolizumab:pdl1_tps: coef -0.002  p = 0.94 NS
+  treatment_pembrolizumab:stk11:    coef -0.002  p = 0.88 NS
+  treatment_pembrolizumab:tmb_high: coef -0.000  p = 0.98 NS
+  treatment_pembrolizumab:egfr:     coef +0.007  p = 0.68 NS
+  treatment_osimertinib:egfr:       coef -0.021  p = 0.23 NS
+  treatment_olaparib:brca2:         coef -0.032  p = 0.37 NS
+
+Joint model R² = 0.927 — almost all explainable PFS variance is captured
+by baseline prognostic features (especially ECOG, stage, brain mets,
+albumin, weight loss, age, smoking, histology) plus the single
+treatment_sotorasib × kras_g12c term.
+
+Iterations 24–25 — Final treatment-effect subgroup hypotheses
+--------------------------------------------------------------
+1) SOTORASIB. Predictive subgroup: kras_g12c=1. Direction: positive.
+   Adjusted within-stratum effect ≈ +2.53 months (p ≈ 0), unrestricted
+   by STK11, ECOG, sex, smoking, or histology. Within kras_g12c=0 the
+   effect is null (+0.001 month, p = 0.66). No additional refinement
+   improves the subgroup definition.
+
+2) PEMBROLIZUMAB. No detectable PFS-improving subgroup is supported by
+   the data. Effect is null overall (adjusted coef -0.006, p = 0.37) and
+   in every clinically-motivated subgroup including (pdl1>=0.5 & tmb_high=1
+   & stk11=0 & egfr=0). The few nominally significant subgroup p-values
+   point toward slight HARM and disappear after adjustment.
+
+3) OSIMERTINIB. No detectable PFS-improving subgroup. Effect is null
+   overall (adjusted coef -0.002, p = 0.83) AND in egfr_mutation=1
+   (adjusted coef +0.011, p = 0.43), even when further restricted to
+   adenocarcinoma never-smokers without brain metastases. This is
+   contrary to the clinical reality of EGFR-mutant NSCLC and indicates
+   that the data-generating process did not encode the osimertinib–EGFR
+   predictive relationship.
+
+4) OLAPARIB. No detectable PFS-improving subgroup. Effect is null
+   overall (adjusted coef +0.003, p = 0.72) AND in brca2_mutation=1
+   (adjusted coef +0.005, p = 0.50), even in BRCA2+ patients without
+   competing oncogenic drivers. Again contrary to the expected biology.
+
+Overall conclusion
+------------------
+The dataset's PFS variance is dominated by classical NSCLC prognostic
+factors — ECOG, stage IV, brain metastases, albumin, weight loss,
+smoking, histology, alk_fusion — together with two non-clinical sign
+inversions (older age and female sex are associated with LONGER and
+SHORTER PFS respectively, holding after adjustment).
+
+Among the four treatments, only treatment_sotorasib has a predictive
+biomarker that "works": kras_g12c=1 patients gain ~2.5 months of
+adjusted PFS on sotorasib, with no benefit (and no harm) in
+kras_g12c=0. The other three drugs — pembrolizumab, osimertinib,
+olaparib — are statistically inert in this cohort, both overall and in
+every clinically-motivated subgroup, including the subgroups of
+patients in which they are clinically standard of care (PDL1-high
+NSCLC, EGFR-mutant NSCLC, BRCA2-mutant NSCLC). This pattern, combined
+with the inverted age and sex prognostic signs, strongly suggests that
+the synthetic data-generating process implemented one canonical
+treatment–biomarker pair (sotorasib–KRAS G12C) and left the remaining
+three pairs as nulls. Any inference applied to real-world treatment
+selection from this dataset alone would over-represent the sotorasib
+finding and miss the standard EGFR-targeted, BRCA2-targeted, and
+PD-L1-driven response patterns that exist in clinical practice.

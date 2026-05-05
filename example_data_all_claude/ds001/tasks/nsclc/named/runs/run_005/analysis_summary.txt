@@ -1,0 +1,187 @@
+Analysis Summary — ds001_nsclc (50,000 NSCLC patients; outcome = pfs_months)
+============================================================================
+
+OVERVIEW
+
+The dataset contains 50,000 NSCLC patients with a single continuous outcome
+(pfs_months, mean 3.43, range 0–15.3), 33 features, and four treatments
+(pembrolizumab 50%, sotorasib 35%, olaparib 30%, osimertinib 30%). Patients
+can carry more than one treatment indicator. Treatment assignment is
+essentially uncorrelated with the canonical biomarker (P(osim|EGFR+)=0.30
+≈ P(osim|EGFR-)=0.30, etc.), consistent with random/quasi-random allocation
+across the cohort.
+
+I ran 25 iterations of propose–test–refine, beginning with main effects of
+each feature on PFS, then probing each treatment overall, then performing
+biomarker-matched subgroup and interaction analyses, exhaustive
+(treatment × feature) interaction screens, T-learner gradient-boosting ITE
+estimation, regression-tree heterogeneity discovery, two-feature subgroup
+sweeps for the three null treatments, and finally a fully adjusted
+multivariable model that captures the entire treatment-effect structure
+with R²=0.975.
+
+KEY FINDING — SOTORASIB IS A POWERFUL TARGETED THERAPY IN A NARROW SUBGROUP
+
+The single dominant treatment-effect signal in the data is sotorasib in
+KRAS-G12C-positive males without brca2_mutation and without alk_fusion.
+The effect builds up monotonically as restrictions are added:
+
+  • Overall sotorasib effect:                     +0.32 months (p<1e-48)
+  • Within KRAS G12C+ (n=6368):                   +2.55 months (p~1e-202)
+  • Within KRAS G12C+, sex_female=0 (n=3508):     +4.64 months
+  • Within KRAS G12C+ male, brca2_mutation=0
+    (n=3401):                                     +4.73 months (adj)
+  • Within KRAS G12C+ male, alk_fusion=0
+    (n=3370):                                     +4.75 months (adj)
+  • Final responder subgroup
+    (KRAS G12C+ ∧ male ∧ brca2- ∧ alk-) (n=3266): +4.91 months (adj),
+        unadjusted means 8.23 (treated) vs 3.25 (untreated), p<<1e-300
+
+Within this responder subgroup the effect is stable across every other
+feature stratum (smoking, histology, ECOG, stage, brain mets, TMB, EGFR,
+STK11), with subgroup sotorasib effects all between +4.7 and +5.2 months.
+Outside this subgroup, sotorasib has no measurable effect:
+  - KRAS G12C-negative:           diff=-0.005 (p=0.80)
+  - KRAS G12C+ female:            diff=-0.012 (p=0.88)
+  - KRAS G12C+ male brca2+:       diff=-0.07  (p=0.89)
+  - KRAS G12C+ male alk_fusion+:  diff=-0.29  (p=0.50)
+
+A fully adjusted multivariable model with the four-way interaction
+structure recovers the same picture in a single regression
+(treatment_sotorasib:kras_g12c=+4.77, soto:kras:sex_female=-4.59,
+soto:kras:brca2_mutation=-2.74, soto:kras:alk_fusion=-2.41; all p<<1e-300;
+R²=0.975).
+
+A T-learner gradient-boosting estimator produced individual treatment
+effects (ITE) whose mean was +4.16 months in the canonical responder
+subgroup and +0.05 months everywhere else, and a regression tree fit on
+those ITE values split first on kras_g12c, then on sex_female, with all
+four KRAS+/male leaves showing ITE ≈ +4 and all other leaves ≈ 0. This
+non-parametric heterogeneity search converges on the same definition.
+
+THREE NULL TREATMENTS
+
+Pembrolizumab, olaparib, and osimertinib show no clinically meaningful
+benefit anywhere in the dataset. None of these treatments produces a
+positive effect overall, in their canonical biomarker subgroup, after
+multivariable adjustment, or in two-feature subgroup sweeps:
+
+  • Pembrolizumab overall:                  -0.035 months (p=0.08)
+  • Pembrolizumab in TMB-high:              -0.048 (p=0.20)
+  • Pembrolizumab in PD-L1 quartile 4:      -0.072 (p=0.07; if anything
+                                            slightly negative)
+  • Pembrolizumab × PD-L1 × TMB triple
+    interaction (adjusted):                 all coefficients p>0.12
+  • Olaparib overall:                       -0.025 (p=0.26)
+  • Olaparib in BRCA2+:                     +0.010 (p=0.93)
+  • Olaparib × BRCA2 × sex 3-way (adj):     all coefficients p>0.35
+  • Osimertinib overall:                    +0.004 (p=0.87)
+  • Osimertinib in EGFR+:                   -0.014 (p=0.81)
+  • Osimertinib × EGFR (adj):               -0.017 (p=0.47)
+
+In the fully adjusted final model these three treatments have main
+effects within |0.01| months and p>0.1, confirming their nullity even
+after removing the sotorasib heterogeneity from the residual.
+
+An exhaustive sweep of two-feature subgroups (n≥200, |Δ|>0.15, p<0.05)
+turned up only small, unreplicating cells — the strongest were
+pembrolizumab in (KRAS+, stage III) at -0.46 months (p=1.5e-4), olaparib
+in (EGFR+, STK11+) at +0.33 (p=0.03), and osimertinib in (BRCA2+, TMB
+low) at -0.40 (p=4e-3); none survived multiple comparisons or replicated
+in adjusted models, and no positive >0.5-month effect for any of these
+three treatments emerged in any subgroup.
+
+There were no significant pairwise treatment-by-treatment interactions
+(all six pair coefficients within |0.012| with p>0.13), so combining
+treatments did not unlock additional benefit.
+
+PROGNOSTIC ARCHITECTURE
+
+After full multivariable adjustment (R²=0.89 main-effects only, 0.97
+with the sotorasib interaction structure), the prognostic landscape is:
+
+  Strong negative prognostic factors
+    • ecog_ps:                  -1.10 months per ECOG unit
+    • stage_iv:                 -1.42 months
+    • has_brain_mets:           -0.91 months
+    • histology=squamous:       -0.72 months (vs adenocarcinoma)
+    • smoking_status=current:   -0.39 vs never (former vs never +0.09)
+    • weight_loss_pct_6mo:      -0.073 months per percentage point
+    • sex_female:               -0.20 months (mostly explained by the
+                                lost sotorasib benefit in KRAS+
+                                females; sex coefficient drops to ~0
+                                when the analysis is restricted to
+                                KRAS-)
+    • ldh_u_l:                  -0.0004 per U/L (small but significant)
+    • brca2_mutation:           -0.11 months
+
+  Strong positive prognostic factor
+    • age_years:                +0.169 months per year. The
+                                age–PFS relationship is monotone across
+                                quartiles (Q1=1.33, Q2=2.78, Q3=3.97,
+                                Q4=5.69) and persists with full
+                                adjustment. The effect is somewhat
+                                attenuated in stage IV / brain-mets /
+                                higher-ECOG patients (interaction
+                                coefficients ~-0.014/yr per poor-
+                                prognosis feature), but the per-year
+                                slope stays positive throughout.
+    • albumin_g_dl:             +0.46 months per g/dL
+
+  Non-prognostic features (after adjustment)
+    • pdl1_tps (linear and quadratic, both p>0.7)
+    • tmb_high (p=0.47)
+    • hemoglobin, AST, ALT, total bilirubin, creatinine, BUN,
+      sodium, potassium, calcium, alkaline phosphatase, CRP, NLR — all
+      |coef|<0.001 in standardized form, p>0.10
+    • alk_fusion (after sotorasib structure removed): -0.03 (p=0.001
+      tiny) — modestly negative
+    • stk11_mutation: -0.02 (p=0.04) — essentially nil
+    • egfr_mutation:  ~0 (p=0.96) — no prognostic effect
+
+A small histology × kras_g12c interaction (squamous × KRAS+ = +0.024,
+p=0.027) was detected but is clinically negligible.
+
+WHAT WAS SUPPORTED VS. REFUTED
+
+Supported:
+  • Sotorasib is highly active in KRAS G12C+ males without brca2 or
+    alk_fusion alterations (refined responder subgroup identified by
+    cumulative restriction; verified by adjusted OLS, T-learner ITE,
+    and regression-tree heterogeneity search).
+  • Strong prognostic effects of age, ECOG, stage, brain mets, albumin,
+    weight loss, smoking status, histology.
+  • Multivariable model (R²=0.97) cleanly captures the entire treatment
+    heterogeneity within a single 4-way interaction structure for
+    sotorasib and zero main effects for the other three drugs.
+
+Refuted:
+  • Osimertinib benefit in EGFR-mutated patients (no effect anywhere).
+  • Olaparib benefit in BRCA2-mutated patients (no effect).
+  • Pembrolizumab benefit in PD-L1-high or TMB-high subgroups (no
+    effect; tiny negative drift).
+  • Treatment assignment driven by biomarker status (assignment is
+    independent of biomarker).
+  • Any treatment-by-treatment synergy.
+  • PD-L1 TPS or TMB-high carrying any prognostic information.
+
+FINAL BEST-SUPPORTED TREATMENT-EFFECT SUBGROUP HYPOTHESIS (single
+outcome pfs_months)
+
+  Treatment:        treatment_sotorasib
+  Outcome:          pfs_months
+  Direction:        increased pfs_months (positive effect)
+  Subgroup:         kras_g12c = 1
+                    AND sex_female = 0
+                    AND brca2_mutation = 0
+                    AND alk_fusion = 0
+  Effect size:      +4.91 months (adjusted; ~+5.0 unadjusted)
+  Subgroup size:    n = 3,266 (~6.5% of cohort)
+  Statistical
+  evidence:         p << 1e-300; consistent across all further
+                    stratifications within this subgroup; effect is
+                    abolished by removing any of the four predicates
+                    (KRAS-G12C-status, male sex, brca2-WT, alk-WT).
+
+No comparable treatment-effect subgroup is supported for pembrolizumab,
+olaparib, or osimertinib in this dataset.

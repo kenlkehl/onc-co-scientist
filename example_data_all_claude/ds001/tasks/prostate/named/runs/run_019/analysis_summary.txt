@@ -1,0 +1,291 @@
+ds001_prostate — Analysis summary
+==================================
+
+Cohort: 50,000 patients with prostate cancer (sex_female=0 in all rows). Single
+binary outcome `objective_response`; baseline rate 24.0%. Six binary treatment
+flags (enzalutamide, abiraterone, docetaxel, olaparib, lu177_psma, pembrolizumab),
+four binary biomarkers (brca2_mutation, ar_v7_positive, msi_high, psma_high), and
+~25 demographic / lab / disease-status features. Treatment prevalences: enza 40%,
+abi 30%, doce 30%, lu177 15%, ola 10%, pem 5%. mCRPC 55%, visceral mets 20%,
+ECOG 0/1/2 = 35/50/15%.
+
+
+HEADLINE FINDING
+================
+Of the six treatments, only **enzalutamide** has a real treatment effect on
+objective_response in this dataset, and that effect is concentrated in a
+specific subgroup. The other five treatments (abiraterone, docetaxel, olaparib,
+lu177_psma, pembrolizumab) show no detectable response benefit overall and no
+biomarker subgroup with a clinically meaningful, replicable benefit emerged from
+single-feature, pairwise, three-way, exhaustive 1-2-feature, or random-forest
+HTE searches.
+
+The canonical enzalutamide responder subgroup is:
+
+    mcrpc = 0  AND  ar_v7_positive = 0   (n = 18,000; 36% of cohort)
+
+Within this subgroup:
+  ORR enzalutamide+  = 0.717
+  ORR enzalutamide-  = 0.171
+  Difference         = +0.546 percentage points (p ≈ 0)
+
+Outside this subgroup (mcrpc=1, OR ar_v7_positive=1) the enzalutamide treatment
+effect is essentially zero (differences of 0.005-0.014, all p > 0.08). The
+three-way logistic interaction enzalutamide × mcrpc × ar_v7_positive has
+coef = +2.38, p = 9.6e-84 (unadjusted) and coef = +2.45, p = 7.3e-87 after full
+adjustment for clinical, lab, biomarker, and other-treatment covariates (i22).
+
+
+ITERATION-BY-ITERATION WALKTHROUGH
+==================================
+
+Iter 1 — Treatment main effects on objective_response.
+  enzalutamide: ORR 0.361 vs 0.159 (diff +0.202, p ≈ 0)  -- striking
+  abiraterone: 0.238 vs 0.241 (NS)
+  docetaxel:  0.240 vs 0.240 (NS)
+  olaparib:   0.239 vs 0.240 (NS)
+  lu177_psma: 0.243 vs 0.240 (NS)
+  pembrolizumab: 0.239 vs 0.240 (NS)
+  Conclusion: only enzalutamide has a non-zero average effect; this raised the
+  question of which subgroup carries the signal and whether the other drugs
+  have biomarker-specific effects.
+
+Iter 2 — Disease-status main effects.
+  Higher ECOG performance status, mCRPC status, visceral metastases, and higher
+  Gleason score are all associated with lower ORR (all p < 1e-50 except
+  visceral mets which is also highly significant).
+
+Iter 3 — Continuous lab/feature univariates.
+  Lower albumin, higher LDH, higher CRP, higher NLR, higher ALP, more weight
+  loss, lower hemoglobin, higher PSA, and older age are each associated with
+  lower ORR (all p ≪ 0.001). Sodium, potassium, calcium, creatinine, BUN,
+  bilirubin, AST, ALT show smaller effects (some weakly significant).
+
+Iter 4 — Canonical biomarker × treatment interactions.
+  enzalutamide × ar_v7_positive: interaction coef = -1.24, p = 1.4e-93
+    AR-V7 NEGATIVE: enza 0.411 vs control 0.160 (diff +0.25)
+    AR-V7 POSITIVE: enza 0.165 vs control 0.157 (diff +0.01)
+  olaparib × brca2_mutation: NEGATIVE interaction (coef -0.29, p=0.045)
+    olaparib's effect is *worse* in BRCA2-mutated patients (clinically opposite
+    of the FDA label).
+  pembrolizumab × msi_high: no interaction (p = 0.96)
+  lu177_psma × psma_high: no interaction (p = 0.36)
+  abiraterone × ar_v7_positive: no interaction (p = 0.33)
+  docetaxel × ar_v7_positive: no interaction (p = 0.86)
+
+Iter 5 — Biomarker prognostic main effects.
+  brca2_mutation: ORR 0.150 vs 0.250 (diff -0.10, p = 5e-56)
+  ar_v7_positive:  ORR 0.160 vs 0.260 (diff -0.10, p = 2e-98)
+  msi_high:        ORR 0.176 vs 0.242 (diff -0.07, p = 3e-9)
+  psma_high:       ORR 0.239 vs 0.243 (NS)
+  -> BRCA2, AR-V7, and MSI-high are *prognostically negative* (regardless of
+     treatment), not predictive of treatment benefit.
+
+Iter 6 — Three-way interactions for the canonical biomarker-treatment pairings,
+adding mcrpc as a third axis.
+  olaparib × brca2 × mcrpc: 3-way coef -0.25, p = 0.38 (NS); within
+    BRCA-mut + mcrpc subgroup, olaparib trends *negative* (0.111 vs 0.152,
+    p = 0.07).
+  pembrolizumab × msi × mcrpc: 3-way coef -1.35, p = 0.04, BUT within MSI+mcrpc
+    pembrolizumab trends LOWER ORR (0.089 vs 0.161, p = 0.28).
+  lu177 × psma × mcrpc: 3-way coef +0.23, p = 0.07; within psma_high+mcrpc
+    cell ORR diff is just +0.009 (p = 0.25).
+  -> No 3-way subgroup salvages a positive effect for these three drugs.
+
+Iter 7 — Single-feature stratified screens for every treatment.
+  enzalutamide: largest effects in mcrpc=0 (+0.44), psa_ng_ml<=median (+0.31),
+    ar_v7=0, ecog=0/1, etc. — confirming enza signal localized to those cells.
+  abi, doce, ola, lu177, pem: ZERO single-feature subgroups with significant
+    *positive* treatment effects under p<0.05; some weakly significant negative
+    subgroups.
+
+Iter 8 — Pairwise (biomarker=1 ∩ biomarker=1) screens for ola/pem/lu177:
+  No subgroup with significant positive effect.
+
+Iter 9 — Continuous-modifier interaction screens for enzalutamide.
+  enza × ecog_ps coef = -0.71, p ≈ 0 (effect smaller as ECOG worsens)
+  enza × psa_ng_ml coef ≈ -0.013, p ≈ 0 (effect smaller at high PSA)
+  enza × albumin_g_dl coef = +0.17, p < 0.01 (effect larger at higher albumin)
+  enza × ldh_u_l, alp, crp, nlr, hemoglobin: each p < 0.05 in the expected
+  prognostic direction (better prognosis → larger enza effect), but the
+  dominant modifier remains AR-V7 status across ECOG strata.
+  Within ECOG=0, =1, and =2, enza × ar_v7 interaction p = 9.4e-49, 4.8e-39,
+  4.2e-9 respectively — robust across ECOG.
+
+Iter 10 — Multivariable logistic of objective_response on all features and
+treatments. Significant adjusted predictors include enzalutamide (positive),
+ECOG, mCRPC, brca2_mutation, ar_v7_positive, msi_high, visceral_mets, PSA,
+LDH, ALP, NLR, weight loss, CRP, low albumin, low hemoglobin (all in the
+prognostically expected directions). Other treatment flags remain near 0.
+
+Iter 11 — Refining the enza responder subgroup.
+  enza × mcrpc interaction coef = -1.98, p ≈ 0.
+  enza × mcrpc × ar_v7 3-way coef = +2.38, p = 9.55e-84.
+  Cell-level ORR (enza+ vs enza-, diff):
+    mcrpc=0, arv7=0  -> 0.717 vs 0.171, +0.546 (n=18,000)  ** signal
+    mcrpc=0, arv7=1  -> 0.177 vs 0.163, +0.014 (n= 4,519)  null
+    mcrpc=1, arv7=0  -> 0.159 vs 0.150, +0.008 (n=21,962)  null
+    mcrpc=1, arv7=1  -> 0.155 vs 0.151, +0.005 (n= 5,519)  null
+
+Iter 12 — Triple-feature screens for olaparib/pembrolizumab/lu177 conditioning
+on the canonical biomarker plus pairs of {mcrpc, visceral_mets, ar_v7_positive}.
+  Best positive effects had p > 0.2 in every case. No subgroup reached
+  significance in a positive direction.
+
+Iter 13 — Interaction-coef screens (binary mods).
+  olaparib's strongest binary interaction is brca2_mutation (NEGATIVE, p=0.045).
+  lu177_psma's strongest interaction is visceral_mets (NEGATIVE, p=0.01) —
+  i.e., lu177 trends worse in visceral mets patients (small effect).
+  abiraterone × brca2 interaction is positive at p = 0.03 (modest).
+  pembrolizumab and docetaxel: nothing significant.
+
+Iter 14 — Continuous-modifier interactions for ola/pem/lu177.
+  pembrolizumab × ecog_ps: p=0.07 (effect possibly smaller at higher ECOG).
+  Otherwise nothing surviving p<0.05.
+
+Iter 15 — Random-forest HTE / uplift screen, top decile.
+  enzalutamide top decile (largely mcrpc=0, ar_v7=0): ORR enza+ 0.851 vs
+    enza- 0.141, diff +0.71, p ≈ 0 (confirming the canonical subgroup at
+    higher fidelity).
+  abiraterone, docetaxel, olaparib, lu177_psma, pembrolizumab: top decile shows
+    a positive treated-vs-control difference (0.10-0.21 pp), but the decile is
+    enriched for *good prognosis* features (low PSA, low ECOG, high albumin) and
+    treated patients are a small fraction of the decile, so the difference
+    largely reflects which patients receive the drug rather than a causal
+    treatment effect. None of these signals replicate in any single biomarker
+    subgroup, in interaction tests, or in the multivariable model with all
+    treatments included (i10) — those treatment flags are NOT significant
+    predictors of response after adjustment.
+
+Iter 16 — Prognostic confirmation in fully untreated patients.
+  Among the 7,872 patients with all six treatment flags = 0:
+    brca2_mutation=1  ORR 0.150 vs 0.252 (diff -0.10, p = 9e-13) — prognostic
+    ar_v7_positive=1  ORR 0.157 vs 0.262 (diff -0.10, p = 6e-22) — prognostic
+    msi_high=1        ORR 0.166 vs 0.246 (diff -0.08, p = 0.001)  — prognostic
+  -> confirms the negative biomarker associations are not artefacts of
+     treatment selection.
+
+Iter 17 — Exhaustive 1-2 feature subgroup screen (n>=100/cell).
+  olaparib: 0 positive significant subgroups, 4 negative ones (BRCA2+Gleason 7
+    and ECOG 1, etc. — all consistent with olaparib being null or harmful in
+    these subgroups).
+  pembrolizumab: 0 positive, 0 negative significant subgroups.
+  lu177_psma: 5 positive significant subgroups, but absolute differences
+    +0.03-+0.07 in odd cells (mcrpc=1+Gleason10, ECOG=0+Gleason9, etc.); none
+    survive multiple-comparison adjustment and none correspond to PSMA-high.
+  abiraterone: 3 positive subgroups all anchored on brca2_mutation=1; absolute
+    effect size +0.025 to +0.05.
+  docetaxel: 2 positive (small +0.04-+0.06), 2 negative subgroups; mixed
+    weak signals only.
+
+Iter 18 — Within the canonical enzalutamide responder cell, enza effect is
+uniformly very large (>0.45 ORR difference) across visceral mets, brca2,
+msi_high, psma_high, ECOG 0/1/2, and Gleason 6-10. No additional binary
+feature reduces the enza effect to near zero, and no continuous lab modifier
+substantially attenuates it.
+
+Iter 19 — In mcrpc=0 only, the enza × ar_v7 interaction remains strongly
+negative (coef ≈ -1.5, p ≪ 0.001) after adjusting for age, ECOG, visceral
+mets, PSA, Gleason, albumin, LDH, hemoglobin, ALP — confirms ar_v7 modifies
+the enza effect independently of confounders.
+
+Iter 20 — Pairwise treatment-treatment interactions: none show significant
+synergy or antagonism for ORR, suggesting treatments act independently.
+
+Iter 21 — Final per-treatment hypotheses crystallized:
+  enzalutamide: BENEFIT in mcrpc=0 AND ar_v7_positive=0; ORR diff +0.546.
+  abiraterone:  no overall main effect; weak positive trend in BRCA2-mut.
+  docetaxel:    no overall main effect; no subgroup signal.
+  olaparib:     no overall main effect; trend toward HARM in BRCA2-mut
+                (subgroup ORR 0.121 vs 0.153, p = 0.058) — opposite of the
+                clinical expectation for a PARP inhibitor.
+  lu177_psma:   no overall main effect; no signal within psma_high.
+  pembrolizumab: no overall main effect; no signal within msi_high.
+
+Iter 22 — Adjusted three-way interaction enza × mcrpc × ar_v7 (with all other
+treatments and clinical/lab covariates): coef = +2.45, p = 7.3e-87. Effect
+remains highly robust. Within the reference cell (mcrpc=0, ar_v7=0), the
+adjusted enza coef is +2.57 (huge OR ≈ 13).
+
+
+PROGNOSTIC vs PREDICTIVE STRUCTURE OF THE DATASET
+=================================================
+Prognostically negative (lower baseline ORR) and confirmed in patients with no
+treatment exposure:
+  - higher ECOG, mCRPC, visceral mets, higher Gleason
+  - higher PSA, lower albumin, lower hemoglobin
+  - higher LDH, higher ALP, higher CRP, higher NLR, more weight loss
+  - brca2_mutation, ar_v7_positive, msi_high  (each ~0.10 pp lower ORR)
+  - psma_high: NOT prognostic (essentially neutral)
+
+Predictive (modifies treatment effect):
+  - mcrpc and ar_v7_positive both predictively modify enzalutamide:
+      enzalutamide effect ≈ +0.55 ORR in mcrpc=0 AND ar_v7=0,
+      and ≈ 0 in any other combination of those two variables.
+  - No other biomarker × treatment interaction reproducibly identifies
+    a positive responder subgroup in this dataset, including the clinically
+    expected pairings (olaparib × BRCA2, pembrolizumab × MSI, lu177 × PSMA).
+    olaparib × BRCA2 is in the *opposite* direction to the clinical
+    expectation (slight harm).
+
+
+HYPOTHESES SUPPORTED vs REFUTED (summary)
+==========================================
+SUPPORTED:
+  - enzalutamide produces a large objective_response increase in
+    mcrpc=0 AND ar_v7_positive=0 patients (best-supported subgroup).
+  - enzalutamide × mcrpc × ar_v7_positive 3-way interaction is real
+    (p ~ 1e-87 adjusted).
+  - brca2_mutation, ar_v7_positive, msi_high are prognostically associated
+    with lower ORR.
+  - Standard sickness markers (ECOG, mCRPC, visceral mets, low albumin, high
+    LDH, high CRP, high NLR, low hemoglobin, weight loss, high ALP, high PSA)
+    are all associated with lower ORR.
+
+REFUTED (or not supported by the data):
+  - Olaparib improves ORR in BRCA2-mutated patients — REFUTED (trend opposite).
+  - Pembrolizumab improves ORR in MSI-high patients — REFUTED (no effect).
+  - Lu177-PSMA improves ORR in PSMA-high patients — REFUTED (no effect).
+  - Abiraterone has a major main effect or biomarker subgroup — REFUTED
+    (weak BRCA-mut subgroup signal at best).
+  - Docetaxel has a detectable response benefit — REFUTED (no signal).
+
+
+FINAL BEST-SUPPORTED TREATMENT-EFFECT SUBGROUPS
+================================================
+For each treatment with usable variation, the best-supported claim about
+treatment-effect heterogeneity, naming all relevant predicates, is:
+
+  treatment_enzalutamide :
+      Treatment effect on objective_response is concentrated in patients
+      with mcrpc=0 AND ar_v7_positive=0.
+      Within that subgroup ORR rises from 0.171 (no enzalutamide) to 0.717
+      (enzalutamide), a +0.55 absolute increase (p ≈ 0).
+      In any subgroup containing mcrpc=1 OR ar_v7_positive=1, the
+      enzalutamide effect is statistically and clinically null.
+
+  treatment_abiraterone :
+      No subgroup with a clinically meaningful positive treatment effect
+      identified. The largest signal is in brca2_mutation=1 (subgroup
+      ORR 0.164 vs 0.143, diff +0.02, p = 0.06), which is small and not
+      statistically supported after correction.
+
+  treatment_docetaxel :
+      No subgroup with a clinically meaningful positive treatment effect
+      identified across single-feature, pairwise, three-way, exhaustive
+      1-2 feature, RF-uplift, and continuous-modifier searches.
+
+  treatment_olaparib :
+      No subgroup with a positive treatment effect. Direction in the
+      canonical brca2_mutation=1 subgroup is *negative* (ORR 0.121 vs 0.153,
+      p = 0.06).
+
+  treatment_lu177_psma :
+      No subgroup with a clinically meaningful positive treatment effect.
+      Within the canonical psma_high=1 subgroup, ORR difference is -0.001
+      (p = 0.88).
+
+  treatment_pembrolizumab :
+      No subgroup with a clinically meaningful positive treatment effect.
+      Within the canonical msi_high=1 subgroup, ORR difference is +0.001
+      (p = 1.0).

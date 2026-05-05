@@ -1,0 +1,186 @@
+Analysis Summary -- ds001_breast (n = 50,000; outcome = pfs_months)
+===================================================================
+
+Cohort overview
+---------------
+* 50,000 patients, 37 anonymized features, single continuous outcome pfs_months (mean 4.69, SD 2.50, range 0-16.7).
+* 18 binary features (0/1), one ordinal (feature_005, levels 0/1/2), 18 continuous features.
+* No missing data.
+
+Approach
+--------
+We progressed from univariate effect estimation through multivariable regression to systematic
+treatment-effect heterogeneity searches, then to multi-feature subgroup definitions for the single
+identified treatment. All p-values are two-sided. Effect estimates are signed differences in
+pfs_months on the natural scale.
+
+1. Univariate associations (iter 1-2)
+-------------------------------------
+Strongest binary effects (mean PFS difference, "1" minus "0", all with very small p-values):
+
+   feature_006   -1.54 mo  (n1=14,969)
+   feature_013   +1.10 mo  (n1=17,428)
+   feature_001   -1.05 mo  (n1=5,090)
+   feature_028   -0.56 mo  (n1=17,365)
+   feature_029   +0.57 mo  (n1=34,886)
+   feature_018   -0.46 mo  (n1=9,060)
+   feature_023   +0.36 mo  (n1=31,954)
+   feature_016   +0.11 mo  (n1=18,543, marginal)
+
+Other binaries (feature_011, _030, _019, _009, _026, _015, _022, _008, _032, _020) had no
+detectable univariate signal (|d|<=0.07 mo, p>0.01).
+
+Ordinal feature_005 was strongly inversely related: PFS = 5.64, 4.44, 3.29 at levels 0/1/2
+(slope -1.18 per level, p ~ 0).
+
+The dominant CONTINUOUS predictor was feature_012 (range 30-90, mean 65): Spearman rho = +0.726,
+slope +0.176 mo per unit; PFS rises from 2.28 mo (Q1: 30-56.5) to 7.21 mo (Q5: 73.6-90).
+Other continuous predictors with significant signal: feature_024 (+0.50 mo/unit, rho +0.10),
+feature_004 (-0.075 mo/unit, rho -0.12), feature_033 (-0.019 mo/unit, rho -0.08, but its main
+effect is largely conditional -- see below), feature_031 (small negative).
+
+2. Multivariable OLS (iter 3)
+-----------------------------
+A full OLS using all 37 features explained R^2 = 0.792 of variance. Independent significant
+predictors (all p<1e-15) ranked by |t|: feature_012, feature_005, feature_006, feature_013,
+feature_001, feature_004, feature_028, feature_024, feature_033, feature_029, feature_018,
+feature_031. The remaining 25 features were not significant after mutual adjustment.
+
+3. Structure among predictors (iter 4)
+--------------------------------------
+* feature_029 and feature_023 were strongly correlated (phi = 0.67; 85% of feature_029 = 1
+  patients also had feature_023 = 1).
+* feature_018 = 1 NEVER co-occurred with feature_016 = 1 in the same patient (mutual exclusion;
+  9,060 patients have feature_018 = 1, all of whom have feature_016 = 0).
+* All 18 binary features were independent of feature_005 (prevalences within +-0.01 across
+  the three feature_005 strata).
+
+4. Pairwise interaction screen (iter 5)
+---------------------------------------
+A binary x binary interaction screen on pfs_months found a tight cluster of strong interactions
+all involving feature_013:
+
+   f013 x f029  =  +1.59  (p = 9e-229)
+   f013 x f028  =  -1.62  (p = 4e-255)  [largest]
+   f013 x f018  =  -1.36  (p = 2e-118)
+   f013 x f023  =  +1.09  (p = 3e-117)
+   f013 x f016  =  +0.42  (p = 9e-19)
+
+No other binary x binary pair had |interaction| > 0.18 with p < 1e-3. Binary x ordinal
+(feature_005) interactions were essentially null (best p = 0.04, |coef| < 0.09). Continuous
+modifiers showed one dominant signal: f013 x f033 = -0.0524 per unit (p = 1e-174), with smaller
+echoes (f028 x f033, f029 x f033, f018 x f033) all consistent with feature_033 being a
+modifier in the feature_013-active subgroup.
+
+5. Stratified discovery of the responder cell (iter 6-9)
+--------------------------------------------------------
+Stratifying feature_013's effect on pfs_months by feature_029 alone showed:
+   f029 = 0:  feature_013 effect = -0.02 mo (p = 0.63)  -- no benefit
+   f029 = 1:  feature_013 effect = +1.58 mo (p ~ 0)
+
+Adding feature_018:
+   f029=1, f018=0:  +1.92 mo (p ~ 0, n = 28,589)
+   f029=1, f018=1:  +0.02 mo (p = 0.71)
+
+Adding feature_028:
+Across the 8 cells of (f029, f018, f028), only the (f029=1, f018=0, f028=0) cell shows benefit
+(+2.91 mo, n = 18,681); all other 7 cells have |Δ| < 0.13, p > 0.2.
+
+Adding feature_033 by deciles within that 3-way responder cell:
+   f033 deciles 1-6 (range 1.0-14.6): feature_013 effect = +4.0 to +5.1 mo, all p < 1e-150
+   f033 deciles 7-10 (range >= 14.7): feature_013 effect ~ 0 in every decile
+
+A grid search over cutoffs gave a sharp threshold near feature_033 = 14:
+   in (f029=1, f018=0, f028=0, f033 <= 14):  feature_013 Δ = +4.94 mo (n = 10,828, p ~ 0)
+   in (f029=1, f018=0, f028=0, f033  > 14):  feature_013 Δ = +0.02 mo (n =  7,853, p = 0.62)
+
+6. Final responder definition (iter 17, 25)
+-------------------------------------------
+   Subgroup:        feature_029 = 1 AND feature_018 = 0 AND feature_028 = 0 AND feature_033 <= 14
+   Subgroup size:   10,828 patients (21.7% of cohort)
+   Effect of f013:  Δ pfs_months = +4.94 mo (4.285 -> 9.228)
+   Outside subgroup: Δ = +0.007 mo, not significant (p = 0.75)
+
+   feature_023 is a redundant proxy for feature_029 (phi 0.67) and adds no predictive
+   information once feature_029 is conditioned on; it is therefore not part of the predicate.
+
+   Sensitivity: dropping any one of the four predicates strictly dilutes the effect:
+       drop f028=0:   Δ falls to ~+3.4
+       drop f018=0:   Δ falls to ~+2.7
+       drop f33<=14:  Δ falls to ~+2.7
+       drop f029=1:   Δ falls below +2.0
+   This indicates all four are required for clean enrichment.
+
+7. Properties of the non-treatment features (iter 11-12, 19, 22)
+----------------------------------------------------------------
+feature_001 (-1.05 mo univariate, n1 = 5,090) showed a uniformly negative effect across
+every (feature_029, feature_018) cell (-1.08, -1.07, -1.06, -0.95) and across feature_005 levels
+(-1.06, -1.08, -0.87). It had NO significant interaction with any other binary (smallest p = 0.06).
+Conclusion: feature_001 is a uniform PROGNOSTIC marker.
+
+feature_006 (-1.54 mo) showed a similarly homogeneous effect across feature_005 (-1.60, -1.51,
+-1.48). The only continuous interaction was a small one with feature_012 (-0.011 per unit;
+~ -0.66 mo extra at feature_012 = 90 vs 30). It is essentially a uniform PROGNOSTIC marker.
+
+feature_028 had a univariate main effect of -0.56 mo, but the entire effect is conditional on the
+treatment-receiving responder profile: across the 8 cells of (f029, f018, f013), feature_028
+has zero impact (p > 0.2) in 7 cells and a -2.85 mo effect (p ~ 0) ONLY in the cell
+(f029 = 1, f018 = 0, f013 = 1). It is a NEGATIVE PREDICTIVE BIOMARKER for feature_013 -- silent
+in untreated patients but blocks response in treated responders.
+
+feature_018 and feature_029 also have no detectable prognostic effect once the responder x
+treatment interaction is included; their univariate effects arise entirely from confounding
+with the responder structure.
+
+8. Joint model (iter 14, 18)
+----------------------------
+With responder = (f029=1 AND f018=0 AND f028=0 AND f033<=14) and a responder x f013
+interaction, the OLS reaches R^2 = 0.9947. Significant additive prognostic coefficients:
+
+   feature_012   +0.177 mo / unit (t = 2157)
+   feature_005   -1.170 mo / level (t = -973)
+   feature_006   -1.557 mo (t = -875)
+   feature_001   -0.971 mo (t = -360)
+   feature_004   -0.078 mo / unit (t = -368)
+   feature_024   +0.488 mo / unit (t = +300)
+   feature_031   -5e-4 mo / unit (t = -51)
+   feature_033   -1e-4 mo / unit (t = -2.0; marginal)
+   responder x f013   +4.977 mo (t = 1203)
+
+After including the interaction, ALL of feature_013, feature_029, feature_018, feature_028,
+feature_023, and the responder term itself become non-significant -- their univariate signals
+are fully explained by the conditional treatment effect. This is the data-generating signature
+of an additive prognostic model with a single conditional treatment effect.
+
+9. Treatment-vs-marker classification
+-------------------------------------
+* TREATMENT (the only one in the cohort):  feature_013 (prevalence 35%; uniformly distributed
+  across all biomarker strata, consistent with experimental assignment).
+* PREDICTIVE BIOMARKERS for feature_013:    feature_029 (positive gating), feature_018 (negative),
+                                            feature_028 (negative), feature_033 (continuous,
+                                            threshold ≈ 14).
+* REDUNDANT PROXY:                          feature_023 (correlated with feature_029).
+* PROGNOSTIC MARKERS (uniform):             feature_006, feature_001, feature_005,
+                                            and the continuous features feature_012, feature_024,
+                                            feature_004, feature_031.
+* NO DETECTABLE SIGNAL:                     feature_011, _030, _019, _009, _026, _015, _022, _008,
+                                            _032, _020, _016, _036, _021, _003, _025, _027, _034,
+                                            _014, _037, _017, _035, _002, _007, _010.
+
+10. Final supported treatment-effect subgroup statement
+-------------------------------------------------------
+In this breast-cancer cohort, the binary therapy feature_013 INCREASES pfs_months by approximately
++4.94 months (95% effect ~ 4.7-5.0 mo across all sub-bins), but ONLY in patients who
+simultaneously satisfy:
+
+      feature_029 = 1   (positive predictive biomarker; benefit absent if = 0)
+   AND feature_018 = 0  (resistance marker; benefit absent if = 1)
+   AND feature_028 = 0  (resistance marker; benefit absent if = 1)
+   AND feature_033 <= 14 (continuous threshold; benefit absent above 14)
+
+Outside this subgroup -- comprising the other ~78% of the cohort -- feature_013 has no
+detectable effect on pfs_months (Δ = +0.007 mo, p = 0.75). The four predicates are jointly
+required: relaxing any one predicate substantially attenuates the estimated effect, indicating
+none is redundant.
+
+This is the central finding for the treatment-effect heterogeneity portion of the brief.

@@ -1,0 +1,190 @@
+Analysis Summary — ds001_breast (n=50,000; outcome: pfs_months)
+================================================================
+
+Approach
+--------
+I ran 25 iterations of propose-test-refine analyses on the dataset, working from
+univariate screens of features against PFS, to multivariable adjustment, to a
+systematic treatment-by-feature interaction screen, to refined subgroup
+definitions for each treatment with usable variation. All analyses used OLS
+regression on PFS in months (the only outcome) and unequal-variance t-tests for
+stratified comparisons.
+
+1. Prognostic features (independent associations with pfs_months)
+-----------------------------------------------------------------
+A multivariable OLS over all 36 features and 6 treatments achieved adjusted
+R^2 = 0.79. Independent prognostic factors with strong direction-consistent
+effects (all p < 1e-15 in the adjusted model):
+
+  - age_years            +0.176 mo per year       (LONGER PFS in older patients;
+                                                   univariate r = +0.70 — by far
+                                                   the dominant prognostic
+                                                   feature in this cohort)
+  - ecog_ps              -1.171 mo per level       (ECOG 0/1/2 means 5.64/4.44/3.29 mo)
+  - stage_iv             -1.549 mo
+  - has_brain_mets       -0.983 mo
+  - weight_loss_pct_6mo  -0.077 mo per %
+  - albumin_g_dl         +0.476 mo per g/dL
+  - ki67_pct             -0.019 mo per %
+  - er_positive          +0.532 mo
+  - her2_positive        -0.471 mo
+  - pik3ca_mutation      -0.582 mo (independent of treatment)
+  - ldh_u_l              -0.0005 mo per U/L
+
+Features without an independent association: sex_female, postmenopausal,
+node_positive, her2_low, brca1_mutation, brca2_mutation, pr_positive,
+tumor_size_cm, crp_mg_l, nlr, hemoglobin_g_dl, ALP, AST, ALT, total bilirubin,
+creatinine, BUN, sodium, potassium, calcium.
+
+The age-PFS relationship is unusually strong and positive — older patients
+have substantially longer PFS in this dataset. I cannot adjudicate whether
+this reflects a biologically real, indolent-disease-of-the-elderly pattern
+or a feature of how this EHR-derived cohort was assembled, but it is a
+robust feature of the data.
+
+2. Treatment main effects (unadjusted)
+--------------------------------------
+  - treatment_palbociclib            +1.098 mo  (p ≈ 0)        ★ STRONG SIGNAL
+  - treatment_tamoxifen              +0.043 mo  (p = 0.077)    null
+  - treatment_trastuzumab            -0.060 mo  (p = 0.029)    null
+  - treatment_olaparib               -0.036 mo  (p = 0.33)     null
+  - treatment_sacituzumab_govitecan  -0.007 mo  (p = 0.85)     null
+  - treatment_pembrolizumab          -0.074 mo  (p = 0.018)    null
+
+Only palbociclib has a meaningful average effect. The very-small significant
+"effects" of trastuzumab and pembrolizumab are in the wrong direction and are
+fully explained by confounding (vanish on adjustment).
+
+3. Adjusted, canonical-subgroup checks for each treatment
+---------------------------------------------------------
+For each drug, I tested its effect within the canonical biomarker subgroup
+where clinical literature would expect benefit, with OLS adjustment for age,
+ecog_ps, stage_iv, has_brain_mets, and other relevant covariates:
+
+  - tamoxifen   in ER+:        +0.008 mo  (p = 0.67)
+  - trastuzumab in HER2+:      +0.006 mo  (p = 0.60)
+  - olaparib    in BRCA1/2+:   +0.044 mo  (p = 0.62)   (unadjusted +0.346, p=0.04
+                                                       — but the marginal signal
+                                                       does not survive
+                                                       covariate adjustment)
+  - sacituzumab in TNBC:       +0.014 mo  (p = 0.32)
+  - pembrolizumab in TNBC:     +0.011 mo  (p = 0.35)
+
+So even the textbook biomarker-matched subgroups show no detectable benefit
+for any of these five drugs in this cohort.
+
+4. Systematic T x B interaction screens
+---------------------------------------
+I ran adjusted OLS with treatment-by-biomarker interactions for all 6 treatments
+crossed with 11 binary biomarkers and 10 continuous biomarkers (medians).
+
+Significant interactions (adjusted, |coef| ≥ 0.1 and p < 0.001) ALL involve
+palbociclib:
+
+  - palbociclib × er_positive       +1.559   (effect concentrated in ER+)
+  - palbociclib × her2_positive     -1.338   (effect abolished in HER2+)
+  - palbociclib × pik3ca_mutation   -1.665   (effect abolished by PIK3CA mut)
+  - palbociclib × pr_positive       +1.030   (correlated with ER+)
+  - palbociclib × her2_low          +0.383   (explained by ER correlation;
+                                              no residual modification once
+                                              ER/HER2/PIK3CA are fixed — see §6)
+  - palbociclib × ki67_pct          -0.0532 per %  (effect declines with rising
+                                                    proliferation index)
+
+No other treatment showed any biomarker interaction passing the same threshold.
+This means the biomarker heterogeneity in this cohort is concentrated entirely
+on palbociclib's effect.
+
+5. Refined palbociclib subgroup
+-------------------------------
+Stratified analyses converged on the following definition:
+
+  Palbociclib effect in ER+/HER2- (n = 28,589):                   +1.92 mo (p ≈ 0)
+  Palbociclib effect in ER+/HER2-/PIK3CA-WT (n = 18,681):         +2.91 mo (p ≈ 0)
+  Palbociclib effect in ER+/HER2-/PIK3CA-mut (n = 9,908):         +0.02 mo (p = 0.62)
+  Palbociclib effect in ER+/HER2-/PIK3CA-WT, by ki67_pct tertile:
+       low   (ki67 < 8.9):                                        +4.94 mo (p ≈ 0)
+       mid   (8.9 ≤ ki67 ≤ 16.5):                                 +3.70 mo (p ≈ 0)
+       high  (ki67 > 16.5):                                       -0.02 mo (p = 0.77)
+
+A cutoff of ki67_pct < 14 cleanly separates "responder" and "non-responder"
+zones inside ER+/HER2-/PIK3CA-WT:
+  ki67 < 14:   palb on 9.228 vs off 4.284 → +4.94 mo (p ≈ 0)
+  ki67 ≥ 14:   palb on 4.388 vs off 4.322 → +0.07  (p = 0.18)
+
+Adjusted OLS within ER+/HER2-/PIK3CA-WT/ki67<14 (n = 10,752) for treatment
+palbociclib, controlling for age, ecog_ps, stage_iv, has_brain_mets,
+weight_loss_pct_6mo, albumin_g_dl, ki67_pct: coef = +4.977 mo, p ≈ 0. The
+adjusted estimate is essentially identical to the raw difference, confirming
+this is not driven by demographic or prognostic confounding.
+
+Leave-one-out verification (each predicate is binding):
+
+  Drop er_positive=1:        +3.526   (loses ~1.4 mo)
+  Drop her2_positive=0:      +4.063   (loses ~0.9 mo)
+  Drop pik3ca_mutation=0:    +3.222   (loses ~1.7 mo)
+  Drop ki67<14:              +2.908   (loses ~2.0 mo)
+
+Removing any predicate substantially reduces the estimated palbociclib benefit
+— so all four are required to define the maximal-effect subgroup. PIK3CA
+mutation and high ki67_pct are the two principal suppressors that turn an
+otherwise-eligible ER+/HER2- patient into a palbociclib non-responder.
+
+6. Modifiers ruled out
+----------------------
+  - Within ER+/HER2-/PIK3CA-WT, her2_low does not further modify the palbociclib
+    effect (palb +2.92 mo with her2_low=1, +2.90 with her2_low=0). The marginal
+    palbociclib×her2_low interaction in §4 is driven by correlation with
+    er_positive.
+  - Within ER+/HER2-/PIK3CA-WT, postmenopausal status does not bind
+    (palb +2.82 postmenopausal vs +3.04 pre-menopausal).
+  - Within ER+/HER2-/PIK3CA-WT, brca1/2, node_positive, has_brain_mets, and
+    stage_iv did not modify the palbociclib effect.
+
+7. Other treatments — heterogeneity searches
+--------------------------------------------
+For each of the other five treatments I ran the same adjusted T×B interaction
+screen (11 binary + 10 continuous biomarkers) and explored canonical
+subgroups (ER+ for tamoxifen; HER2+ and HER2-low for trastuzumab; BRCA1/2+
+for olaparib; TNBC, high CRP, high NLR for sacituzumab and pembrolizumab):
+
+  - Tamoxifen: no subgroup with |effect| ≥ 0.2 mo and p < 0.05 after adjustment.
+  - Trastuzumab: no benefit in HER2+ (-0.079 mo, p=0.15) or HER2-low (-0.016,
+    p=0.73) — surprising relative to clinical expectation but consistent across
+    every cut.
+  - Olaparib: marginal +0.35 mo signal in BRCA1/2+ (p=0.04 unadjusted) does not
+    survive adjustment (+0.044, p=0.62) and is not biologically robust here.
+  - Sacituzumab: weak suggestion in has_brain_mets=1 (within-subgroup +0.16 mo,
+    p=0.18; adjusted T×B coef +0.195, p=0.0019), but the within-subgroup
+    estimate is not significant — exploratory only.
+  - Pembrolizumab: small significant negative interaction with er_positive
+    (-0.075, p=0.028); magnitude trivial and consistent with confounding.
+
+8. Conclusions
+--------------
+A. Palbociclib has a large, biologically interpretable, and adjustment-robust
+   PFS benefit in a sharply defined subgroup of this cohort:
+
+   ★ er_positive=1 AND her2_positive=0 AND pik3ca_mutation=0 AND ki67_pct<14
+     → palbociclib increases pfs_months by ≈ +4.94 mo (adjusted +4.98 mo).
+
+   PIK3CA mutation and high ki67_pct each independently suppress the
+   palbociclib effect; both must be absent for the full benefit to be
+   observed. The overall +1.10-mo main effect of palbociclib in the cohort
+   is the diluted average over a strong responder subgroup and a much
+   larger non-responder population.
+
+B. None of treatment_tamoxifen, treatment_trastuzumab, treatment_olaparib,
+   treatment_sacituzumab_govitecan, or treatment_pembrolizumab shows a
+   biomarker-defined subgroup in this cohort with a meaningful (≥0.2 mo)
+   and adjustment-robust improvement in pfs_months. Either these therapies
+   are simply ineffective in this dataset's case mix, or any benefit is
+   masked by the way the cohort was assembled.
+
+C. The dominant prognostic predictors are age_years (positive, very
+   strong), ecog_ps, stage_iv, has_brain_mets, weight_loss_pct_6mo,
+   albumin_g_dl, ki67_pct, er_positive (positive), her2_positive (negative),
+   pik3ca_mutation (negative, independent of treatment), and ldh_u_l. Many
+   commonly-used prognostic markers (CRP, NLR, hemoglobin, liver enzymes,
+   creatinine, electrolytes, tumor size, node status, menopausal status,
+   sex) had no detectable independent association with PFS in this cohort.

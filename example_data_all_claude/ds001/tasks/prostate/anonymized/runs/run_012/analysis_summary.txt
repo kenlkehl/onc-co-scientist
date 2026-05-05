@@ -1,0 +1,205 @@
+Dataset: ds001_prostate
+Patients: 50,000
+Outcome: objective_response (binary; 24.0% positive overall)
+Iterations performed: 25 (cap)
+
+==============================================================================
+1. SETUP AND BASIC STRUCTURE
+==============================================================================
+The dataset has 32 anonymized patient features plus a binary outcome
+objective_response. One feature (feature_030) is constant (0 for every patient)
+and was discarded. There are no missing values. The cohort is imbalanced:
+12,011 of 50,000 patients (24.0%) achieve an objective response.
+
+The feature column types span binary indicators (0/1), an ordinal feature
+(feature_001, levels 0/1/2), and continuous biomarkers / lab-like values
+(feature_002, _016, _018, _022, _024, _029, _003, _032, _007, _014, _026, etc.).
+
+==============================================================================
+2. UNIVARIATE / MAIN-EFFECT FINDINGS
+==============================================================================
+Univariate associations with objective_response (chi-square for binary,
+Spearman for ordinal/continuous) ranked by p-value:
+
+  feature_013 (binary, prevalence 0.55)   r = -0.193  p ~ 0     **strong**
+  feature_008 (binary, prevalence 0.40)   r = +0.202  p ~ 0     **strong**
+  feature_022 (continuous)                rho = -0.152 p ~ 3e-255 **strong**
+  feature_015 (binary, prevalence 0.20)   r = -0.101  p ~ 2e-98  **strong**
+  feature_001 (3-level ordinal)           rho = -0.081 p ~ 2e-73 **moderate**
+  feature_021 (binary, prevalence 0.10)   r = -0.101  p ~ 5e-56  **moderate**
+  feature_020 (continuous)                rho = -0.049 p ~ 1e-27 small
+  feature_027 (binary, prevalence 0.03)   r = -0.066  p ~ 3e-9   small
+  feature_024 (continuous)                rho = -0.025 p ~ 3e-8  small
+  feature_002 (continuous)                rho = +0.020 p ~ 1e-5  small
+  All other features: p > 0.10 (no marginal association).
+
+feature_008 is the only binary feature with a large *positive* main effect
+(+20 percentage points), consistent with an active treatment indicator. All
+other binary features with non-trivial associations are *negative*, consistent
+with prognostic biomarkers / comorbidities. Subsequent treatment-effect
+heterogeneity analyses therefore use feature_008 as the treatment.
+
+Treatment allocation (feature_008) is approximately balanced with respect to
+each of the candidate modifiers feature_013, feature_015, feature_021,
+feature_027 (P(modifier | feature_008=1) - P(modifier | feature_008=0) is
+within +/-0.003 for every modifier), so the heterogeneity findings below are
+not artifacts of confounded allocation.
+
+==============================================================================
+3. SYSTEMATIC TREATMENT-EFFECT HETEROGENEITY SEARCH
+==============================================================================
+For each non-constant feature f, a logit interaction model
+    objective_response ~ feature_008 + f + feature_008:f
+was compared by likelihood ratio to its no-interaction counterpart. The
+treatment-effect modifiers, ranked by LR statistic:
+
+  feature_013 LR = 1885.4   df=1   p ~ 0
+  feature_015 LR =  426.8   df=1   p ~ 0
+  feature_022 LR =  348.1   df=1   p ~ 0
+  feature_021 LR =  187.5   df=1   p ~ 0
+  feature_027 LR =   85.4   df=1   p ~ 0
+  feature_001 LR =   19.3   df=2   p = 6e-5
+  All other features: LR < 6 (p > 0.02; none survive Bonferroni for ~30 tests).
+
+All five top modifiers point in the same direction: each elevated value
+attenuates the response benefit of feature_008. A separate decision tree
+fit to the feature_008=1 arm (predicting objective_response) splits first on
+feature_013, then on feature_015 and feature_021, independently corroborating
+the resistance-marker structure.
+
+Treatment effect of feature_008 stratified by each modifier (absolute risk
+difference, response rate at feature_008=1 minus at feature_008=0):
+
+  feature_013 = 0:  +0.440   (n=22,519)   feature_013 = 1:  +0.008   (n=27,481)
+  feature_015 = 0:  +0.251   (n=39,962)   feature_015 = 1:  +0.008   (n=10,038)
+  feature_021 = 0:  +0.225   (n=45,004)   feature_021 = 1:  +0.006   (n= 4,996)
+  feature_027 = 0:  +0.209   (n=48,472)   feature_027 = 1:  -0.022   (n= 1,528)
+
+Each marker, when set to 1, abolishes the response benefit of feature_008
+to within +/-0.02 absolute. The four binary modifiers are mutually
+near-independent (all pairwise correlations |r| < 0.005), so they act as
+distinct, non-overlapping resistance markers.
+
+==============================================================================
+4. JOINT INTERACTION MODEL AND COMPOSITE SUBGROUP
+==============================================================================
+A joint logit model with all four interactions entered simultaneously
+    y ~ f008 + f013 + f015 + f021 + f027
+        + f008:f013 + f008:f015 + f008:f021 + f008:f027
+shows that each interaction remains highly significant in the joint fit:
+
+  feature_008                = +2.580    (p ~ 0)
+  feature_008 : feature_013  = -2.199    (p ~ 0)
+  feature_008 : feature_015  = -1.611    (p ~ 0)
+  feature_008 : feature_021  = -1.521    (p ~ 0)
+  feature_008 : feature_027  = -1.653    (p ~ 0)
+
+i.e., presence of any one resistance marker reduces the log-odds treatment
+effect by ~1.5 to 2.2 — large enough to drive the absolute treatment effect
+to zero on its own.
+
+Defining a composite "clean" indicator
+    clean_no_resist = (feature_013==0) AND (feature_015==0)
+                      AND (feature_021==0) AND (feature_027==0)
+yields the simplest and most parsimonious description of the treatment-effect
+heterogeneity:
+
+                                feature_008=1   feature_008=0   delta (abs)
+  clean_no_resist = 1 (n=15,681):  0.798           0.172          +0.626
+  clean_no_resist = 0 (n=34,319):  0.161           0.153          +0.008
+
+  Logit interaction f008:clean_no_resist = +2.885 (z=56.1, p ~ 0)
+  OR for response with feature_008=1 vs 0
+       in clean_no_resist = 1:  18.97  (95% CI ~17.4-20.7, p ~ 0)
+       in clean_no_resist = 0:   1.06  (chi-square p = 0.056)
+
+Treatment is therefore highly effective in the clean subgroup only, and is
+essentially inert in the resistance-marker-positive subgroup.
+
+==============================================================================
+5. DOSE-RESPONSE IN MARKER COUNT
+==============================================================================
+Defining resist_count = sum of the four resistance markers in {0,1,2,3,4}:
+
+  count = 0  (n=15,681):  treatment effect = +0.626  (clean subgroup)
+  count = 1  (n=25,372):  treatment effect = +0.009
+  count = 2  (n= 8,186):  treatment effect = +0.008
+  count = 3  (n=   745):  treatment effect = -0.022
+  count = 4  (n=    16):  treatment effect = -0.091
+
+The treatment effect collapses entirely between count=0 and count=1; further
+markers add no additional attenuation. The effect modification is essentially
+a step function at "any marker = 1".
+
+==============================================================================
+6. RESIDUAL HETEROGENEITY AND PROGNOSTIC FEATURES
+==============================================================================
+After conditioning on the four resistance markers in a joint model, the
+previously-significant feature_022 and feature_001 interactions with feature_008
+both lose significance:
+
+  feature_008 : log(feature_022)        = -0.007  (p = 0.74)
+  feature_008 : feature_001 (level 1)   = +0.019  (p = 0.72)
+  feature_008 : feature_001 (level 2)   = +0.118  (p = 0.13)
+
+i.e., the marginal feature_022 / feature_001 modifier effects were largely an
+artifact of the four binary modifiers. Within the clean_no_resist=1 subgroup
+the treatment effect is essentially flat (~+0.62 to +0.65) across feature_022
+quartiles and across feature_001 levels.
+
+However, feature_022 and feature_001 remain *prognostic for objective_response
+in the absence of treatment* (control-arm logit coefficients: log(feature_022)
+= -0.072, p ~ 3e-7; feature_001 level 1 vs 0 = -0.36, level 2 vs 0 = -0.77,
+both p ~ 0). So they predict who responds without therapy but do not by
+themselves identify who benefits from feature_008.
+
+A search within the clean subgroup for any feature whose stratification
+shifts the +0.626 treatment effect by more than ~2 percentage points found
+none. There is no evidence of a "super-responder" subgroup beyond
+clean_no_resist=1 itself.
+
+==============================================================================
+7. SUMMARY OF HYPOTHESES (SUPPORTED vs. REFUTED)
+==============================================================================
+SUPPORTED:
+- feature_008 has a large positive marginal effect on objective_response
+  (treatment-like role; +0.20 absolute risk difference, OR ~3.0).
+- feature_013, feature_015, feature_021, feature_027 are each negative
+  prognostic indicators on their own.
+- feature_022 (continuous) is a strong negative prognostic factor.
+- feature_001 is negatively prognostic.
+- The treatment effect of feature_008 is profoundly modified by each of
+  feature_013, feature_015, feature_021, and feature_027 (each, when set
+  to 1, reduces the absolute treatment effect to ~0).
+- The composite subgroup feature_013=0 AND feature_015=0 AND feature_021=0
+  AND feature_027=0 (clean_no_resist=1) captures the full treatment effect.
+- feature_022 marginally appears to modify treatment, but this is fully
+  explained by correlation with the four binary markers.
+
+REFUTED OR NULL:
+- feature_005, feature_006, feature_011, feature_017, feature_019, feature_023,
+  feature_004, feature_010, feature_026, feature_032, feature_028, feature_007,
+  feature_025, feature_018, feature_003, feature_031, feature_016, feature_009,
+  feature_029, feature_012, feature_014 have no marginal main effect on
+  objective_response.
+- None of the continuous biomarkers (after Bonferroni correction) modifies
+  the treatment effect of feature_008 within the clean subgroup.
+- feature_001 and log(feature_022) lose their treatment-modifier status once
+  the four resistance markers are conditioned on.
+- No "super-responder" subgroup beyond clean_no_resist=1 exists.
+
+==============================================================================
+8. FINAL TREATMENT-EFFECT SUBGROUP HYPOTHESIS
+==============================================================================
+The treatment feature_008 increases objective_response only in patients with
+    feature_013 = 0 AND feature_015 = 0 AND feature_021 = 0 AND feature_027 = 0.
+
+In this subgroup (n=15,681; ~31% of the cohort) feature_008=1 raises response
+from 17.2% to 79.8% (absolute risk difference +0.626; OR 18.97; p ~ 0).
+Outside this subgroup the treatment effect is approximately zero (absolute
+risk difference +0.008; OR 1.06; chi-square p = 0.056). The four resistance
+markers are independent of one another, each contributing additively on the
+logit scale to suppress the treatment effect; presence of any one is
+essentially sufficient to zero out the benefit. feature_022 and feature_001
+are prognostic in the absence of treatment but do not independently modify
+the treatment effect after conditioning on the four resistance markers.

@@ -1,0 +1,210 @@
+Oncology Dataset Analysis — ds001_crc (50,000 patients, 25 iterations)
+================================================================
+
+OUTCOME
+The single outcome modeled is pfs_months (progression-free survival in months).
+Across the cohort: mean 4.31, SD 2.29, median 4.21, range 0.00 to 16.25. The
+distribution is right-skewed but non-degenerate, leaving plenty of variance for
+features and treatments to explain.
+
+I ran a 25-iteration propose-test-refine loop. The plan moved from main-effect
+characterization (demographics, disease, biomarkers, labs, crude treatment
+effects) to a multivariable adjusted treatment-effect model, then to targeted
+biomarker–treatment interactions motivated by clinical priors, a systematic
+treatment x feature heterogeneity screen, and finally to refinement of the one
+strong heterogeneity signal that emerged.
+
+I. PROGNOSTIC MAIN EFFECTS ON pfs_months
+----------------------------------------
+The dominant prognostic predictors (univariate, with adjusted multivariable
+estimates that were essentially the same):
+  • age_years            +0.176 mo / yr      (p<<0.001; R^2 alone = 0.59 — by
+                                              far the strongest predictor)
+  • ecog_ps              −1.190 mo / unit    (p<<0.001)
+  • stage_iv             −1.352 mo           (p<<0.001)
+  • albumin_g_dl         +0.469 mo / g/dL    (p<<0.001)
+  • weight_loss_pct_6mo  −0.076 mo / %       (p<<0.001)
+  • cea_ng_ml            −0.005 mo / ng/mL   (p<<0.001)
+  • ldh_u_l              −0.0004 mo / U/L    (p≈0.01 unadj, p<<0.001 adj)
+  • right_sided_primary  −0.305 mo (univ),
+                         −0.287 mo (adj)     (p<<0.001)
+  • kras_mutation        −0.354 mo (adj)     (p<<0.001)
+  • braf_v600e           −0.357 mo (adj)     (p<<0.001)
+
+Variables with no detectable main effect on pfs_months: sex_female, msi_high,
+her2_amplified, ntrk_fusion, nras_mutation, crp_mg_l, nlr, hemoglobin_g_dl,
+alkaline_phosphatase_u_l, ast_u_l, alt_u_l, total_bilirubin_mg_dl,
+creatinine_mg_dl, bun_mg_dl, sodium_meq_l, potassium_meq_l, calcium_mg_dl.
+
+Important nuance discovered later: the apparent "prognostic" main effects of
+kras_mutation, braf_v600e, right_sided_primary, and cea_ng_ml are largely or
+entirely an artifact of treatment-effect heterogeneity (see Section IV).
+Patients with any of these unfavorable values do not benefit from regorafenib;
+patients without them do. Once a regorafenib*responder-subgroup interaction is
+included in the multivariable model, the residual main effects of those
+variables drop to ~0 (kras p=0.17, braf p=0.79, right-sided p=0.84,
+cea_ng_ml p=0.34). They are effect-modifying markers, not prognostic markers.
+
+II. CRUDE TREATMENT EFFECTS ON pfs_months
+-----------------------------------------
+Of the six treatment indicators, only treatment_regorafenib showed a non-null
+crude effect:
+  • treatment_cetuximab            −0.038 mo   (p=0.09)  not significant
+  • treatment_bevacizumab          −0.019 mo   (p=0.35)  not significant
+  • treatment_pembrolizumab        +0.005 mo   (p=0.86)  not significant
+  • treatment_encorafenib          +0.005 mo   (p=0.87)  not significant
+  • treatment_trastuzumab_tucatinib −0.044 mo  (p=0.25)  not significant
+  • treatment_regorafenib          +0.972 mo   (p<<0.001) ★ supported
+
+In a multivariable OLS with all features and all six treatment indicators,
+regorafenib retains a +0.943 mo adjusted main effect (t=98). All five other
+treatments are within ±0.03 mo of zero with non-significant p-values
+(trastuzumab/tucatinib +0.026 mo, p=0.07, was the closest to a signal but
+remained tiny).
+
+III. CLINICALLY MOTIVATED BIOMARKER × TREATMENT INTERACTIONS
+------------------------------------------------------------
+I tested the textbook precision-oncology hypotheses for CRC and, somewhat
+surprisingly, none of them held in this cohort:
+
+  • cetuximab benefit in kras_mutation=0 vs 1 ........ interaction +0.022,
+    p=0.25; eff in KRAS WT −0.020, KRAS mut +0.002. NOT supported.
+  • cetuximab benefit in braf_v600e=0 vs 1 ........... interaction +0.002,
+    p=0.96. NOT supported.
+  • cetuximab benefit in left-sided vs right-sided ... interaction +0.022,
+    p=0.25. NOT supported. (Even in RAS/RAF WT left-sided n=8866, mean pfs
+    on cetuximab 4.32 vs off 4.36.)
+  • pembrolizumab benefit in msi_high=1 .............. interaction +0.056,
+    p=0.30; mean pfs MSI-H on pembro 4.30 vs off 4.29. NOT supported.
+  • encorafenib benefit in braf_v600e=1 .............. interaction +0.004,
+    p=0.95. NOT supported.
+  • encorafenib + cetuximab combo within braf_v600e .. mean pfs on combo
+    4.15 (n=58) vs others V600E 4.09 (n=2214). NOT supported.
+  • trastuzumab/tucatinib benefit in her2_amplified=1  interaction −0.007,
+    p=0.94; mean pfs HER2+ on tx 4.27 vs off 4.26. NOT supported.
+
+Bottom line: the canonical CRC biomarker-targeted regimens have no detectable
+PFS benefit in this cohort, even within their indicated biomarker subgroups.
+
+IV. PRIMARY HETEROGENEITY FINDING — REGORAFENIB
+-----------------------------------------------
+The dominant treatment-effect heterogeneity in the dataset is for
+treatment_regorafenib. A systematic interaction screen against every binary
+modifier (sex_female, stage_iv, right_sided_primary, kras_mutation,
+nras_mutation, braf_v600e, msi_high, her2_amplified, ntrk_fusion) produced
+three highly-significant suppressors and one continuous-modifier suppressor:
+
+  Regorafenib × kras_mutation        : interaction −1.626 mo (p<<0.001)
+    • Effect in KRAS WT (n_on=5816)   = +1.656 mo
+    • Effect in KRAS mut (n_on=4206)  = +0.027 mo
+
+  Regorafenib × braf_v600e           : interaction −0.992 mo (p≈5e-98)
+    • Effect in BRAF WT (n_on=9554)   = +1.027 mo
+    • Effect in BRAF V600E (n_on=468) = −0.156 mo
+
+  Regorafenib × right_sided_primary  : interaction −1.456 mo (p<<0.001)
+    • Effect in left-sided (n_on=6524)  = +1.480 mo
+    • Effect in right-sided (n_on=3498) = +0.026 mo
+
+  Regorafenib × cea_ng_ml (within KRAS WT & BRAF WT & left-sided):
+    interaction −0.065 mo per ng/mL CEA (p<<0.001)
+    • CEA <5  : +5.013 mo  (n_on=1903)
+    • CEA 5-10: +0.028 mo
+    • CEA 10+ : essentially 0 (range −0.22 to +0.97 across higher bins)
+
+NRAS, MSI-H, HER2, NTRK, sex, age, ECOG, stage, albumin, weight loss, LDH,
+CRP, NLR, and hemoglobin do NOT credibly modify the regorafenib effect.
+(NRAS mutation looked like an "enhancer" — interaction +0.89, p≈0 — but this
+is mechanically because most NRAS-mutant patients in the cohort happen to
+satisfy the KRAS WT, BRAF WT, left-sided, low-CEA conditions; conditioning on
+those four, NRAS does not modify the effect, with within-subgroup deltas of
+about ±0.25 mo.)
+
+The complete responder subgroup definition (variables whose unfavorable values
+each independently ablate the effect):
+
+    RESPONDER  =  kras_mutation = 0
+              AND braf_v600e    = 0
+              AND right_sided_primary = 0
+              AND cea_ng_ml     < 5 (ng/mL)
+
+Within this four-way subgroup (n = 9,326; 1,903 on regorafenib, 7,423 off):
+  • mean pfs_months on regorafenib  = 9.10
+  • mean pfs_months off regorafenib = 4.09
+  • effect estimate                 = +5.013 months (t=92.7, p<<0.001)
+
+Outside this subgroup (n = 40,674; 8,119 on regorafenib, 32,555 off):
+  • effect estimate                 = +0.025 months (p=0.33)
+
+In a fully adjusted OLS that includes age, ECOG, stage, albumin, weight loss,
+LDH, all 10 features used as suppressors or candidate modifiers, and all six
+treatment indicators, the regorafenib × responder interaction term is +4.981
+months (SE 0.006, t≈893, p<<0.001), and the within-stratum main effects of
+treatment_regorafenib (−0.003, p=0.28), kras_mutation (−0.003, p=0.17),
+braf_v600e (+0.001, p=0.79), right_sided_primary (+0.0004, p=0.84), and
+cea_ng_ml (−6e-5, p=0.34) are all null. This confirms (a) the effect is not
+explained by confounding with any measured prognostic variable, and (b) those
+four "unfavorable" variables are pure effect modifiers in this cohort, not
+prognosticators.
+
+Sensitivity to the CEA cutoff: thresholds of 2, 3, and 5 ng/mL all yield
+within-responder regorafenib effects of ~+5.0 mo. A cutoff of 10 ng/mL
+dilutes the effect to +3.6 mo (because the 5–10 ng/mL bin contributes ≈0).
+The natural threshold is therefore CEA < 5 ng/mL.
+
+Each unfavorable feature independently is sufficient to suppress the benefit
+(within otherwise responder-eligible patients):
+  • Otherwise eligible but CEA ≥ 5            : +0.005 mo (n_on=1558)
+  • KRAS mut alone (others favorable)         : +0.073 mo (n_on=1477)
+  • BRAF V600E alone (others favorable)       : −0.175 mo (n_on=154)
+  • Right-sided alone (others favorable)      : +0.112 mo (n_on=1020)
+
+Within the responder subgroup, further stratification by NRAS, MSI, HER2,
+NTRK, and sex changes the regorafenib effect by ≤0.3 mo and never reverses
+direction; the four-way subgroup definition is sufficient.
+
+V. SUMMARY OF SUPPORTED VS REFUTED HYPOTHESES
+---------------------------------------------
+SUPPORTED:
+  • age_years, ecog_ps, stage_iv, right_sided_primary, kras_mutation,
+    braf_v600e, albumin_g_dl, weight_loss_pct_6mo, cea_ng_ml, ldh_u_l are
+    associated with pfs_months in the expected directions (univariate).
+  • treatment_regorafenib has a positive crude and adjusted main effect on
+    pfs_months.
+  • The regorafenib effect is concentrated in patients with kras_mutation=0
+    AND braf_v600e=0 AND right_sided_primary=0 AND cea_ng_ml<5; effect within
+    subgroup ≈ +5 months, outside ≈ 0.
+  • Each of those four unfavorable values independently suppresses the
+    regorafenib effect.
+  • The "prognostic" appearance of kras_mutation, braf_v600e,
+    right_sided_primary, and cea_ng_ml is largely driven by their role as
+    effect modifiers of regorafenib; their pure prognostic main effect is
+    near-null once the regorafenib*responder interaction is modeled.
+
+REFUTED / NOT SUPPORTED IN THIS COHORT:
+  • Cetuximab benefit in RAS/RAF WT (or left-sided) subgroup.
+  • Pembrolizumab benefit in MSI-H.
+  • Encorafenib (or encorafenib+cetuximab) benefit in BRAF V600E.
+  • Trastuzumab/tucatinib benefit in HER2-amplified.
+  • Bevacizumab × any biomarker subgroup (one marginal p=0.033 with msi_high
+    treated as a chance finding given multiple testing).
+  • Within-responder modifiers nras_mutation, msi_high, her2_amplified,
+    ntrk_fusion, sex_female changing the regorafenib effect.
+
+VI. FINAL CONSOLIDATED TREATMENT-EFFECT SUBGROUP HYPOTHESIS
+-----------------------------------------------------------
+Outcome               : pfs_months
+Treatment             : treatment_regorafenib
+Direction of effect   : positive (longer pfs_months)
+Magnitude             : +5.0 months within the responder subgroup, ~0 outside
+Subgroup predicate    : kras_mutation == 0
+                  AND braf_v600e == 0
+                  AND right_sided_primary == 0
+                  AND cea_ng_ml < 5
+Suppressor variables  : kras_mutation==1; braf_v600e==1; right_sided_primary==1;
+                        cea_ng_ml ≥ 5. Any single unfavorable value abolishes
+                        the benefit.
+
+No analogous treatment-effect subgroup is supported for cetuximab,
+bevacizumab, pembrolizumab, encorafenib, or trastuzumab/tucatinib in this
+cohort.

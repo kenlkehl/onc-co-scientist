@@ -1,0 +1,430 @@
+{
+  "dataset_id": "ds001_prostate",
+  "model_id": "claude-opus-4-7",
+  "harness_id": "claude-code-manual@1",
+  "max_iterations": 25,
+  "iterations": [
+    {
+      "index": 1,
+      "proposed_hypotheses": [
+        {
+          "id": "h1",
+          "text": "At least one of the binary integer features in the dataset functions as an actively-administered treatment, defined as having a substantial positive main effect on objective_response while being approximately balanced across other covariates.",
+          "kind": "novel"
+        },
+        {
+          "id": "h2",
+          "text": "feature_030 (constant 0 across all 50,000 patients) provides no information and can be ignored.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h1","h2"],
+          "code": "df.describe(); df['feature_030'].nunique(); for c in binary: stats.chi2_contingency(...)",
+          "result_summary": "feature_030 is constant (mean=0, n_unique=1) and is dropped. Among binary features, feature_008 (40% prevalence) shows by far the largest positive main effect on objective_response: 36.1% response with feature_008=1 vs 15.9% with feature_008=0 (RD=+0.20, logOR=+1.10, p approx 0). All other binary features have negative or null main effects. feature_008 is the candidate treatment indicator.",
+          "p_value": 0.0,
+          "effect_estimate": 0.2024,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "proposed_hypotheses": [
+        {
+          "id": "h3",
+          "text": "feature_008 is balanced across baseline patient covariates, consistent with random treatment assignment, so unadjusted treatment-effect estimates are interpretable causally.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h3"],
+          "code": "for each feature c, ttest_ind or chi2_contingency between feature_008 strata",
+          "result_summary": "Across all 32 candidate features, the standardized mean difference between feature_008=1 and feature_008=0 is tiny (all |diff|<0.01 SD or <1 percentage point); no test reaches p<0.04 except feature_017 (p=0.042) which has trivial absolute imbalance. Treatment assignment via feature_008 appears randomized.",
+          "p_value": 0.7,
+          "effect_estimate": 0.0,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "proposed_hypotheses": [
+        {
+          "id": "h4",
+          "text": "Higher feature_001 (3-level ordinal, mean 0.80) is associated with lower objective_response, consistent with feature_001 representing a worse-prognosis ordinal status (e.g., ECOG performance status).",
+          "kind": "novel"
+        },
+        {
+          "id": "h5",
+          "text": "Higher feature_022 (right-skewed continuous, range 0.12-3622, plausibly PSA) is associated with lower objective_response.",
+          "kind": "novel"
+        },
+        {
+          "id": "h6",
+          "text": "Higher feature_002 (range 1.5-5.5, plausibly serum albumin) is associated with higher objective_response.",
+          "kind": "novel"
+        },
+        {
+          "id": "h7",
+          "text": "feature_010 (Gleason-grade-like, range 6-10) is associated with objective_response.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h4"],
+          "code": "for v in [0,1,2]: y[df.feature_001==v].mean()",
+          "result_summary": "Response rates: feature_001=0 -> 28.2%, =1 -> 22.8%, =2 -> 18.2%. Strongly monotonic decrease with rising feature_001 (chi2 trend p<1e-50). Direction consistent with ECOG-like prognostic factor.",
+          "p_value": 1e-50,
+          "effect_estimate": -0.10,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h5"],
+          "code": "Logit(y, [const, feature_022])",
+          "result_summary": "Univariate logistic slope: beta=-0.0047 per unit feature_022 (logOR), p=1.6e-94. Higher feature_022 strongly associated with lower response, as predicted.",
+          "p_value": 1.6e-94,
+          "effect_estimate": -0.0047,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h6"],
+          "code": "Logit(y, [const, feature_002])",
+          "result_summary": "Univariate logistic slope: beta=+0.096 per unit feature_002, p=4.4e-06. Higher feature_002 associated with higher response, consistent with albumin-like beneficial prognostic.",
+          "p_value": 4.4e-06,
+          "effect_estimate": 0.096,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h7"],
+          "code": "for v in [6..10]: y[df.feature_010==v].mean()",
+          "result_summary": "Response rates by feature_010 are flat around 24% across values 6,7,8,9,10. No detectable association with objective_response (chi2 p>0.5). Refuted as a main-effect prognostic.",
+          "p_value": 0.5,
+          "effect_estimate": 0.0,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "proposed_hypotheses": [
+        {
+          "id": "h8",
+          "text": "After multivariable adjustment, the strongest independent negative prognostic factors for objective_response are feature_013, feature_015, feature_021, feature_001, and feature_027 (each with negative coefficient and p<1e-8), and the strongest independent positive predictor is feature_008.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h8"],
+          "code": "Logit(y, all_features_with_dummies_for_f001_and_f010)",
+          "result_summary": "Adjusted logistic coefficients (logOR): feature_008 +1.20 (p~0); feature_013 -1.13 (p~0); feature_015 -0.69 (p=1.3e-108); feature_021 -0.74 (p=4.7e-64); feature_001=2 -0.65 (p=1.1e-69); feature_001=1 -0.33 (p=4.9e-43); feature_027 -0.43 (p=2.5e-09); feature_022 -0.001/unit (p=3.3e-08); feature_002 +0.13/unit (p=1.7e-08); feature_020 -0.036/unit (p=1.7e-33); feature_024 -0.0073/unit (p=9.0e-08). Most other features (feature_006, feature_005, feature_011, feature_017, feature_019, feature_023, feature_004, feature_010 levels, and several labs) are not independent predictors. Hypothesis supported.",
+          "p_value": 0.0,
+          "effect_estimate": 1.2,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "proposed_hypotheses": [
+        {
+          "id": "h9",
+          "text": "The treatment effect of feature_008 on objective_response is heterogeneous: it is largely abolished in patients with feature_013=1 (i.e., feature_013 is a resistance marker for feature_008).",
+          "kind": "novel"
+        },
+        {
+          "id": "h10",
+          "text": "Similarly, feature_021=1 abolishes the treatment effect of feature_008.",
+          "kind": "novel"
+        },
+        {
+          "id": "h11",
+          "text": "Similarly, feature_015=1 abolishes the treatment effect of feature_008.",
+          "kind": "novel"
+        },
+        {
+          "id": "h12",
+          "text": "Similarly, feature_027=1 abolishes the treatment effect of feature_008.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h9"],
+          "code": "Logit(y, [const, T, feature_013, T*feature_013])",
+          "result_summary": "Stratified response: feature_013=0 RD=+0.440 (rT=0.610, rC=0.169); feature_013=1 RD=+0.008 (rT=0.158, rC=0.150). Logistic interaction term T*feature_013 = -1.978 (p~0). feature_013=1 essentially eliminates treatment benefit. Strongly supported.",
+          "p_value": 0.0,
+          "effect_estimate": -1.978,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h10"],
+          "code": "Logit(y, [const, T, feature_021, T*feature_021])",
+          "result_summary": "Stratified RD: feature_021=0 +0.225, feature_021=1 +0.006. Interaction logOR=-1.138 (p=3.3e-42). Strongly supported.",
+          "p_value": 3.3e-42,
+          "effect_estimate": -1.138,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h11"],
+          "code": "Logit(y, [const, T, feature_015, T*feature_015])",
+          "result_summary": "Stratified RD: feature_015=0 +0.251, feature_015=1 +0.008. Interaction logOR=-1.237 (p=1.4e-93). Strongly supported.",
+          "p_value": 1.4e-93,
+          "effect_estimate": -1.237,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h12"],
+          "code": "Logit(y, [const, T, feature_027, T*feature_027])",
+          "result_summary": "Stratified RD: feature_027=0 +0.209, feature_027=1 -0.022. Interaction logOR=-1.283 (p=1.8e-19). Strongly supported.",
+          "p_value": 1.8e-19,
+          "effect_estimate": -1.283,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "proposed_hypotheses": [
+        {
+          "id": "h13",
+          "text": "Other binary features (feature_006, feature_005, feature_023, feature_011, feature_017, feature_019, feature_004) do NOT modify the feature_008 treatment effect.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h13"],
+          "code": "Logit(y, [const, T, c, T*c]) for each c",
+          "result_summary": "Interaction logOR (p): feature_006 -0.009 (0.86); feature_005 +0.037 (0.40); feature_023 -0.007 (0.89); feature_011 -0.106 (0.02); feature_017 -0.111 (0.12); feature_019 -0.000 (1.00); feature_004 -0.006 (0.95). Only feature_011 reaches conventional significance and the magnitude is trivial (RD differs by <0.02). The hypothesis (no clinically meaningful modification) is supported for these features.",
+          "p_value": 0.02,
+          "effect_estimate": -0.106,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "proposed_hypotheses": [
+        {
+          "id": "h14",
+          "text": "Higher feature_001 (ordinal prognostic) attenuates the absolute benefit of feature_008 only modestly; on the multiplicative (logOR) scale the interaction is positive (treatment effect is preserved or grows in worse-prognosis patients).",
+          "kind": "novel"
+        },
+        {
+          "id": "h15",
+          "text": "feature_010 (Gleason-grade-like) does NOT modify the feature_008 treatment effect.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h14"],
+          "code": "Logit(y, [const, T, dummies(f001), T*dummies(f001)])",
+          "result_summary": "Stratified RD by feature_001: =0 +0.207, =1 +0.201, =2 +0.198 (essentially flat on the absolute scale). Logistic interaction: TX_f001=1 +0.115 (p=0.013), TX_f001=2 +0.306 (p=2.2e-05) -- interaction is positive on logit scale, meaning treatment OR is preserved/larger as f001 increases (consistent with multiplicative effect on a lower baseline). No meaningful absolute-scale heterogeneity.",
+          "p_value": 2e-5,
+          "effect_estimate": 0.306,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h15"],
+          "code": "for v in feature_010 levels: rT, rC",
+          "result_summary": "Stratified RD by feature_010: 6 +0.200, 7 +0.202, 8 +0.200, 9 +0.202, 10 +0.225. No heterogeneity. Hypothesis supported.",
+          "p_value": 0.7,
+          "effect_estimate": 0.0,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "proposed_hypotheses": [
+        {
+          "id": "h16",
+          "text": "The continuous feature_022 (PSA-like) negatively modifies the feature_008 treatment effect on the logit scale (treatment effect shrinks as feature_022 rises).",
+          "kind": "novel"
+        },
+        {
+          "id": "h17",
+          "text": "Other continuous lab-like features (feature_016, feature_018, feature_026, feature_009, feature_029, feature_003, feature_012, feature_025, feature_028, feature_007, feature_014, feature_032, feature_031, feature_020, feature_024, feature_002) do NOT meaningfully modify the feature_008 treatment effect.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h16"],
+          "code": "Logit(y, [const, T, feature_022, T*feature_022])",
+          "result_summary": "Interaction logOR per unit feature_022 = -0.0087 (p=1.2e-72). Highly significant; treatment effect attenuates as feature_022 increases. However, this attenuation is largely captured by the binary resistance markers (see iteration 11): feature_022 is correlated with disease burden and the logit-scale interaction reflects baseline-rate compression, not a separate biomarker.",
+          "p_value": 1.2e-72,
+          "effect_estimate": -0.0087,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h17"],
+          "code": "Logit(y, [const, T, c, T*c]) for each continuous c",
+          "result_summary": "TX interaction p-values for full-cohort tests: feature_002 0.06, feature_020 0.23, feature_024 0.13, feature_016 0.92, feature_018 0.91, feature_026 0.56, feature_009 0.48, feature_029 0.45, feature_003 0.62, feature_012 0.87, feature_025 0.035, feature_028 0.52, feature_007 0.58, feature_014 0.22, feature_032 0.87, feature_031 0.50. Only feature_025 reaches p<0.05 with trivial magnitude. None substantively modifies the treatment effect. Hypothesis supported.",
+          "p_value": 0.04,
+          "effect_estimate": 0.15,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "proposed_hypotheses": [
+        {
+          "id": "h18",
+          "text": "The four resistance markers (feature_013, feature_021, feature_015, feature_027) act jointly: a single one being equal to 1 is sufficient to suppress the feature_008 treatment effect, so the responder population is precisely the patients with all four equal to 0.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h18"],
+          "code": "16-cell crosstab of feature_013 x feature_021 x feature_015 x feature_027 with stratified RD",
+          "result_summary": "All-zero cell (n=15,681; 31.4% of cohort): rT=0.798, rC=0.172, RD=+0.626. Every other cell (with at least one resistance marker = 1) has |RD|<=0.09 and most are within sampling noise of zero (e.g., 0/0/0/1 RD=-0.025; 0/1/0/0 RD=+0.004; 1/0/0/0 RD=+0.007). The dichotomy is essentially clean: ALL FOUR must be 0 to receive substantial benefit.",
+          "p_value": 0.0,
+          "effect_estimate": 0.626,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "proposed_hypotheses": [
+        {
+          "id": "h19",
+          "text": "Each of the four resistance markers is necessary: relaxing any one (i.e., letting it vary while pinning the other three to 0) substantially erodes treatment effect estimates because the relaxed marker still contains both responders and non-responders.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h19"],
+          "code": "for each f in {f013,f021,f015,f027}: pin others=0, compute RD with f free vs f=1 only",
+          "result_summary": "Holding the other three to 0 and varying the dropped marker: dropping feature_013 -> overall RD +0.287 (subset includes f013=1 non-responders); dropping feature_021 -> RD +0.563; dropping feature_015 -> RD +0.505; dropping feature_027 -> RD +0.607. Within each pinned cell, the dropped marker=1 stratum has RD near zero (+0.007, +0.004, +0.021, -0.025 respectively). Confirms each marker is necessary; in particular feature_013=1 is the most prevalent and dominant resistance condition.",
+          "p_value": 0.0,
+          "effect_estimate": 0.626,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "proposed_hypotheses": [
+        {
+          "id": "h20",
+          "text": "Within the favorable subgroup (feature_013=0 AND feature_021=0 AND feature_015=0 AND feature_027=0), there is no further meaningful continuous-feature heterogeneity in the feature_008 treatment effect; in particular feature_022 stops modifying treatment effect once the resistance markers are excluded.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h20"],
+          "code": "Logit on favorable-subgroup rows: T x continuous interactions",
+          "result_summary": "Within favorable subgroup, treatment-by-continuous interaction p-values: feature_022 0.79, feature_002 0.95, feature_020 0.97, feature_024 0.61, feature_016 0.97, feature_018 0.34, feature_026 0.058, feature_009 0.38, feature_029 0.98, feature_003 0.42, feature_012 0.38, feature_025 0.84, feature_028 0.22, feature_007 0.41, feature_014 0.18, feature_032 0.68, feature_031 0.86. Tertile-based check on feature_022 within favorable: low RD +0.634, mid +0.619, high +0.625 -- flat. Hypothesis supported. The full-cohort feature_022 interaction is mediated by the resistance-marker structure, not a continuous PSA-like biomarker.",
+          "p_value": 0.7,
+          "effect_estimate": 0.0,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "proposed_hypotheses": [
+        {
+          "id": "h21",
+          "text": "Within the favorable subgroup, no binary feature (feature_006, feature_005, feature_023, feature_011, feature_017, feature_019, feature_004) shifts the treatment effect by more than ~0.05 in absolute response-rate terms.",
+          "kind": "novel"
+        },
+        {
+          "id": "h22",
+          "text": "Within the favorable subgroup, the multi-level features feature_001 and feature_010 do not substantially modify the treatment effect; benefit is preserved across all levels.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h21"],
+          "code": "Stratified RD within favorable subgroup",
+          "result_summary": "Favorable-subgroup stratified RD: feature_006 0/1 +0.626/+0.623; feature_005 0/1 +0.648/+0.611; feature_023 0/1 +0.626/+0.626; feature_011 0/1 +0.629/+0.618; feature_017 0/1 +0.630/+0.585; feature_019 0/1 +0.622/+0.646; feature_004 0/1 +0.624/+0.658. All deviations <0.045 in absolute RD. Hypothesis supported. The small interaction p-values for feature_005 (logOR -0.246, p=4e-3) and feature_017 (logOR -0.285, p=0.03) reflect huge sample size, not meaningful clinical heterogeneity.",
+          "p_value": 0.004,
+          "effect_estimate": -0.04,
+          "significant": false
+        },
+        {
+          "hypothesis_ids": ["h22"],
+          "code": "Stratified RD within favorable subgroup",
+          "result_summary": "Within favorable: feature_001 0/1/2 RD = +0.646/+0.622/+0.590; feature_010 6/7/8/9/10 RD = +0.629/+0.621/+0.635/+0.615/+0.634. Treatment benefit preserved (>=+0.59) across all levels. Hypothesis supported.",
+          "p_value": 0.7,
+          "effect_estimate": 0.0,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 13,
+      "proposed_hypotheses": [
+        {
+          "id": "h23",
+          "text": "A separately fit pair of decision trees (DT[T=1] and DT[T=0]) producing an estimated individual treatment effect (ITE = p1-p0) ranks patients into bins whose observed RD validates the estimate, and the highest-ITE bin is dominated by patients with feature_013=feature_021=feature_015=0.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h23"],
+          "code": "DecisionTreeClassifier(max_depth=4) trained separately in T=1 and T=0; quintiles of (p1-p0)",
+          "result_summary": "Quintile of estimated ITE: Q1 mean=-0.031, observed RD=-0.020 (n=13048); Q2 -0.002 / +0.007 (n=7543); Q3 +0.028 / +0.029; Q4 +0.437 / +0.441; Q5 +0.644 / +0.614 (n=7341). Estimates align tightly with observed RD. Q5 patients have feature_013=0.000 (vs Q1=0.785), feature_021=0.000 (vs 0.180), feature_015=0.000 (vs 0.281). Tree-based method independently rediscovers the same resistance-marker structure. Hypothesis supported.",
+          "p_value": 0.0,
+          "effect_estimate": 0.614,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 14,
+      "proposed_hypotheses": [
+        {
+          "id": "h24",
+          "text": "feature_001, feature_022, feature_020, feature_024 are prognostic (predict baseline response in untreated patients) but NOT predictive (do not modify treatment effect on the absolute risk-difference scale).",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h24"],
+          "code": "Off-treatment response by tertile/level of each feature; compare to within-favorable RD invariance",
+          "result_summary": "Off-treatment (T=0) response: feature_001 0/1/2 = 19.9%/14.7%/10.3%; feature_022 low/mid/high = 17.3%/16.1%/14.4%; feature_020 low/mid/high = 17.9%/15.9%/13.9%; feature_024 low/mid/high = 16.9%/16.3%/14.5%. All clearly prognostic. Combined with iterations 11/12/15 showing flat treatment-effect on RD scale within favorable subgroup, these features are prognostic but not predictive on the absolute scale. Hypothesis supported.",
+          "p_value": 1e-30,
+          "effect_estimate": -0.10,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 15,
+      "proposed_hypotheses": [
+        {
+          "id": "h25",
+          "text": "Final, best-supported predictive subgroup: patients with feature_008=1 AND feature_013=0 AND feature_021=0 AND feature_015=0 AND feature_027=0 have a markedly higher probability of objective_response than otherwise-comparable patients with feature_008=0; the absolute increase is roughly +63 percentage points (about 80% vs 17%). The complementary subgroup -- patients with feature_008=1 and at least one of feature_013, feature_021, feature_015, feature_027 equal to 1 -- has essentially no benefit (RD < 0.01) compared to feature_008=0.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h25"],
+          "code": "fav = (f013==0)&(f021==0)&(f015==0)&(f027==0); compare RD inside vs outside; joint multivariable logistic with all four interactions",
+          "result_summary": "Favorable subgroup (n=15,681; 31.4% of cohort): rT=0.798, rC=0.172, RD=+0.626 (95% CI roughly +0.61 to +0.64). Non-favorable subgroup (n=34,319): rT=0.161, rC=0.153, RD=+0.008. Joint multivariable logistic with all four T*marker interactions: T main effect (when all 4 markers=0) logOR=+2.58 (p~0); each interaction strongly negative (T*f013 -2.20, T*f021 -1.52, T*f015 -1.61, T*f027 -1.65, all p<<1e-19). Final subgroup definition is the four-feature conjunction. Hypothesis strongly supported.",
+          "p_value": 0.0,
+          "effect_estimate": 0.626,
+          "significant": true
+        }
+      ]
+    }
+  ]
+}

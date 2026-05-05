@@ -1,0 +1,339 @@
+{
+  "dataset_id": "ds001_breast",
+  "model_id": "claude-opus-4-7",
+  "harness_id": "claude-code@manual-analysis-1.0",
+  "max_iterations": 25,
+  "iterations": [
+    {
+      "index": 1,
+      "proposed_hypotheses": [
+        {
+          "id": "h1",
+          "text": "At least one continuous feature is correlated with pfs_months across the full cohort.",
+          "kind": "novel"
+        },
+        {
+          "id": "h2",
+          "text": "At least one binary feature is associated with a difference in mean pfs_months between its two strata.",
+          "kind": "novel"
+        },
+        {
+          "id": "h3",
+          "text": "feature_005 (3-level categorical, likely a stage/grade-like variable) is associated with progressively shorter pfs_months as its level increases (0 -> 1 -> 2).",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h1"],
+          "code": "from scipy.stats import pearsonr\nfor c in cont_cols: pearsonr(df[c], df['pfs_months'])",
+          "result_summary": "feature_012 has a very strong positive Pearson correlation with pfs_months (r=+0.702, p<1e-300), by far the strongest predictor. feature_004 is negatively correlated (r=-0.116, p=4.1e-148). feature_024 is positively correlated (r=+0.100, p=9.4e-112). feature_033 is negatively correlated (r=-0.091, p=3.0e-93). All other continuous features have |r|<0.02.",
+          "p_value": 0.0,
+          "effect_estimate": 0.702,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h2"],
+          "code": "from scipy.stats import ttest_ind\nfor c in binary_cols: ttest_ind(df.loc[df[c]==1,'pfs_months'], df.loc[df[c]==0,'pfs_months'], equal_var=False)",
+          "result_summary": "Strong main effects: feature_006 (diff=-1.536 mo, p<1e-300, n1=14969); feature_013 (diff=+1.098 mo, p<1e-300, n1=17428); feature_001 (diff=-1.050 mo, p=1.5e-178, n1=5090); feature_028 (diff=-0.559, p=6.1e-144); feature_029 (diff=+0.568, p=3.7e-143); feature_018 (diff=-0.459, p=6.1e-70); feature_023 (diff=+0.362, p=5.8e-59). Several other binaries had |diff|<0.13 months.",
+          "p_value": 0.0,
+          "effect_estimate": -1.536,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h3"],
+          "code": "from scipy.stats import f_oneway\nf_oneway(*[df.loc[df['feature_005']==v,'pfs_months'] for v in [0,1,2]])",
+          "result_summary": "feature_005 is strongly associated with pfs_months: mean PFS = 5.640 (level 0, n=17592), 4.444 (level 1, n=24971), 3.289 (level 2, n=7437). One-way ANOVA F=2860.75, p<1e-300. Each step up loses ~1.2 months — likely a stage- or grade-like prognostic variable.",
+          "p_value": 0.0,
+          "effect_estimate": -2.351,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "proposed_hypotheses": [
+        {
+          "id": "h4",
+          "text": "When all features are entered jointly into a linear regression for pfs_months, feature_012, feature_013, feature_006, feature_001, feature_005, feature_028, feature_029, feature_018, feature_024, feature_004, and feature_033 will retain large independent associations with the outcome.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h4"],
+          "code": "import statsmodels.api as sm\nX = pd.get_dummies(df.drop(columns=['patient_id','pfs_months']), columns=['feature_005'], drop_first=True).astype(float)\nm = sm.OLS(df['pfs_months'], sm.add_constant(X)).fit()",
+          "result_summary": "Full model R^2=0.792. Largest independent coefficients (95% CIs all exclude 0, all p<1e-30 unless noted): feature_012 +0.176/unit; feature_013 +1.101; feature_006 -1.549; feature_005=2 vs 0 -2.334; feature_005=1 vs 0 -1.188; feature_001 -0.984; feature_028 -0.582; feature_029 +0.532; feature_024 +0.476; feature_018 -0.471; feature_004 -0.077; feature_033 -0.019. Many other binaries have |coef|<0.05 and p>0.1, indicating they carry no independent prognostic information.",
+          "p_value": 0.0,
+          "effect_estimate": 0.792,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "proposed_hypotheses": [
+        {
+          "id": "h5",
+          "text": "feature_013 (binary, +1.10 mo main effect) is the strongest candidate for a treatment variable in this dataset; if so, its effect on pfs_months should not be uniform across all patients but should be modified by other features (predictive biomarkers).",
+          "kind": "novel"
+        },
+        {
+          "id": "h6",
+          "text": "feature_006 (binary, -1.55 mo main effect) is a prognostic risk factor (e.g., visceral metastasis or aggressive-disease marker) rather than a treatment, so its negative effect on pfs_months should be roughly constant across other features rather than concentrated in subgroups.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h5"],
+          "code": "for c in features: m = sm.OLS(y, sm.add_constant(pd.DataFrame({'t':df['feature_013'],'x':df[c],'tx':df['feature_013']*df[c]}))).fit()",
+          "result_summary": "Treatment-by-feature interaction screen for feature_013 reveals very large interactions: feature_013 x feature_028 coef=-1.62 (p=4.0e-255); feature_013 x feature_029 coef=+1.59 (p=9.3e-229); feature_013 x feature_033 coef=-0.052/unit (p=1.5e-174); feature_013 x feature_018 coef=-1.36 (p=2.2e-118); feature_013 x feature_023 coef=+1.09 (p=2.6e-117). All highly significant and large in magnitude — supports that feature_013 is a treatment with strongly heterogeneous effect.",
+          "p_value": 4e-255,
+          "effect_estimate": -1.62,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h6"],
+          "code": "for c in features: OLS(y, [feature_006, c, feature_006*c])",
+          "result_summary": "Interaction screen for feature_006 yields no large or convincing modifiers. The strongest interaction is feature_006 x feature_012 (continuous), coef=-0.011/unit (p=3.1e-12) — small relative to the -1.55 main effect. Stratifying by feature_012 tertile shows feature_006 has a roughly constant -1.4 to -1.6 month effect across all tertiles. Consistent with a constant prognostic risk factor.",
+          "p_value": 3e-12,
+          "effect_estimate": -0.011,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "proposed_hypotheses": [
+        {
+          "id": "h7",
+          "text": "feature_029 is a positive predictive biomarker for feature_013: feature_029=1 patients show a substantially larger pfs_months gain from feature_013=1 than feature_029=0 patients.",
+          "kind": "novel"
+        },
+        {
+          "id": "h8",
+          "text": "feature_028 is a negative predictive biomarker for feature_013: feature_028=1 patients lose all or most of the feature_013 benefit seen in feature_028=0 patients.",
+          "kind": "novel"
+        },
+        {
+          "id": "h9",
+          "text": "feature_018 is a negative predictive biomarker for feature_013: feature_018=1 patients lose all or most of the feature_013 benefit seen in feature_018=0 patients.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h7"],
+          "code": "for v in [0,1]: ttest_ind on (feature_013==1 vs ==0) within feature_029==v",
+          "result_summary": "Stratified means: feature_029=0 (n=15114): trt=0 mean=4.303, trt=1 mean=4.285, diff=-0.017 (p=0.63 — not significant). feature_029=1 (n=34886): trt=0 mean=4.313, trt=1 mean=5.890, diff=+1.577 (p<1e-300). Confirms feature_029 is required for feature_013 benefit; feature_013 has essentially no effect when feature_029=0.",
+          "p_value": 0.0,
+          "effect_estimate": 1.577,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h8"],
+          "code": "for v in [0,1]: ttest_ind on (feature_013==1 vs ==0) within feature_028==v",
+          "result_summary": "Stratified means: feature_028=0 (n=32635): trt=0 mean=4.307, trt=1 mean=5.966, diff=+1.659 (p<1e-300). feature_028=1 (n=17365): trt=0 mean=4.316, trt=1 mean=4.352, diff=+0.036 (p=0.29 — not significant). Confirms feature_028=1 abolishes feature_013 benefit.",
+          "p_value": 0.286,
+          "effect_estimate": 0.036,
+          "significant": false
+        },
+        {
+          "hypothesis_ids": ["h9"],
+          "code": "for v in [0,1]: ttest_ind on (feature_013==1 vs ==0) within feature_018==v",
+          "result_summary": "Stratified means: feature_018=0 (n=40940): trt=0 mean=4.307, trt=1 mean=5.657, diff=+1.350 (p<1e-300). feature_018=1 (n=9060): trt=0 mean=4.322, trt=1 mean=4.308, diff=-0.014 (p=0.77 — not significant). Confirms feature_018=1 abolishes feature_013 benefit.",
+          "p_value": 0.765,
+          "effect_estimate": -0.014,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "proposed_hypotheses": [
+        {
+          "id": "h10",
+          "text": "feature_023 is a positive predictive biomarker for feature_013: feature_023=1 patients show a larger feature_013 benefit than feature_023=0 patients, but unlike feature_029 the effect is not entirely abolished when feature_023=0.",
+          "kind": "novel"
+        },
+        {
+          "id": "h11",
+          "text": "feature_033 is a continuous negative predictive biomarker: the feature_013 treatment benefit decreases monotonically as feature_033 increases, and is essentially zero in the highest quartile.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h10"],
+          "code": "for v in [0,1]: ttest_ind on (feature_013==1 vs ==0) within feature_023==v",
+          "result_summary": "Stratified means: feature_023=0 (n=18046): trt=0 mean=4.323, trt=1 mean=4.722, diff=+0.399 (p<1e-30). feature_023=1 (n=31954): trt=0 mean=4.303, trt=1 mean=5.794, diff=+1.491 (p<1e-300). The effect is much larger when feature_023=1 but is not zero when feature_023=0 — consistent with a 'positive enhancer' rather than a strict gating biomarker.",
+          "p_value": 1e-30,
+          "effect_estimate": 1.491,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h11"],
+          "code": "q = pd.qcut(df['feature_033'], 4); for v in q.unique(): ttest_ind on feature_013 within bin",
+          "result_summary": "Quartile-stratified feature_013 effect: Q1 (1.0-7.5) diff=+1.842; Q2 (7.6-12.2) diff=+1.921; Q3 (12.3-19.6) diff=+0.653; Q4 (19.7-100) diff=-0.016. Monotonic attenuation as feature_033 rises. Linear interaction coefficient feature_013 x feature_033 = -0.052/unit (p=1.5e-174 in iteration 3 OLS).",
+          "p_value": 1.5e-174,
+          "effect_estimate": -0.052,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "proposed_hypotheses": [
+        {
+          "id": "h12",
+          "text": "feature_029, feature_028, feature_018, and feature_023 act primarily as predictive biomarkers for feature_013 rather than as independent prognostic variables: each has near-zero pfs_months effect within the feature_013=0 stratum.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h12"],
+          "code": "for c in [feature_029, feature_028, feature_018, feature_023]: ttest_ind across c within feature_013==0",
+          "result_summary": "Within feature_013=0 (n=32572): feature_029=1 vs 0 mean PFS = 4.313 vs 4.303 (diff=+0.010); feature_028=1 vs 0 mean = 4.316 vs 4.307 (diff=+0.009); feature_018=1 vs 0 mean = 4.322 vs 4.307 (diff=+0.015); feature_023=1 vs 0 mean = 4.303 vs 4.323 (diff=-0.020). None is meaningfully prognostic on its own — all four are essentially pure predictive biomarkers (their entire association with PFS goes through interaction with feature_013).",
+          "p_value": null,
+          "effect_estimate": 0.015,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "proposed_hypotheses": [
+        {
+          "id": "h13",
+          "text": "Patients in the joint biomarker-favorable subgroup defined by feature_029=1 AND feature_028=0 AND feature_018=0 will have a substantially larger feature_013 effect on pfs_months than patients lacking any of these conditions; the effect outside this subgroup will be approximately zero.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h13"],
+          "code": "mask = (df['feature_029']==1) & (df['feature_028']==0) & (df['feature_018']==0); ttest_ind within and outside",
+          "result_summary": "Favorable subgroup (n=18681, 37.4% of cohort): feature_013=0 mean PFS=4.300 (n=12110); feature_013=1 mean=7.209 (n=6571); diff=+2.908 months (p<1e-300). Complementary 'non-responder' subgroup (n=31319): feature_013=0 mean=4.316; feature_013=1 mean=4.319; diff=+0.003 months (p=0.91, not significant). The treatment effect is fully concentrated in the joint-favorable subgroup.",
+          "p_value": 0.0,
+          "effect_estimate": 2.908,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "proposed_hypotheses": [
+        {
+          "id": "h14",
+          "text": "Within the joint-favorable subgroup, the feature_013 treatment effect on pfs_months is further enhanced when feature_023=1 and when feature_033 is below its median, with the largest effect concentrated in the most-favorable subgroup.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h14"],
+          "code": "ttest_ind within mask & feature_023==1 & feature_033 < median",
+          "result_summary": "feature_029=1 & feature_028=0 & feature_018=0 & feature_023=1: n=15916, diff=+2.946 mo. Adding feature_033 < median (12.20): n=7917, trt=0 mean=4.260, trt=1 mean=9.270, diff=+5.010 mo. Stratifying the joint-favorable subgroup by feature_033 quartile gives Q1 +4.93, Q2 +4.97, Q3 +1.72, Q4 -0.05 — feature_033 is the dominant continuous gradient even within the binary-favorable subgroup.",
+          "p_value": 0.0,
+          "effect_estimate": 5.010,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "proposed_hypotheses": [
+        {
+          "id": "h15",
+          "text": "Joint linear-regression with all five identified modifiers (feature_029, feature_028, feature_018, feature_023, feature_033) interacting with feature_013 will show that each interaction term retains independent significance after the others are adjusted for.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h15"],
+          "code": "OLS pfs_months ~ feature_013 + feature_029 + feature_028 + feature_018 + feature_023 + feature_033 + all five feature_013:modifier interactions",
+          "result_summary": "Interaction terms (all significant): feature_013 x feature_029 = +1.465 (p<1e-100); feature_013 x feature_028 = -1.588 (p<1e-200); feature_013 x feature_018 = -1.337 (p<1e-100); feature_013 x feature_023 = +0.121 (p=0.046); feature_013 x feature_033 = -0.052/unit (p<1e-100). The main effects of the four binary modifiers (when feature_013=0) all have p>0.17 and |coef|<0.05 — they have no independent prognostic value but full predictive value. The dominant modifiers are feature_028, feature_029, feature_018, and feature_033; feature_023 adds only a small marginal boost once the others are conditioned on.",
+          "p_value": 1e-200,
+          "effect_estimate": -1.588,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "proposed_hypotheses": [
+        {
+          "id": "h16",
+          "text": "feature_001 (-1.05 mo main effect, n=5090, ~10% of cohort) is a constant prognostic risk factor (e.g., aggressive subtype) rather than a treatment, so its effect should be roughly constant across feature_012 tertiles and independent of feature_013 status.",
+          "kind": "novel"
+        },
+        {
+          "id": "h17",
+          "text": "feature_005 (3-level, large prognostic effect) is a constant prognostic factor: the feature_013 treatment effect on pfs_months will be approximately equal across feature_005 levels.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h16"],
+          "code": "stratify feature_001 effect by feature_012 tertile and by feature_013",
+          "result_summary": "feature_001 effect by feature_012 tertile: T1 -0.94, T2 -1.05, T3 -1.06 (roughly constant). feature_001 effect within feature_013=0 = -1.029, within feature_013=1 = -1.070 (essentially identical). Consistent with a constant prognostic effect, not a treatment-modifiable one.",
+          "p_value": 1e-150,
+          "effect_estimate": -1.05,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h17"],
+          "code": "stratify feature_013 effect by feature_005 level",
+          "result_summary": "feature_013 effect by feature_005 level: level 0 +1.115, level 1 +1.093, level 2 +1.149. Differences <0.06 mo across levels — feature_005 is purely a prognostic main-effect variable and does not modify the feature_013 treatment effect on the cohort-mean scale (although the absolute PFS levels differ markedly).",
+          "p_value": null,
+          "effect_estimate": 1.115,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "proposed_hypotheses": [
+        {
+          "id": "h18",
+          "text": "feature_013 was assigned approximately independently of the four binary biomarker modifiers (feature_029, feature_028, feature_018, feature_023), so the heterogeneity findings reflect predictive biomarker behavior rather than confounding-by-indication.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h18"],
+          "code": "compare P(modifier=1 | feature_013=1) vs P(modifier=1 | feature_013=0)",
+          "result_summary": "Balance check: P(feature_029=1) is 0.700 in trt vs 0.697 in control; feature_028=1 0.346 vs 0.348; feature_018=1 0.184 vs 0.179; feature_023=1 0.640 vs 0.638. All four modifiers are balanced to within 0.005 across feature_013 arms — assignment of feature_013 appears independent of these biomarkers, supporting that the observed heterogeneity is genuine effect modification rather than confounding-by-indication.",
+          "p_value": null,
+          "effect_estimate": 0.003,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "proposed_hypotheses": [
+        {
+          "id": "h19",
+          "text": "Final best-supported responder-subgroup hypothesis for feature_013: among breast-cancer patients with feature_029=1 AND feature_028=0 AND feature_018=0, treatment with feature_013=1 increases mean pfs_months by ~2.9 months relative to feature_013=0; outside this joint subgroup the effect is essentially zero. The effect is further amplified to ~5 months when feature_023=1 and feature_033 < ~12.2.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h19"],
+          "code": "summary of all subgroup analyses; final responder definition feature_029=1 & feature_028=0 & feature_018=0 [& feature_023=1 & feature_033 < median for maximum effect]",
+          "result_summary": "Final responder subgroup (feature_029=1 AND feature_028=0 AND feature_018=0): n=18681 (37.4%), feature_013 effect = +2.908 mo (p<1e-300); complementary group: feature_013 effect = +0.003 mo (p=0.91). Maximum-effect subgroup (also feature_023=1 AND feature_033 < median): n=7917 (15.8%), feature_013 effect = +5.010 mo. Outside the responder subgroup feature_013 has no measurable benefit — adding feature_028=1, feature_029=0, or feature_018=1 each individually neutralises the treatment effect.",
+          "p_value": 0.0,
+          "effect_estimate": 2.908,
+          "significant": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,162 @@
+Oncology dataset analysis summary — ds001_nsclc (n = 50,000)
+=============================================================
+
+OUTCOME: pfs_months (continuous; range 0.0–15.3, mean 3.43, SD 2.23). No
+censoring indicator was present, so analyses used linear regression / t-tests.
+
+OVERALL APPROACH
+----------------
+I ran 25 iterations of the propose-test-refine loop. Iterations 1–4 mapped
+out univariate and adjusted main effects. Iterations 5–6 used independence
+patterns to triage which binary features behaved like randomized treatments
+versus biomarkers/disease features. Iterations 7–13 screened candidate
+treatments for treatment-by-feature interactions. Iterations 14–22 explored
+constancy of negative prognostic factors and continuous covariates.
+Iterations 23–25 produced the final subgroup hypothesis and verified it.
+
+A multivariable OLS over all features (with feature_014, feature_001, and
+feature_006 entered as categorical) explained 89.4% of PFS variance, so the
+features collectively are highly informative.
+
+MAIN PROGNOSTIC EFFECTS (signed direction → PFS)
+------------------------------------------------
+Confirmed independent predictors after multivariable adjustment:
+  • feature_015 (continuous 30–90):  +0.168 months PFS per unit (t=512). Across
+    its 60-unit range that is ~+10 months — by far the dominant predictor.
+    Direction is positive (higher feature_015 → longer PFS).
+  • feature_014 (ordinal 0/1/2):     0 → reference, 1 → −1.15, 2 → −2.18 months.
+    Looks like an ECOG/PS-style ordinal variable.
+  • feature_023 (binary, prev 65%):  −1.42 months. Independent of all other
+    features → resembles a randomly-assigned indicator (or universal disease
+    feature). Negative effect is constant across subgroups (iter 14, 24).
+  • feature_011 (binary, prev 25%):  −0.91 months. Same independence pattern
+    and constant negative effect.
+  • feature_006 (squamous):          −0.72 months vs adenocarcinoma.
+  • feature_001 (smoking):           current smoker −0.55 vs former; former and
+    never indistinguishable.
+  • feature_025 (continuous 1.7–5.5): +0.46/unit (albumin-like).
+  • feature_017 (continuous 0–28):    −0.073/unit.
+  • feature_032 (continuous, ~50–830): −0.0004/unit (small per-unit but
+    statistically significant; LDH-like spread).
+  • feature_031 (binary):            −0.20 months main effect.
+  • feature_005 (binary, prev 3%):   −0.11 months.
+
+Univariate-significant features that were CONFOUNDED and lost independent
+significance: feature_022, feature_028, feature_021, feature_002, feature_012,
+feature_020, feature_027.
+
+TREATMENT IDENTIFICATION
+------------------------
+By cross-tabulating each binary feature against patient characteristics
+(histology, smoking, performance status, feature_023), I separated:
+  • Biomarker-like (correlated with patient features): feature_022 (51% in
+    never-smokers vs 3% in current = EGFR-pattern), feature_028 (10% / 2.5% =
+    ALK-pattern), feature_021, feature_016 (smoking-correlated).
+  • Random/treatment-like (independent of patient features): feature_018,
+    feature_011, feature_023, feature_002, feature_005, feature_012,
+    feature_020, feature_027.
+
+Among the random-like features, only feature_018 had a positive PFS main
+effect (+0.32 months), making it the prime candidate for an effective
+intervention. feature_011 and feature_023 had large but uniformly NEGATIVE
+effects with no heterogeneity (iter 14, 24); they best fit "constant negative
+prognostic factor" rather than "treatment with heterogeneity."
+
+TREATMENT-EFFECT HETEROGENEITY — feature_018
+---------------------------------------------
+The marginal feature_018 effect of +0.32 months hides a striking subgroup
+pattern. Interaction screening (iter 7) found highly significant interactions:
+  • feature_018:feature_016 = +2.56 (p≈0)            ← largest, defining
+  • feature_018:feature_028 = −0.49 (p=4.1e-07)
+  • feature_018:feature_022 = −0.24 (p=9.9e-05)
+  • feature_018:feature_001 (never) = −0.50 (p=3e-14)
+  • feature_018:feature_006 (squamous) = +0.17 (p=2e-04)
+
+Layered stratification (iterations 8–11) refined the picture:
+
+  Stratum                     n      feature_018 effect on PFS    p
+  feature_016 = 0          43,632    −0.005 months                0.80
+  feature_016 = 1, 028=1      259    −0.349                       0.23
+  feature_016 = 1, 028=0    6,109    +2.667                       3.4e-291
+
+Within feature_016=1, feature_028=0, the only further modifier was
+feature_031:
+
+  (016=1, 028=0, 031=0)     3,370    +4.83 months                 ~0
+  (016=1, 028=0, 031=1)     2,739    +0.002                       0.98
+
+A four-way interaction model (iter 12, feature_018 × feature_016 ×
+feature_028 × feature_031) produced terms consistent with this picture:
+feature_018:feature_016 = +4.85; the addition of feature_028=1 OR
+feature_031=1 each contributes about −5 months that almost exactly cancel
+the +4.85 benefit, so any patient with feature_028=1 OR feature_031=1
+shows essentially zero treatment effect.
+
+A full eight-cell verification (iter 11) confirmed that feature_018 has
+significant benefit in exactly one of eight (feature_016, feature_028,
+feature_031) cells — the (1, 0, 0) cell — and no effect (point estimates
+within ±0.4 months, all p > 0.2) in the other seven cells.
+
+A trace of an additional resistance signal in feature_005 within the
+responder subgroup (effect drops to +0.20 with p=0.56 in 183 patients) was
+not statistically robust given the small subgroup and was not included in
+the final subgroup definition.
+
+Continuous prognostic features (feature_017, feature_025) did not modify the
+feature_018 effect (interactions n.s.); they act additively. feature_019
+(continuous 0–0.8, plausibly PD-L1-like) did NOT modify feature_018 once
+feature_016 was in the model — the binary feature_016 rather than continuous
+feature_019 is the predictive biomarker for feature_018 in this dataset.
+
+FINAL TREATMENT-EFFECT SUBGROUP HYPOTHESIS
+------------------------------------------
+For the outcome pfs_months and the treatment feature_018:
+
+  feature_018 produces a clinically large positive PFS effect of
+  approximately +4.83 months (treated 8.09 vs untreated 3.26 months,
+  n = 3,370, p ≈ 0) IF AND ONLY IF the patient has all three of:
+       feature_016 = 1   (positive predictive biomarker)
+       feature_028 = 0   (absence of resistance marker #1)
+       feature_031 = 0   (absence of resistance marker #2)
+  Outside this subgroup (94% of the cohort), feature_018 has no detectable
+  effect on PFS.
+
+This is the only outcome with a treatment whose effect is heterogeneous;
+feature_011 and feature_023 (the other independent-distribution binaries
+with large effects) act as constant additive negative prognostic factors
+across subgroups. The remaining random-like binaries (feature_002, _005,
+_012, _020, _027) showed no clinically meaningful main effects or
+heterogeneity (iter 13).
+
+OVERALL CONCLUSIONS
+-------------------
+1. PFS in this cohort is overwhelmingly driven by patient/disease
+   characteristics (feature_015, feature_014, feature_023, feature_011,
+   feature_006, feature_001, feature_025, feature_017), with adjusted R²
+   ~ 0.89.
+2. Among the binary features that look randomly assigned, only feature_018
+   behaves like a beneficial treatment — and its benefit is biomarker-gated.
+3. The treatment-effect story for feature_018 is unusually clean: feature_016
+   is the positive predictive biomarker; feature_028 and feature_031 are
+   independent resistance/non-response markers that each fully nullify the
+   benefit.
+4. feature_011 and feature_023 are best modelled as constant negative
+   prognostic factors with effects of about −0.9 and −1.4 months,
+   approximately invariant across all patient subgroups.
+5. Continuous biomarker-like features feature_019 and feature_032 are not
+   independent treatment-effect modifiers once the categorical biomarkers
+   feature_016 / feature_028 / feature_031 are accounted for.
+
+LIMITATIONS / CAVEATS
+---------------------
+• pfs_months has no censoring indicator, so analyses are linear-regression
+  based rather than time-to-event; if there is hidden censoring, effects
+  could be biased.
+• Direction of feature_015 is positive, which would be unusual if feature_015
+  is age (older typically does worse in NSCLC). Either the encoding is
+  inverted or the variable represents something other than age.
+• The feature_005 attenuation signal in the responder subgroup is suggestive
+  but underpowered (n = 183 with feature_005=1).
+• All "treatment-like" assignments are inferred from independence patterns;
+  a feature that happens to be balanced across patient characteristics
+  could still be a non-treatment indicator.

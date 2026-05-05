@@ -1,0 +1,206 @@
+Analysis summary for ds001_crc (50,000 patients, single outcome pfs_months)
+================================================================================
+
+Cohort and outcome
+------------------
+The cohort comprises 50,000 patients with a single time-to-event outcome,
+pfs_months (mean 4.31, median 4.21, sd 2.29, range 0-16.25). 1,403 patients
+(2.8%) have pfs_months exactly 0 and the distribution is right-skewed
+(skew=2.98). The outcome is treated as continuous throughout. The dataset
+contains 33 anonymized features with no missing values.
+
+Univariate associations with pfs_months
+---------------------------------------
+Continuous features (Spearman rho with PFS, sorted by magnitude):
+  feature_015 (range 30-90): rho = +0.785 (very strong, dose-response across bins)
+  feature_025 (range 0-25):  rho = -0.120
+  feature_019 (range 1.5-5.5): rho = +0.103
+  feature_005 (range 0.02-777, mean 9.2): rho = -0.047
+  All other continuous features: |rho| < 0.02 (effectively no univariate signal)
+
+Three-level ordinal feature_001 shows a strong monotone dose-response: mean PFS
+5.27 -> 4.05 -> 2.91 across levels 0/1/2 (Spearman rho = -0.36, OLS slope -1.19
+months/level).
+
+Binary features (sorted by signed univariate effect on PFS):
+  feature_014 (prev 55%): -1.352 months
+  feature_027 (prev 20%): +0.972 months  <- only common binary with positive effect
+  feature_023 (prev 42%): -0.327 months
+  feature_006 (prev 35%): -0.305 months
+  feature_022 (prev 4.5%): -0.228 months
+  feature_011 (prev 3%):   +0.221 months
+  All others: |diff| < 0.06 months and not significant.
+
+Multivariable model
+-------------------
+A linear model regressing pfs_months on all 33 features achieves R^2 = 0.859.
+Independent predictors (signed coefficients): feature_015 +0.176/unit,
+feature_001 -1.171/level, feature_014 -1.362, feature_027 +0.943, feature_023
+-0.354, feature_006 -0.287, feature_022 -0.357, feature_005 -0.005/unit,
+feature_019 +0.469/unit, feature_025 -0.076/unit, feature_021 -0.0004/unit.
+All other features add no independent signal after adjustment.
+
+Identification of the treatment variable
+----------------------------------------
+feature_027 (binary, prevalence 20%) is the only common binary feature with a
+positive PFS effect (+0.97 months unadjusted, +0.94 months adjusted) and -
+critically - is BALANCED across every other feature in the dataset (no binary
+prevalence difference > 0.01 and no continuous feature differs by > 0.05 SD
+between feature_027=1 and =0 arms). This balance pattern is the signature of a
+randomized treatment assignment, so feature_027 was treated as the trial
+"treatment" for all heterogeneity analyses.
+
+Treatment-effect heterogeneity screen
+-------------------------------------
+For each non-treatment feature, an OLS model
+   pfs_months ~ feature_027 + F + feature_027*F
+was fitted and the interaction term ranked by p-value.
+
+Top binary interaction modifiers (signed effect on the treatment effect):
+  feature_023 p = 7.7e-226, beta_int = -1.629  -> abolishes benefit
+  feature_006 p = 4.1e-168, beta_int = -1.454  -> abolishes benefit
+  feature_022 p = 6.1e-23,  beta_int = -1.183  -> abolishes benefit
+  feature_011 p = 1.2e-11,  beta_int = +0.988  -> apparent enhancement
+
+Top continuous interaction modifier:
+  feature_005 p = 8.7e-58,  beta_int = -0.025/unit  -> higher value, smaller benefit
+
+Treatment effect by 2x2 cross of feature_023 x feature_006:
+  (0,0) N=18,853: TE = +2.520 months (p << 1e-300)
+  (0,1) N=10,249: TE = +0.071 months (p = 0.16)
+  (1,0) N=13,490: TE = +0.061 months (p = 0.17)
+  (1,1) N=7,408 : TE = -0.040 months (p = 0.52)
+
+This is an "OR-of-resistance" pattern: a single positive marker (feature_023 OR
+feature_006) is sufficient to completely abolish the treatment benefit; only
+patients negative for BOTH derive a substantial benefit.
+
+Adding feature_022 negativity raises TE in the triple wild-type subgroup
+(N=17,372) from +2.520 to +2.758 months.
+
+Continuous refinement: feature_005
+----------------------------------
+Within the triple wild-type subgroup (feature_023=0 AND feature_006=0 AND
+feature_022=0), feature_005 is the dominant remaining effect modifier
+(interaction p = 7.4e-136). TE by feature_005 quartile within WT:
+  Q1 (<1.97):       N=4342  TE = +5.030 months
+  Q2 (1.97-4.47):   N=4329  TE = +5.034 months
+  Q3 (4.47-9.90):   N=4353  TE = +0.681 months
+  Q4 (>=9.90):      N=4348  TE = -0.017 months
+
+Threshold sweep showed a sharp inflection between feature_005 = 4 and
+feature_005 = 5; using feature_005 < 5 yields TE_below = +5.013, TE_above
+= +0.005. The cut at 5 was chosen as the cleanest binary threshold.
+
+The apparent feature_011 enhancement
+------------------------------------
+feature_011 (prevalence 3%) appeared to roughly double the treatment effect
+in the full cohort (TE = +1.93 in feature_011=1 vs +0.94 in feature_011=0).
+However:
+  - feature_011 and feature_022 are MUTUALLY EXCLUSIVE (zero co-occurrence),
+  - feature_011 is anti-correlated with feature_023 (r = -0.149),
+  - so feature_011=1 patients are over-represented in the wild-type stratum.
+Within the triple wild-type subgroup, TE is +2.749 (f011=0) vs +2.906 (f011=1)
+- essentially identical. The marginal "enhancement" was a confounding artifact
+of f011=1 patients being unusually likely to be wild-type for the resistance
+markers; intrinsic enhancement is small.
+
+Mutual exclusivity panel
+------------------------
+Per-patient sum across the rare binaries {feature_022, feature_011,
+feature_016, feature_028, feature_002}: 0 = 42,416; 1 = 7,127; 2 = 452;
+3 = 5. feature_022 and feature_011 never co-occur. This strongly resembles
+a panel of mutually exclusive driver mutations / molecular subtypes.
+
+Final responder subgroup
+------------------------
+Composite definition:
+   feature_023 = 0 AND feature_006 = 0 AND feature_022 = 0 AND feature_005 < 5
+
+Responder subgroup (N = 9,326; 18.7% of cohort):
+  mean PFS treated  = 9.101 months
+  mean PFS control  = 4.088 months
+  treatment effect  = +5.013 months (p << 1e-300)
+
+Complement (N = 40,674; 81.3% of cohort):
+  treatment effect  = +0.025 months (p = 0.33)
+
+Within the responder subgroup, no further feature shows a significant
+interaction with feature_027 (smallest p = 0.073, feature_029, beta = +0.020/
+unit). The subgroup definition is essentially saturated.
+
+Treatment-effect uniformity across prognostic predictors
+--------------------------------------------------------
+Several features that strongly determine baseline PFS do NOT modify the
+feature_027 treatment effect (i.e., they are purely prognostic, not predictive):
+  feature_015: TE flat across quartiles (+1.03, +0.89, +0.96, +0.95);
+               interaction p = 0.28
+  feature_001: TE flat across levels (+0.92, +0.99, +0.90); interaction p = 0.89
+  feature_014: TE = +0.94 (=0) vs +1.01 (=1); interaction p = 0.15
+  feature_025: TE = +0.99 (high) vs +0.96 (low); interaction p = 0.36
+
+So the heterogeneity story is clean: a small number of binary biomarkers
+(feature_023, feature_006, feature_022) plus the continuous feature_005
+predict whether the treatment will help, while the dominant prognostic
+factors (feature_015, feature_001, feature_014, feature_019, feature_025)
+shift the baseline but not the benefit.
+
+Hypotheses supported vs refuted
+-------------------------------
+Supported (with strong statistical evidence):
+  - feature_015 strongly positively associated with PFS (h2)
+  - feature_019 positively associated with PFS (h3)
+  - feature_025 negatively associated with PFS (h4)
+  - feature_005 negatively associated with PFS (h5)
+  - feature_014 negatively associated with PFS (h6)
+  - feature_023, feature_006 negatively associated with PFS (h7, h8)
+  - feature_027 positively associated with PFS (h9)
+  - feature_001 monotone negative dose-response (h10)
+  - Multivariable model identifies the expected dominant predictors (h11)
+  - feature_027 is balanced (consistent with randomized assignment) (h12)
+  - feature_027 has a real overall PFS benefit (h13)
+  - Treatment effect is heterogeneous across binary biomarkers (h14)
+  - Treatment effect is heterogeneous across continuous features (h15)
+  - feature_023, feature_006, feature_022 each abolish benefit (h16, h17, h18)
+  - Joint feature_023 x feature_006 shows OR-of-resistance pattern (h19)
+  - Triple wild-type definition further strengthens benefit (h20)
+  - feature_005 is the dominant continuous modifier within WT (h21)
+  - feature_022, feature_011, feature_016, feature_028, feature_002 are mostly
+    mutually exclusive (h23)
+  - Final composite responder subgroup yields +5 month TE vs ~0 in complement
+    (h24, h31, h32)
+  - feature_015 is purely prognostic (h27)
+  - feature_001 is purely prognostic (h28)
+  - feature_014 is purely prognostic (h29)
+  - feature_005 is BOTH prognostic and predictive; feature_025 is prognostic
+    only (h30)
+
+Partially refuted / refined:
+  - The apparent feature_011 treatment-effect enhancement (h22) was traced to
+    confounding by f011=1 patients being more likely wild-type; within the WT
+    subgroup feature_011 adds no further benefit.
+
+Not refuted but bounded:
+  - Within the responder subgroup, no further feature meaningfully modifies
+    the treatment effect (h25); the strongest residual signal is feature_029
+    at p = 0.073 with a small magnitude.
+
+Final treatment-effect subgroup statement
+-----------------------------------------
+Treatment feature_027 (the variable behaving like a randomized study arm)
+confers a large and clinically meaningful PFS benefit only in the subgroup
+of patients defined by:
+
+   feature_023 = 0  AND
+   feature_006 = 0  AND
+   feature_022 = 0  AND
+   feature_005 < 5
+
+This subgroup represents 18.7% of the cohort. Within it, treatment more than
+doubles mean PFS (4.09 to 9.10 months, an absolute gain of 5.01 months,
+p << 1e-300). In the remaining 81.3% of patients, the treatment effect is
+indistinguishable from zero (+0.03 months, p = 0.33). The strongest single
+resistance modifiers, ranked by interaction strength, are feature_023,
+feature_006, feature_022, and high feature_005. Prognostic factors
+(feature_015, feature_001, feature_014, feature_019, feature_025) shift the
+baseline PFS but do not modify the treatment benefit.

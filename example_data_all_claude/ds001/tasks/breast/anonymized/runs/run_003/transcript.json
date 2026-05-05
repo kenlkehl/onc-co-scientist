@@ -1,0 +1,498 @@
+{
+  "dataset_id": "ds001_breast",
+  "model_id": "claude-opus-4-7",
+  "harness_id": "claude-code-manual@1.0",
+  "max_iterations": 25,
+  "iterations": [
+    {
+      "index": 1,
+      "proposed_hypotheses": [
+        {"id": "h1", "text": "At least one binary feature in the dataset is associated with mean pfs_months on a univariate basis (two-sample t-test, p<0.05).", "kind": "novel"},
+        {"id": "h2", "text": "At least one continuous feature in the dataset shows a non-zero Pearson correlation with pfs_months (p<0.05).", "kind": "novel"},
+        {"id": "h3", "text": "feature_005, the 3-level categorical, is ordinally associated with pfs_months: higher levels predict shorter PFS.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h1"],
+          "code": "for c in binary_feats: stats.ttest_ind(df.loc[df[c]==1,'pfs_months'], df.loc[df[c]==0,'pfs_months'], equal_var=False)",
+          "result_summary": "Univariate screen of 18 binary features. Strongest associations: feature_006 (mean PFS 3.62 vs 5.15, diff -1.54, p<1e-300), feature_013 (5.41 vs 4.31, diff +1.10, p<1e-300), feature_001 (3.75 vs 4.80, diff -1.05, p=1.5e-178), feature_028 (4.33 vs 4.89, diff -0.56, p=6e-144), feature_029 (4.86 vs 4.30, diff +0.57, p=4e-143), feature_018 (4.32 vs 4.78, diff -0.46, p=6e-70), feature_023 (4.82 vs 4.46, diff +0.36, p=6e-59).",
+          "p_value": 0.0,
+          "effect_estimate": 1.10,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h2"],
+          "code": "for c in cont_feats: stats.pearsonr(df[c], df['pfs_months'])",
+          "result_summary": "Pearson r screen of 18 continuous features. feature_012 (likely age) r=+0.70 (p~0); feature_004 r=-0.115 (p=4e-148); feature_024 r=+0.100 (p=9e-112); feature_033 r=-0.091 (p=3e-93). Other features all |r|<0.02.",
+          "p_value": 0.0,
+          "effect_estimate": 0.70,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h3"],
+          "code": "df.groupby('feature_005')['pfs_months'].mean(); stats.f_oneway(...)",
+          "result_summary": "Mean PFS by feature_005: level 0 = 5.64 mo (n=17,592), level 1 = 4.44 mo (n=24,971), level 2 = 3.29 mo (n=7,437). Monotone decreasing. ANOVA F=2861, p~0.",
+          "p_value": 0.0,
+          "effect_estimate": -2.35,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "proposed_hypotheses": [
+        {"id": "h4", "text": "After adjusting for all features simultaneously in an OLS model, feature_013, feature_029, feature_006, feature_001, feature_028, feature_018, feature_005, feature_012, feature_024, feature_004, and feature_033 each retain independent associations with pfs_months at p<0.001.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h4"],
+          "code": "sm.OLS(df['pfs_months'], sm.add_constant(pd.get_dummies(df[features], columns=['feature_005'], drop_first=True).astype(float))).fit()",
+          "result_summary": "Multivariable OLS R^2=0.79. Independent coefficients (95% CI all exclude 0, p<0.001 each unless noted): feature_012 +0.176/unit; feature_005 level 1 -1.19, level 2 -2.33; feature_006 -1.55; feature_001 -0.98; feature_028 -0.58; feature_018 -0.47; feature_029 +0.53; feature_013 +1.10; feature_024 +0.476/unit; feature_004 -0.077/unit; feature_033 -0.019/unit; feature_031 -0.0005/unit. Most other features (e.g., feature_011, feature_030, feature_019, feature_023, feature_016, feature_009, feature_026, feature_015, feature_022, feature_008, feature_032, feature_020, feature_036, feature_021, feature_003, feature_025, feature_027, feature_034, feature_014, feature_037, feature_017, feature_035, feature_002, feature_007, feature_010) had p>0.05.",
+          "p_value": 0.0,
+          "effect_estimate": 1.10,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 3,
+      "proposed_hypotheses": [
+        {"id": "h5", "text": "feature_013 is the most plausible treatment variable (binary, ~35% prevalence, largest beneficial main effect, no obvious co-linearity with prognostic biomarkers); feature_029 is the most plausible predictive biomarker (binary, ~70% prevalence, beneficial main effect that may not be a treatment).", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h5"],
+          "code": "Inspect prevalences and pairwise correlations among the strong binary signals.",
+          "result_summary": "feature_013 has 35% prevalence. feature_029 has 70% prevalence. They correlate weakly (r=0.0008). feature_029 correlates strongly with feature_023 (r=0.67) — consistent with feature_029 being a biomarker (perhaps with a related test feature_023). Treatment-vs-biomarker assignment to be settled by interaction analysis.",
+          "p_value": null,
+          "effect_estimate": null,
+          "significant": null
+        }
+      ]
+    },
+    {
+      "index": 4,
+      "proposed_hypotheses": [
+        {"id": "h6", "text": "There is a positive multiplicative interaction between feature_013 and feature_029 on pfs_months: the benefit of feature_013 is greater in patients with feature_029=1 than in feature_029=0.", "kind": "novel"},
+        {"id": "h7", "text": "There is a positive multiplicative interaction between feature_013 and feature_023 on pfs_months.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h6"],
+          "code": "smf.ols('pfs_months ~ feature_013 * feature_029', data=df).fit()",
+          "result_summary": "Interaction coefficient feature_013:feature_029 = +1.594 months (SE 0.049, t=32.5, p=9.3e-229). Main effect of feature_013 alone -0.018 (n.s., p=0.67); main effect of feature_029 alone +0.011 (n.s., p=0.71). Cell means: (T=0,B=0)=4.30; (T=0,B=1)=4.31; (T=1,B=0)=4.29; (T=1,B=1)=5.89. The treatment benefit is essentially exclusive to feature_029=1.",
+          "p_value": 9.3e-229,
+          "effect_estimate": 1.594,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h7"],
+          "code": "smf.ols('pfs_months ~ feature_013 * feature_023', data=df).fit()",
+          "result_summary": "Interaction feature_013:feature_023 = +1.093 months (SE 0.047, t=23.1, p=2.6e-117). Effect attributable to feature_023 being a near-proxy for feature_029 (r=0.67); does not survive after conditioning on feature_029.",
+          "p_value": 2.6e-117,
+          "effect_estimate": 1.093,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 5,
+      "proposed_hypotheses": [
+        {"id": "h8", "text": "After adjusting for all major prognostic covariates (feature_012, feature_005, feature_006, feature_001, feature_028, feature_018, feature_024, feature_004, feature_033, feature_031), the feature_013:feature_029 interaction remains positive and significant at p<0.001.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h8"],
+          "code": "smf.ols('pfs_months ~ feature_013 * feature_029 + feature_012 + C(feature_005) + feature_006 + feature_001 + feature_028 + feature_018 + feature_024 + feature_004 + feature_033 + feature_031', data=df).fit()",
+          "result_summary": "Adjusted interaction feature_013:feature_029 = +1.560 (SE 0.022, t=70.2, p~0). Main effects of feature_013 and feature_029 alone are null (both p>0.5). Model R^2=0.81. Confirms biomarker-defined treatment effect after controlling for prognostics.",
+          "p_value": 0.0,
+          "effect_estimate": 1.560,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 6,
+      "proposed_hypotheses": [
+        {"id": "h9", "text": "The benefit of feature_013 is reduced or abolished in patients with feature_028=1 (negative interaction).", "kind": "novel"},
+        {"id": "h10", "text": "The benefit of feature_013 is reduced or abolished in patients with feature_018=1 (negative interaction).", "kind": "novel"},
+        {"id": "h11", "text": "The benefit of feature_013 declines as continuous feature_033 increases (negative continuous interaction).", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h9"],
+          "code": "smf.ols('pfs_months ~ feature_013 * feature_028', data=df).fit()",
+          "result_summary": "Interaction feature_013:feature_028 = -1.623 months (SE 0.046, t=-35.0, p=4.0e-255). Strongest negative interaction in the entire screen.",
+          "p_value": 4.0e-255,
+          "effect_estimate": -1.623,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h10"],
+          "code": "smf.ols('pfs_months ~ feature_013 * feature_018', data=df).fit()",
+          "result_summary": "Interaction feature_013:feature_018 = -1.364 months (SE 0.060, t=-22.7, p=2.2e-118).",
+          "p_value": 2.2e-118,
+          "effect_estimate": -1.364,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h11"],
+          "code": "smf.ols('pfs_months ~ feature_013 * feature_033', data=df).fit()",
+          "result_summary": "Continuous interaction feature_013:feature_033 = -0.0524 months per unit (SE 0.0019, t=-28.1, p=1.5e-174).",
+          "p_value": 1.5e-174,
+          "effect_estimate": -0.0524,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 7,
+      "proposed_hypotheses": [
+        {"id": "h12", "text": "Within the feature_029=1 stratum (the biomarker-positive subgroup), feature_028=1 abolishes the feature_013 benefit.", "kind": "refined"},
+        {"id": "h13", "text": "Within the feature_029=1 stratum, feature_018=1 abolishes the feature_013 benefit.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h12"],
+          "code": "smf.ols('pfs_months ~ feature_013 * feature_028', data=df[df.feature_029==1]).fit()",
+          "result_summary": "Within feature_029=1: simple feature_013 effect = +2.376 mo when feature_028=0, but interaction feature_013:feature_028 = -2.340 (p~0). Net effect when feature_028=1 is +0.04 mo (effectively zero). Cell means in feature_029=1: (T=0,F028=0)=4.30, (T=1,F028=0)=6.68; (T=0,F028=1)=4.33, (T=1,F028=1)=4.36.",
+          "p_value": 0.0,
+          "effect_estimate": -2.340,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h13"],
+          "code": "smf.ols('pfs_months ~ feature_013 * feature_018', data=df[df.feature_029==1]).fit()",
+          "result_summary": "Within feature_029=1: simple feature_013 effect = +1.924 mo when feature_018=0, interaction feature_013:feature_018 = -1.903 (p~0). Cell means: (T=0,F018=0)=4.31, (T=1,F018=0)=6.24; (T=0,F018=1)=4.32, (T=1,F018=1)=4.34.",
+          "p_value": 0.0,
+          "effect_estimate": -1.903,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 8,
+      "proposed_hypotheses": [
+        {"id": "h14", "text": "The joint subgroup defined by feature_029=1 AND feature_028=0 AND feature_018=0 contains essentially all of the feature_013 treatment benefit; outside this subgroup the treatment effect is zero.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h14"],
+          "code": "mask = (df.feature_029==1) & (df.feature_028==0) & (df.feature_018==0); compare PFS by feature_013 in/out",
+          "result_summary": "In subgroup (n=18,681; 37% of cohort): PFS feature_013=0 is 4.30 mo, feature_013=1 is 7.21 mo, effect = +2.91 mo (t=65.6, p~0). Outside subgroup (n=31,319): PFS feature_013=0 is 4.32, feature_013=1 is 4.32, effect = +0.003 mo (t=0.11, p=0.91). Treatment effect entirely explained by subgroup membership.",
+          "p_value": 0.0,
+          "effect_estimate": 2.908,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 9,
+      "proposed_hypotheses": [
+        {"id": "h15", "text": "Within the joint subgroup feature_029=1, feature_028=0, feature_018=0, feature_033 is a continuous modifier such that higher values reduce the treatment benefit.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h15"],
+          "code": "smf.ols('pfs_months ~ feature_013 * feature_033', data=df[(df.feature_029==1)&(df.feature_028==0)&(df.feature_018==0)]).fit()",
+          "result_summary": "Within the joint subgroup: feature_013:feature_033 interaction = -0.135 mo per unit increase in feature_033 (p~0). For each ~7 unit increase in feature_033, the treatment benefit is reduced by ~1 month.",
+          "p_value": 0.0,
+          "effect_estimate": -0.135,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 10,
+      "proposed_hypotheses": [
+        {"id": "h16", "text": "feature_033 acts as a near-binary modifier with a clean cutpoint near 15: below 15 the treatment effect is large (>4 months) and above 15 it is essentially zero.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h16"],
+          "code": "for thr in [5,10,15,20,25,30]: stratify subgroup by feature_033>=thr and compare treatment effect",
+          "result_summary": "Within feature_029=1, feature_028=0, feature_018=0: treatment effect by feature_033 stratum: thr=15: low effect=+4.69, high effect=+0.015; thr=20: low=+3.85, high=-0.03; thr=25: low=+3.40, high=+0.12. Cutpoint at 15 best separates a uniform large effect from near-zero, with substantial sample size on both sides.",
+          "p_value": 0.0,
+          "effect_estimate": 4.687,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 11,
+      "proposed_hypotheses": [
+        {"id": "h17", "text": "The fully refined responsive subgroup is defined by feature_029=1 AND feature_028=0 AND feature_018=0 AND feature_033<15. Within this subgroup the feature_013 treatment effect on pfs_months is approximately +4.7 months (p<<0.001); outside, the effect is null.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h17"],
+          "code": "mask = (df.feature_029==1)&(df.feature_028==0)&(df.feature_018==0)&(df.feature_033<15); compare in/out",
+          "result_summary": "In refined subgroup (n=11,490; 23.0% of cohort): feature_013=0 mean PFS 4.29, feature_013=1 mean 8.97; effect = +4.687 mo, t=102.4, p~0. Outside (n=38,510): feature_013=0 mean 4.32, feature_013=1 mean 4.32; effect = +0.005, p=0.82. Treatment is balanced across subgroup membership (~35% prevalence in both), consistent with random assignment.",
+          "p_value": 0.0,
+          "effect_estimate": 4.687,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 12,
+      "proposed_hypotheses": [
+        {"id": "h18", "text": "Within the refined subgroup, no other binary feature significantly modifies the feature_013 treatment effect at a Bonferroni-corrected threshold (p < 0.05/14 ≈ 0.0036).", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h18"],
+          "code": "Within refined subgroup, fit smf.ols('pfs_months ~ feature_013 * X') for each remaining binary X",
+          "result_summary": "Smallest p-values: feature_023 p=0.0048, feature_030 p=0.096, feature_016 p=0.097. None survive Bonferroni correction. The candidate refinements (e.g., feature_023 +0.35 mo addition) are small relative to the +4.69 main effect and feature_023 is correlated with the already-conditioned feature_029.",
+          "p_value": 0.005,
+          "effect_estimate": 0.351,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 13,
+      "proposed_hypotheses": [
+        {"id": "h19", "text": "Within the refined subgroup, no continuous feature significantly modifies the feature_013 treatment effect at Bonferroni p < 0.05/17 ≈ 0.003.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h19"],
+          "code": "Within refined subgroup, fit smf.ols('pfs_months ~ feature_013 * X') for each remaining continuous X",
+          "result_summary": "Smallest p-values: feature_027 p=0.011, feature_004 p=0.041, feature_002 p=0.072. None survive Bonferroni. No additional continuous modifier evident.",
+          "p_value": 0.011,
+          "effect_estimate": -0.002,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 14,
+      "proposed_hypotheses": [
+        {"id": "h20", "text": "feature_013 treatment effect is independent of feature_005 stratum (no treatment-by-stage interaction).", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h20"],
+          "code": "smf.ols('pfs_months ~ feature_013 * C(feature_005)', data=df_subgroup).fit()",
+          "result_summary": "Within refined subgroup: feature_013 main effect +4.73 mo. Interactions feature_013:C(feature_005)[T.1]=-0.07 (p=0.41) and [T.2]=+0.05 (p=0.70) — both null. Treatment benefit is uniform across all 3 levels of feature_005.",
+          "p_value": 0.41,
+          "effect_estimate": -0.074,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 15,
+      "proposed_hypotheses": [
+        {"id": "h21", "text": "A kitchen-sink interaction model (feature_013 × every other feature simultaneously) confirms feature_033, feature_028, feature_029, and feature_018 dominate as treatment effect modifiers; all other interaction terms have |t|<4.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h21"],
+          "code": "OLS with feature_013 main term plus feature_013 * X for all other features",
+          "result_summary": "Top |t| interaction terms: tx_x_feature_028 t=-89, tx_x_feature_033 t=-73, tx_x_feature_029 t=+58, tx_x_feature_018 t=-54. Next strongest is tx_x_feature_007 t=+3.3 (p=0.0008) — orders of magnitude weaker. Confirms the 4-variable subgroup definition.",
+          "p_value": 0.0,
+          "effect_estimate": -89.0,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 16,
+      "proposed_hypotheses": [
+        {"id": "h22", "text": "Exhaustive enumeration of the 16 cells defined by the four modifiers (feature_029, feature_028, feature_018, feature_033≥15) confirms that the treatment effect concentrates entirely in cell (1,0,0,0) and is statistically null in all other cells.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h22"],
+          "code": "Loop over all 16 combinations of (feature_029, feature_028, feature_018, feature_033>=15) and compute treatment effect.",
+          "result_summary": "Only cell (feature_029=1, feature_028=0, feature_018=0, feature_033<15) shows effect: +4.687 mo (p~0, n=11,490). Effect sizes in the other 15 cells range from -0.282 to +0.172 mo and only one (cell (1,1,0,1) +0.169) reaches p<0.05 (uncorrected p=0.018), which does not survive multiple-testing correction. Subgroup definition is complete and rectangular.",
+          "p_value": 0.0,
+          "effect_estimate": 4.687,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 17,
+      "proposed_hypotheses": [
+        {"id": "h23", "text": "After adjusting for major prognostic covariates inside the refined subgroup, the feature_013 treatment effect remains approximately +4.7 months (p<<0.001).", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h23"],
+          "code": "smf.ols('pfs_months ~ feature_013 + feature_012 + C(feature_005) + feature_006 + feature_001 + feature_024 + feature_004 + feature_033', data=refined_subgroup).fit()",
+          "result_summary": "Adjusted feature_013 coefficient = +4.713 mo (SE 0.013, t=361, p~0). R^2=0.956. Adjustment leaves the treatment effect essentially unchanged from the unadjusted +4.687 mo.",
+          "p_value": 0.0,
+          "effect_estimate": 4.713,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 18,
+      "proposed_hypotheses": [
+        {"id": "h24", "text": "After adjusting for the same prognostic covariates outside the refined subgroup, the feature_013 treatment effect is null.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h24"],
+          "code": "Same OLS in df[~mask].",
+          "result_summary": "Adjusted feature_013 coefficient outside subgroup = -0.0002 mo (SE 0.002, t=-0.12, p=0.90). R^2=0.992. Confirms zero treatment effect outside subgroup.",
+          "p_value": 0.90,
+          "effect_estimate": -0.0002,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 19,
+      "proposed_hypotheses": [
+        {"id": "h25", "text": "feature_006 is a strong prognostic factor for shorter PFS independent of all other features (consistent with metastatic/visceral disease marker).", "kind": "novel"},
+        {"id": "h26", "text": "feature_001 (5,090 patients, ~10% prevalence) is a strong prognostic factor for shorter PFS.", "kind": "novel"},
+        {"id": "h27", "text": "feature_024 (continuous, mean 3.8, std 0.5; plausibly serum albumin) is positively associated with longer PFS.", "kind": "novel"},
+        {"id": "h28", "text": "feature_004 (continuous, mean 3.8, range 0-25; plausibly tumor marker count) is negatively associated with PFS.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h25"],
+          "code": "From multivariable model in iter 2.",
+          "result_summary": "feature_006 adjusted coefficient = -1.55 months (SE 0.011, p~0). One of two largest negative prognostic effects.",
+          "p_value": 0.0,
+          "effect_estimate": -1.55,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h26"],
+          "code": "From multivariable model in iter 2.",
+          "result_summary": "feature_001 adjusted coefficient = -0.98 months (SE 0.017, p~0). Univariate diff -1.05 mo.",
+          "p_value": 0.0,
+          "effect_estimate": -0.98,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h27"],
+          "code": "From multivariable model in iter 2.",
+          "result_summary": "feature_024 adjusted coefficient = +0.476 months per unit (SE 0.010, p~0). Range 1.5-5.5 implies up to ~2 mo PFS spread.",
+          "p_value": 0.0,
+          "effect_estimate": 0.476,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h28"],
+          "code": "From multivariable model in iter 2.",
+          "result_summary": "feature_004 adjusted coefficient = -0.077 months per unit (SE 0.001, p~0). Range 0-25 implies up to ~2 mo PFS spread.",
+          "p_value": 0.0,
+          "effect_estimate": -0.077,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 20,
+      "proposed_hypotheses": [
+        {"id": "h29", "text": "feature_012 (continuous, range 30-90, mean 65; plausibly age) is positively associated with PFS — UNUSUAL in oncology, suggesting it may not be biological age but rather a calendar/index-time variable.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h29"],
+          "code": "From multivariable model: feature_012 coefficient.",
+          "result_summary": "feature_012 adjusted coefficient = +0.176 months per unit (SE 0.0005, t=360, p~0). The strongest single predictor — across the 30-90 range it accounts for ~10.5 months of PFS variation. Direction (older = longer PFS) is opposite to typical age-PFS associations in real-world breast cancer cohorts; consistent with this being a synthetic dataset or a non-age variable (e.g., year of diagnosis or follow-up time index).",
+          "p_value": 0.0,
+          "effect_estimate": 0.176,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 21,
+      "proposed_hypotheses": [
+        {"id": "h30", "text": "feature_005 (3-level categorical) is strongly and monotonically prognostic, consistent with disease stage or tumor grade, and interacts only weakly (if at all) with feature_013 treatment effect.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h30"],
+          "code": "Adjusted main effect (iter 2) and treatment interaction (iter 14).",
+          "result_summary": "Main effect: -1.19 (level 1) and -2.33 (level 2) mo vs level 0 reference (p~0 each). Interaction with feature_013 within refined subgroup: both interaction terms null (p=0.41, 0.70). Stage acts purely prognostically, not predictively for the treatment.",
+          "p_value": 0.0,
+          "effect_estimate": -2.33,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 22,
+      "proposed_hypotheses": [
+        {"id": "h31", "text": "feature_028 acts both as a small negative prognostic factor (~ -0.6 mo main effect) AND as a major treatment-resistance marker for feature_013 in the biomarker-positive subgroup.", "kind": "refined"},
+        {"id": "h32", "text": "feature_018 acts both as a small negative prognostic factor (~ -0.5 mo main effect) AND as a major treatment-resistance marker for feature_013 in the biomarker-positive subgroup.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h31"],
+          "code": "Combined evidence from iter 2 and iter 7.",
+          "result_summary": "feature_028 main effect (adjusted) -0.58 mo p~0; treatment interaction within feature_029=1: -2.34 mo (p~0). Dual prognostic+resistance role.",
+          "p_value": 0.0,
+          "effect_estimate": -2.34,
+          "significant": true
+        },
+        {
+          "hypothesis_ids": ["h32"],
+          "code": "Combined evidence from iter 2 and iter 7.",
+          "result_summary": "feature_018 main effect (adjusted) -0.47 mo p~0; treatment interaction within feature_029=1: -1.90 mo (p~0). Dual prognostic+resistance role.",
+          "p_value": 0.0,
+          "effect_estimate": -1.90,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 23,
+      "proposed_hypotheses": [
+        {"id": "h33", "text": "feature_029 is a pure predictive biomarker (no main prognostic effect after adjustment) whose role is to identify patients eligible for benefit from feature_013 treatment.", "kind": "novel"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h33"],
+          "code": "From iter 5 adjusted interaction model: main effect of feature_029 alone vs interaction term.",
+          "result_summary": "Adjusted main effect of feature_029 alone (in interaction model) = -0.0004 mo (p=0.97). Interaction term with feature_013 = +1.56 mo (p~0). Confirms feature_029 is purely predictive, not prognostic — its apparent prognostic effect in iter 1 univariate analysis was driven by the treatment-interaction component.",
+          "p_value": 0.97,
+          "effect_estimate": -0.0004,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 24,
+      "proposed_hypotheses": [
+        {"id": "h34", "text": "feature_033 acts as a continuous resistance biomarker — its main prognostic effect is small (-0.019 mo per unit) but it strongly attenuates feature_013 benefit, consistent with a tumor burden marker (e.g., LDH or tumor diameter) that signals biology unresponsive to the targeted therapy.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h34"],
+          "code": "Combined main effect (iter 2: -0.019/unit) and treatment interaction (iter 11: -0.0524/unit) and stratified analysis (iter 10).",
+          "result_summary": "feature_033 main effect (adjusted) = -0.019 mo per unit (small). Treatment interaction = -0.052 mo per unit (3x larger). At feature_033=15 threshold, treatment effect drops from +4.69 to +0.015. The biological role appears largely predictive/modifying rather than prognostic.",
+          "p_value": 0.0,
+          "effect_estimate": -0.052,
+          "significant": true
+        }
+      ]
+    },
+    {
+      "index": 25,
+      "proposed_hypotheses": [
+        {"id": "h35", "text": "FINAL TREATMENT-EFFECT-HETEROGENEITY HYPOTHESIS for pfs_months: feature_013 (the treatment) prolongs progression-free survival by approximately +4.7 months (p<<1e-300) ONLY in the subgroup defined by ALL FOUR conditions: feature_029=1 (positive predictive biomarker) AND feature_028=0 (absence of resistance marker 1) AND feature_018=0 (absence of resistance marker 2) AND feature_033<15 (low value of continuous resistance marker). In all other patients (77% of the cohort) feature_013 has no detectable effect on PFS (Δ ≈ +0.005 mo, p=0.82). The treatment is balanced across the subgroup (~35% feature_013=1 in both arms), consistent with random assignment.", "kind": "refined"}
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h35"],
+          "code": "mask = (df.feature_029==1)&(df.feature_028==0)&(df.feature_018==0)&(df.feature_033<15); ttest_ind in/out; OLS-adjusted in/out",
+          "result_summary": "Refined subgroup (n=11,490, 23.0%): unadjusted Δ = +4.687 mo (t=102.4, p~0); adjusted for feature_012, C(feature_005), feature_006, feature_001, feature_024, feature_004, feature_033: +4.713 mo (t=361, p~0). Outside subgroup (n=38,510): unadjusted Δ = +0.005 mo (p=0.82); adjusted Δ = -0.0002 mo (p=0.90). Subgroup definition is rectangular (4 simple AND-clauses), discoverable from a 4-feature interaction screen, and exhausts the heterogeneity present in the dataset.",
+          "p_value": 0.0,
+          "effect_estimate": 4.713,
+          "significant": true
+        }
+      ]
+    }
+  ]
+}

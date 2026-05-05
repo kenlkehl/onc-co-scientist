@@ -1,0 +1,187 @@
+ds001_crc — Analysis Summary
+============================
+
+Cohort: 50,000 patients with progression-free survival (pfs_months) outcome and 33
+de-identified clinical/biomarker features. No missing values. Median PFS = 4.21 months
+(IQR 2.72-5.74), max 16.25 months, with 2.8% having PFS=0.
+
+
+1. Main-effect screening (Iterations 1-3)
+-----------------------------------------
+Univariate associations with pfs_months identified a few strong drivers and many
+features with no detectable signal:
+
+  Strongest univariate drivers
+  - feature_015 (continuous, range 30-90): r = +0.766. Mean PFS rises monotonically
+    from 1.33 mo in the lowest decile (30-52) to 7.45 mo in the highest (78-90).
+    Pattern is consistent with a performance-status-like score (Karnofsky-like).
+  - feature_001 (ordinal 0/1/2): mean PFS 5.27 → 4.05 → 2.91 (ANOVA F=3529, p≈0).
+    Behaves like disease stage / extent.
+  - feature_014 (binary, 55%): -1.35 mo when =1 (p≈0). Strong prognostic.
+  - feature_027 (binary, 20%): +0.97 mo when =1 (p=2e-216). Candidate treatment.
+  - feature_025 (continuous, 0-25): r = -0.123, p≈0. Burden-like marker.
+  - feature_019 (continuous, 1.5-5.5): r = +0.10, p≈0.
+  - feature_006 / feature_023 / feature_022 (binary): smaller negative main effects.
+  - feature_011 (rare 3%): small positive main effect (+0.22).
+
+  Multivariable OLS with all features (using log transforms for highly skewed labs
+  feature_005, feature_021) gave R² = 0.861. Independent significant predictors:
+  feature_015, feature_001, feature_014, feature_006, feature_023, feature_022,
+  log(feature_005), feature_019, log(feature_021), feature_025, feature_027. All
+  other features (033, 029, 026, 013, 008, 030, 003, 004, 017, 032, 007, 009, 031,
+  010, 024, 012, 018, 020, 028, 016, 002) were not independently significant at the
+  multivariable level.
+
+
+2. Categorical biomarker structure (Iteration 4)
+------------------------------------------------
+feature_023, feature_011, and feature_022 are mutually exclusive: no patient has
+more than one of them =1. The cohort splits into four exhaustive categories:
+  WT (all three = 0): n = 25,324 (50.6%), mean PFS = 4.48
+  feature_023 only:   n = 20,898 (41.8%), mean PFS = 4.12
+  feature_022 only:   n = 2,272 (4.5%),  mean PFS = 4.09
+  feature_011 only:   n = 1,506 (3.0%),  mean PFS = 4.53
+
+This pattern is consistent with a multi-state biomarker classification (e.g., a
+RAS/BRAF-like mutation status grouping in colorectal cancer).
+
+
+3. Treatment-effect heterogeneity discovery (Iterations 5-10)
+-------------------------------------------------------------
+Treating feature_027 as the candidate treatment, an interaction screen against every
+other feature revealed strong, biologically-coherent heterogeneity:
+
+  feature_027 × feature_023: interaction coef = -1.63 (p = 8e-226)
+    Stratified treatment effect: feature_023=0: +1.66 mo (p≈0); feature_023=1: +0.03
+    mo (p=0.46). The treatment is essentially inert in feature_023-positive patients.
+
+  feature_027 × feature_006: interaction coef = -1.45 (p = 4e-168)
+    Stratified: feature_006=0 → +1.48 mo; feature_006=1 → +0.03 mo.
+
+  feature_027 × feature_022: interaction coef = -0.99 (p = 1e-104)
+    Stratified: feature_022=0 → +1.03 mo; feature_022=1 → -0.16 mo.
+
+The eight-cell cross of (feature_006, feature_023, feature_022) showed a clean
+dichotomy: in the triple-zero subgroup (n=17,372), feature_027 produces +2.76 mo
+of PFS gain (p≈0). In every other cell of the cross, the effect is null (range
+-0.20 to +0.08, all p>0.10).
+
+
+4. Refining within the favorable triple-zero subgroup (Iterations 11-13)
+------------------------------------------------------------------------
+Within the favorable group (feature_006=0 AND feature_023=0 AND feature_022=0), an
+interaction analysis found a fourth modifier: log(feature_005). Quintile analysis
+on feature_005 within favorable patients:
+
+  Q1 (f005 0.04-1.61):   treatment effect = +5.02 mo
+  Q2 (f005 1.62-3.27):   +5.06 mo
+  Q3 (f005 3.28-6.02):   +3.45 mo  (transition)
+  Q4 (f005 6.03-12.18):  -0.01 mo
+  Q5 (f005 12.19-442.3): -0.02 mo
+
+A fine-grained search of cutoffs from 4.00 to 5.20 located a sharp threshold at
+exactly feature_005 = 5: below 5, treatment effect = +5.01 mo (n=9,326, p≈0); at
+or above 5, treatment effect = +0.005 mo (n=8,046, p=0.93).
+
+
+5. Final subgroup definition and adjusted estimates (Iterations 14-24)
+----------------------------------------------------------------------
+Define ELIGIBLE = (feature_006=0 AND feature_023=0 AND feature_022=0 AND
+feature_005 < 5). This captures 9,326 of 50,000 patients (18.7%).
+
+Necessity of each predicate (relaxing one condition at a time within the otherwise-
+eligible subgroup):
+  Drop feature_006=0 → effect dilutes to +3.30
+  Drop feature_023=0 → +2.85
+  Drop feature_022=0 → +4.62
+  Drop feature_005<5 → +2.76
+All four predicates are non-redundant; feature_022 contributes least but still
+detectably.
+
+Treatment is balanced across eligibility (20.4% treated within eligible vs 20.0%
+within ineligible, χ² p = 0.45) — consistent with random allocation.
+
+Definitive (fully-adjusted) treatment effects, controlling for feature_015,
+feature_001, feature_014, feature_019, log(feature_021), feature_025:
+  Within ELIGIBLE   (n=9,326):  feature_027 coef = +4.979 [95% CI 4.971, 4.987], p≈0
+  Within INELIGIBLE (n=40,674): feature_027 coef = -0.003 [95% CI -0.008, +0.002], p=0.24
+
+Within the eligible subgroup, the treatment benefit was uniform across all other
+features tested: feature_015 quintiles, feature_001 levels, feature_011, feature_019,
+feature_025, log(feature_021), feature_017, feature_032, feature_003, feature_030,
+feature_004, feature_008, feature_013, feature_026, feature_029, feature_007,
+feature_033, feature_009, and every other binary. No additional effect modifiers
+were detected.
+
+
+6. Reinterpreting the apparent main effects of f006/f023/f022/f005 (Iterations 22-23)
+-------------------------------------------------------------------------------------
+Once eligibility × feature_027 is in the model, the apparent prognostic effects of
+feature_006, feature_023, feature_022, and log(feature_005) all collapse to ≈0:
+  feature_006:        coef +0.001 (p=0.57)
+  feature_023:        coef -0.003 (p=0.14)
+  feature_022:        coef +0.001 (p=0.85)
+  log(feature_005):   coef +0.001 (p=0.42)
+Their univariate "negative" associations were entirely an artifact of the unrealized
+treatment benefit in patients who received feature_027 but were ineligible — that
+is, these four features are PURELY PREDICTIVE (treatment-effect modifiers), not
+prognostic factors.
+
+
+7. Other candidate treatments (Iterations 12, 25)
+-------------------------------------------------
+Each of the remaining binary features (feature_010, 024, 012, 018, 020, 028, 016,
+002, 031, plus the prognostic feature_014) was examined as a candidate treatment
+with possible heterogeneous effects. None showed a meaningful subgroup-specific
+effect: the largest pair-restricted treatment effect for any non-feature_027 binary
+was within ±0.15 months. feature_027 is the unique treatment with subgroup
+heterogeneity in this cohort.
+
+
+8. Final structural summary
+---------------------------
+The data are well-described by a linear model with R² = 0.993:
+
+  pfs_months ≈ -6.74
+              + 0.176 × feature_015
+              - 1.166 × feature_001
+              - 1.369 × feature_014
+              + 0.485 × feature_019
+              - 0.078 × feature_025
+              - 0.097 × log(feature_021)
+              + 4.979 × (eligible × feature_027)
+              + noise
+
+where eligible = 1 iff feature_006=0 AND feature_023=0 AND feature_022=0 AND
+feature_005 < 5.
+
+Prognostic features (independent of treatment): feature_015 (continuous +),
+feature_001 (ordinal -), feature_014 (binary -), feature_019 (continuous +),
+feature_025 (continuous -), log(feature_021) (continuous -).
+
+Predictive features (treatment-effect modifiers for feature_027): feature_006,
+feature_023, feature_022, feature_005 — each is required to be in its "favorable"
+state for treatment to work.
+
+Noise / no detectable independent association: feature_011, feature_002, feature_028,
+feature_016, feature_010, feature_024, feature_012, feature_018, feature_020,
+feature_031, feature_017, feature_032, feature_003, feature_030, feature_008,
+feature_004, feature_013, feature_026, feature_029, feature_007, feature_033,
+feature_009.
+
+
+9. Best-supported final treatment-effect subgroup hypothesis
+------------------------------------------------------------
+The treatment feature_027 increases pfs_months by approximately +5.0 months
+(adjusted estimate 4.979 mo, 95% CI 4.971-4.987, p≈0) in patients meeting ALL of the
+following predicates:
+
+    feature_006 = 0
+  AND feature_023 = 0
+  AND feature_022 = 0
+  AND feature_005 < 5
+
+In any patient outside this subgroup, the treatment has no detectable effect
+(point estimate -0.003 mo, 95% CI -0.008 to +0.002, p = 0.24). The subgroup
+contains 18.7% of the cohort (9,326 of 50,000 patients), and treatment is
+randomly allocated with respect to it.

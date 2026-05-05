@@ -1,0 +1,198 @@
+Analysis Summary — ds001_aml (n = 50,000; outcome = objective_response, prevalence 18.75%)
+==============================================================================================
+
+Overview
+--------
+The dataset contains 35 anonymized features and a single binary outcome, objective_response.
+We ran 22 iterations of hypothesis generation and statistical testing, progressing from
+univariate screens to multivariable logistic regression, then to interaction screening,
+subgroup discovery, and tree-based partitioning. The dominant signal in the data is a
+crisp four-variable subgroup in which the candidate treatment indicator feature_021 has a
+~63 percentage-point effect on response, vanishing entirely outside the subgroup.
+
+1. Main effects (Iteration 1-2)
+-------------------------------
+Univariate associations with objective_response, in order of strength:
+
+* feature_004 (3-level): response rate falls monotonically 0.231 / 0.174 / 0.129 across
+  levels 0/1/2 (chi-square p = 1.79e-90; per-level logit coef = -0.353, OR 0.70). This
+  appears to be an ordinal severity/stage variable.
+* feature_014 (binary): 1 vs 0: 0.235 vs 0.167 (p = 5.79e-70; positive)
+* feature_001 (binary): 1 vs 0: 0.221 vs 0.165 (p = 1.88e-55; positive)
+* feature_021 (binary): 1 vs 0: 0.220 vs 0.166 (p = 6.62e-51; positive)
+* feature_026 (binary): 1 vs 0: 0.168 vs 0.191 (p = 3.31e-06; negative)
+* feature_009 (binary): 1 vs 0: 0.166 vs 0.190 (p = 3.51e-05; negative)
+* Continuous: feature_020 mean 3.44 in responders vs 3.95 in non-responders (p = 8.0e-31;
+  negative); feature_024 (p = 2.3e-16, negative); feature_029 (p = 2.8e-07, positive);
+  feature_022, feature_027 (each negative, p < 1e-3).
+
+A multivariable logistic regression with all 35 features confirmed independent main effects
+in the same directions: feature_014 (OR 1.55, p=1.7e-71), feature_001 (OR 1.45, p=2.4e-57),
+feature_021 (OR 1.44, p=8.2e-54) all positive; feature_004 (OR 0.70 per level, p=9e-93),
+feature_026 (OR 0.85, p=6e-07), feature_009 (OR 0.83, p=3.6e-06), feature_020 (OR 0.87 per
+SD, p=2.7e-31), feature_024 (OR 0.91, p=1.2e-17) all negative. Pseudo-R^2 was only 0.032,
+suggesting that strong effects are localized rather than spread across the cohort.
+
+Several balanced binary features (feature_010, feature_005, feature_030, feature_018,
+feature_008) showed no association with the outcome and behave as negative controls.
+
+2. Identifying the treatment-like variable (Iteration 3)
+--------------------------------------------------------
+feature_001, feature_014, and feature_021 are pairwise statistically independent (probabilities
+factor cleanly), and each is essentially unpredictable from the other 34 features
+(propensity-style logistic regressions yield pseudo-R^2 of 0.0004-0.0007). This pattern is
+consistent with random/independent assignment and with each feature potentially playing the
+role of either administered treatment or biomarker.
+
+3. Three-way interaction (Iterations 4-7)
+-----------------------------------------
+Pairwise logistic interaction tests among the three positive features were all strongly
+positive: feature_001×feature_014 +1.06 (p=6.8e-103), feature_001×feature_021 +0.88
+(p=1.1e-78), feature_014×feature_021 +1.06 (p=5.5e-102). However, in a saturated three-way
+model all main effects and all pairwise interaction terms are nonsignificant; the entire
+effect loads on the triple product term feature_001*feature_014*feature_021 (coef +2.13,
+p=3.9e-92). The pairwise interactions are an artifact of the underlying three-way "AND"
+rule.
+
+In the joint cell (feature_001=1, feature_014=1, feature_021=1) (n = 2,401), the response
+rate is 63.3%, vs. 15.7-17.2% in each of the seven other cells — a ~47 percentage-point
+jump (OR vs. all others = 8.73, 95% CI 8.01-9.52). Stratified treatment-effect tables
+confirm the symmetry: whichever of the three you label "treatment", its effect is null in
+three of four 2×2 strata of the other two, and a ~+0.47 absolute increase in the (1,1)
+stratum.
+
+4. Suppressors of the treatment effect (Iterations 8-10)
+--------------------------------------------------------
+A systematic interaction screen of feature_021 with all other features within the
+biomarker-positive subgroup (feature_001=1, feature_014=1; n=5,986) identified two strong
+suppressors:
+
+* feature_026: interaction coef -2.35, p = 3.0e-34. Within (001=1,014=1), feature_026=0
+  yields treatment effect +0.556; feature_026=1 yields +0.032 (effect abolished).
+* feature_009: interaction coef -2.45, p = 1.1e-29. Within (001=1,014=1), feature_009=0
+  yields effect +0.534; feature_009=1 yields +0.006 (abolished).
+
+Joint stratification by (feature_026, feature_009) within (001=1,014=1) shows the treatment
+effect is concentrated in the (026=0, 009=0) cell (effect +0.628; n=4,531), with the other
+three cells all showing essentially null effects.
+
+5. The complete responder subgroup S (Iterations 10-13)
+-------------------------------------------------------
+The complete subgroup definition is
+
+    S = {feature_001 = 1  AND  feature_014 = 1  AND  feature_026 = 0  AND  feature_009 = 0}
+
+S contains 4,531 patients (9.1% of the cohort).
+
+* Within S: feature_021 = 0 (n=2,741) -> response rate 0.1583;
+            feature_021 = 1 (n=1,790) -> response rate 0.7860.
+            Risk difference = +0.628; OR = 19.5 (95% CI 16.8-22.7).
+* Outside S: feature_021 = 0 (n=27,239) -> 0.1669; feature_021 = 1 (n=18,230) -> 0.1640.
+            Risk difference = -0.003; OR = 0.98 (95% CI 0.93-1.03).
+
+The S × feature_021 interaction term in a logistic model has coef +2.99 with p = 1.15e-291;
+the LR test for adding the interaction is chi^2 = 1,633.8, p effectively 0.
+
+A greedy decision-tree-style partition that recursively splits on the binary feature
+maximizing the difference in the feature_021 treatment effect between child nodes recovered
+S exactly, splitting in order on feature_014, feature_001, feature_009, feature_026.
+
+6. Robustness within S (Iterations 11, 12, 16)
+----------------------------------------------
+* No additional binary or continuous feature significantly modifies the within-S treatment
+  effect. The smallest p-values inside S after Bonferroni correction are not significant
+  (smallest raw p ~ 0.026 for feature_015 in a small cell; feature_004 p ~ 0.09).
+* feature_004 lowers absolute response in both arms of S similarly: within S, the
+  feature_021 effect is +0.666 / +0.619 / +0.570 across feature_004 = 0/1/2 — large in
+  every stratum, with no qualitative interaction. feature_004 is a baseline prognostic, not
+  a treatment-effect modifier.
+* No continuous variable (feature_011, _022, _024, _029, _020, _027, _034, _028, _007)
+  modifies the within-S treatment effect (all interaction p > 0.17). They are baseline
+  prognostics only.
+* Adjusting the within-S logistic model for all continuous covariates leaves the feature_021
+  coefficient essentially unchanged (~+3.0).
+
+7. Negative-prognostic concentration (Iteration 15)
+---------------------------------------------------
+Both feature_026 and feature_009 — although univariately negative across the entire cohort
+— have effects that are dominantly localized to the responders. Within (001=1, 014=1,
+021=1): feature_026=0 -> 0.717 vs feature_026=1 -> 0.184 (RD -0.534); feature_009=0 ->
+0.691 vs feature_009=1 -> 0.188 (RD -0.503). Outside that triple-positive cell, each marker
+contributes only a small (~-0.02) drop. These markers act primarily by abolishing the
+treatment benefit, not by harming all patients equally.
+
+8. Other balanced binaries (Iteration 14)
+-----------------------------------------
+feature_010, feature_005, feature_030, feature_018, feature_008 all have negligible main
+effects (|RD| < 0.008) and act as negative controls — only feature_021 shows treatment-
+like behaviour among balanced binary features.
+
+9. No alternative responder subgroup (Iteration 21)
+---------------------------------------------------
+Outside S, no two-feature subgroup yields a feature_021 effect larger than ~+0.05 in
+absolute value. The drug appears inert outside S.
+
+10. Final consolidated heterogeneity hypothesis (Iteration 22)
+--------------------------------------------------------------
+
+  Treatment:        feature_021
+  Outcome:          objective_response
+  Direction:        positive (treatment increases response)
+  Subgroup S:       feature_001 = 1  AND  feature_014 = 1
+                    AND  feature_009 = 0  AND  feature_026 = 0
+  Within S:         response 0.158 -> 0.786 (RD +0.628; OR 19.5; n=4,531)
+  Outside S:        response 0.167 vs 0.164 (RD -0.003; OR 0.98; n=45,469)
+  Interaction p:    1.15e-291 (S × feature_021)
+
+The subgroup includes both required positive predicates (feature_001=1, feature_014=1)
+and required negative predicates (feature_009=0, feature_026=0). Patients who are positive
+for the two beneficial markers but who carry either of the adverse markers (feature_009=1
+or feature_026=1) do NOT benefit from feature_021.
+
+By the underlying symmetry of the three-way interaction, equivalent reformulations are
+valid: relabelling feature_001 or feature_014 as the treatment yields the same joint
+responder cell. The observational data alone cannot distinguish which of feature_001,
+feature_014, feature_021 is the actual administered treatment vs. an intrinsic responder
+biomarker; but the joint cell {feature_001=1, feature_014=1, feature_021=1, feature_009=0,
+feature_026=0} (n = 1,790) has response 0.786 vs. ~0.165 elsewhere regardless of the
+labelling choice.
+
+Hypotheses supported vs refuted
+-------------------------------
+Supported:
+* All proposed univariate associations of feature_004, _014, _001, _021, _026, _009, _020,
+  _024, _029, _022, _027 with objective_response (with the directions specified).
+* feature_004 as a monotonic ordinal prognostic (linear-in-log-odds trend).
+* Multivariable independence of the major signals.
+* Mutual independence of feature_001, _014, _021 and their unpredictability from baseline.
+* All pairwise (h4) and the three-way (h5) interactions among feature_001, _014, _021.
+* The triple-positive cell hypothesis (h6).
+* The reciprocal symmetric stratified pattern (h7).
+* Existence of effect-suppressing modifiers within (001=1, 014=1) (h8) — both feature_026
+  (h9.1) and feature_009 (h9.2), acting independently (h9.3).
+* The complete subgroup S definition (h10) and its uniqueness (h11, h13, h21).
+* Persistence of the within-S treatment effect across feature_004 levels (h12, h17).
+* Inertness of feature_010, _005, _030, _018, _008 (h14).
+* Localization of feature_026 and feature_009 negative effects to potential responders
+  (h15).
+* Independent main effects of feature_020 (h18) and feature_024 (h19).
+* Robustness of within-S treatment effect to continuous covariate adjustment (h20).
+* Final consolidated heterogeneity hypothesis h22.1 and the symmetry remark h22.2.
+
+Refuted/null (where we expected findings or had to rule things out):
+* No additional binary or continuous modifier of the within-S treatment effect after
+  multiple testing correction (h11, h16).
+* No qualitative interaction between feature_004 and the within-S treatment effect (h17).
+* No alternative responder subgroup outside S (h21).
+
+Overall conclusions
+-------------------
+The data describe a precision-medicine pattern typical of targeted therapy in oncology: a
+single treatment indicator (feature_021) drives a very large, clinically meaningful
+increase in objective response, but only in a narrow molecularly defined subgroup. Two
+features must be POSITIVE (feature_001, feature_014) and two adverse markers must be
+ABSENT (feature_009, feature_026). Outside this 9.1% subgroup the treatment is essentially
+inert. feature_004 is a separate ordinal prognostic that lowers absolute response in both
+arms but does not modify the relative treatment effect. Continuous variables such as
+feature_020 and feature_024 are independent baseline prognostics with no interaction with
+treatment.

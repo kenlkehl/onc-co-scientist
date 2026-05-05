@@ -1,0 +1,246 @@
+Oncology Dataset Analysis Summary — ds001_nsclc (n=50,000)
+============================================================
+
+Goal
+----
+Explore an anonymized NSCLC EHR cohort with 33 de-identified baseline features
+(`feature_001` … `feature_033`) and one clinical outcome `pfs_months`,
+identifying main-effect prognostic signals, identifying any randomized
+treatment-like indicators, and conducting a systematic search for
+treatment-effect heterogeneity (HTE) culminating in a complete responder
+subgroup.
+
+Outcome distribution
+--------------------
+`pfs_months`: mean 3.43, median 3.32, sd 2.23, range 0.0 – 15.3 months.
+No missing values; 46,348 distinct values.
+
+============================================================
+1. PROGNOSTIC MAIN EFFECTS (iterations 1–4, 13–18)
+============================================================
+
+A multivariable OLS regression of `pfs_months` on all 33 features achieves
+R² = 0.894, indicating that the bulk of the variance is captured by a
+relatively small set of strong predictors. The dominant signals are:
+
+  Variable     Adjusted coef       p-value         Direction
+  ---------------------------------------------------------------
+  feature_015  +0.168 / unit       <1e-300         Strong positive (range 30–90, mean 65 — highly likely an age-like variable; r=+0.757 with PFS)
+  feature_014=2  −2.18 vs 0         <1e-300         Negative (3-level ordinal; behaves like stage/ECOG severity)
+  feature_014=1  −1.15 vs 0         <1e-300         Negative
+  feature_023=1  −1.42              <1e-300         Strong negative (high prevalence 65%; balanced wrt other baselines)
+  feature_011=1  −0.91              <1e-300         Negative; uniform across all strata
+  feature_006=squamous −0.72        <1e-300         Negative (vs adenocarcinoma)
+  feature_016=1  +0.89              <1e-150         Positive (13% prev; predictive marker, see HTE)
+  feature_017    −0.073 / unit      <1e-178         Negative (continuous lab-like variable)
+  feature_025    +0.463 / unit      <1e-300         Positive (continuous lab; range 1.7–5.5, mean 3.8)
+  feature_001=former vs current  +0.55  <1e-43      Positive
+  feature_001=never vs current  +0.55   <1e-43      Positive (current smokers do worst)
+  feature_032   −0.000446 / unit    1.4e-28         Small negative effect (large-range count-like value)
+
+Among the 13 continuous features, only `feature_015`, `feature_017`,
+`feature_025`, and (much more weakly) `feature_032` carry meaningful
+prognostic signal beyond noise. `feature_003`, `feature_030`, `feature_008`,
+`feature_004`, `feature_013`, `feature_026`, `feature_029`, `feature_007`,
+`feature_033`, `feature_009`, `feature_010`, `feature_024` had |coef|<0.01/unit
+and p>0.05 in the adjusted model — uninformative.
+
+`feature_019` (continuous, range 0–0.798 — the natural shape of a PD-L1 fraction)
+showed NO main effect (adjusted p=0.67), consistent with PD-L1-like markers
+that act only conditional on therapy class.
+
+============================================================
+2. IDENTIFICATION OF TREATMENT-LIKE INDICATORS (iteration 5)
+============================================================
+
+For each binary feature, we tested balance against every other baseline
+covariate (chi-square / t-test). True randomized treatments should be
+nearly balanced. The most balanced binaries (count of baselines with p<0.001):
+
+  feature_011  0/32 imbalanced  (max −log10 p = 0.94)  prev 0.252
+  feature_002  0/32 imbalanced  (max 1.32)             prev 0.149
+  feature_027  0/32 imbalanced  (max 1.34)             prev 0.300
+  feature_020  0/32 imbalanced  (max 1.52)             prev 0.300
+  feature_023  0/32 imbalanced  (max 1.61)             prev 0.647
+  feature_012  0/32 imbalanced  (max 1.64)             prev 0.500
+  feature_005  0/32 imbalanced  (max 1.97)             prev 0.030
+  feature_031  0/32 imbalanced  (max 2.60)             prev 0.447
+  feature_018  1/32 imbalanced  (max 3.08)             prev 0.351
+  ----- mediocre/imbalanced -----
+  feature_016  5/32   (65.2)
+  feature_021  5/32   (116.7)
+  feature_022  5/32   (131.5)
+  feature_028  6/32   (144.5)
+
+`feature_021`, `feature_022`, `feature_016`, `feature_028` are clearly
+correlated with biology (smoking, histology, etc.) and are NOT randomized
+treatments — they are biomarker-like indicators.
+
+The 9 well-balanced binaries are all candidate "treatments" or randomized
+flags. We tested each for main effect and HTE.
+
+============================================================
+3. PRIMARY FINDING: feature_018 IS A TREATMENT WITH MASSIVE
+   BIOMARKER-RESTRICTED EFFECT (iterations 6–10, 25)
+============================================================
+
+Marginal main effect of `feature_018`:
+  feature_018=1 mean PFS = 3.64 vs =0 mean = 3.32 (diff +0.32 mo, p=1.6e-53).
+A small positive marginal effect, but adjusted models showed a HUGE
+interaction.
+
+Interaction screen (adjusted OLS, feature_018 × every other feature) found:
+
+  feature_018 × feature_016  coef = +2.533, p < 1e-300
+  feature_018 × feature_031  coef = -0.584, p < 1e-300
+  feature_018 × feature_001=never  coef = -0.453, p = 1.6e-98
+  feature_018 × feature_028  coef = -0.343, p = 1.6e-27
+  feature_018 × feature_022  coef = -0.208, p = 7.8e-25
+  feature_018 × feature_005  coef = -0.328, p = 1.5e-16
+
+Stratified t-tests within feature_016 = 1 vs feature_016 = 0:
+
+  feature_016 = 0 (n=43,632): feature_018 effect = −0.005 (p=0.80, NULL)
+  feature_016 = 1 (n=6,368):  feature_018 effect = +2.55 (p<1e-275)
+
+So feature_018 is a treatment whose benefit is concentrated in
+`feature_016=1` patients.
+
+Within `feature_016=1`, further stratification by `feature_031`:
+
+  feature_016=1, feature_031=0 (n=3,508): feature_018 effect = +4.64 (p<1e-300)
+  feature_016=1, feature_031=1 (n=2,860): feature_018 effect = -0.01 (p=0.88, NULL)
+
+So `feature_031=1` (45% prevalence overall, balanced) acts as a
+"resistance/non-response indicator" that completely abolishes the
+treatment effect even within the marker-positive subgroup.
+
+Within the (feature_016=1 & feature_031=0) subgroup, two further small
+groups also lose the treatment effect:
+
+  feature_028 = 1 (within subgroup, n=135):  effect = -0.22 (p=0.62, NULL)
+  feature_005 = 1 (within subgroup, n=104):  effect = +0.05 (p=0.91, NULL)
+
+Both are rare features (≈3–5% prevalence overall). The interaction
+F018 × F028 within the subgroup has coef −5.12 (p=1.4e-35); F018 × F005
+has coef −4.87 (p=8.2e-26).
+
+------------------------------------------------------------
+COMPLETE RESPONDER SUBGROUP (feature_018 effect on pfs_months):
+  feature_016 = 1  AND  feature_031 = 0  AND  feature_028 = 0  AND  feature_005 = 0
+------------------------------------------------------------
+
+Subgroup size: n=3,266 (6.53% of the cohort).
+Treatment proportion in subgroup: 35.3% (matches overall 35.1% — confirming
+true randomization / balance of treatment assignment within subgroup).
+
+  Mean PFS:
+    Outside responder subgroup, control      : 3.323 (n=30,344)
+    Outside responder subgroup, feature_018=1: 3.317 (n=16,390)  → diff −0.006, NULL
+    Inside responder subgroup,   control      : 3.249 (n=2,112)
+    Inside responder subgroup,   feature_018=1: 8.234 (n=1,154)  → diff +4.985, p<1e-300
+
+  Confirmed C(feature_018) × C(responder) interaction = +4.992 (p<1e-300).
+
+Each single "flip" of one of the four subgroup conditions individually
+returns the treatment effect to null (all leave-one-out p>0.5):
+
+  feature_016 flipped to 0 (rest as responder): diff −0.017, p=0.57
+  feature_031 flipped to 1 (rest as responder): diff −0.008, p=0.93
+  feature_028 flipped to 1 (rest as responder): diff −0.218, p=0.62
+  feature_005 flipped to 1 (rest as responder): diff +0.053, p=0.91
+
+This is the maximally-defined complete responder subgroup. The treatment
+effect requires ALL four conditions; failure of any single one nullifies
+benefit.
+
+The responder-subgroup treatment effect is preserved across smoking and
+age strata:
+  Within feature_016=1, current smokers   : +2.48 mo (p=8e-126)
+  Within feature_016=1, former smokers    : +2.66 mo (p=1e-152)
+  Within feature_016=1, never smokers     : +1.76 mo (p=8e-5)
+  Within responder subgroup, age tertiles : +4.73 / +4.82 / +5.05 (low/mid/high)
+A small additional age modifier exists (~+0.03 mo benefit per year of age,
+p=2e-9) but does not change the qualitative pattern.
+
+============================================================
+4. OTHER CANDIDATE TREATMENTS — UNIFORM OR NULL EFFECT
+============================================================
+
+`feature_011` (prev 25%, perfectly balanced 0/32 imbalances):
+  Marginal effect −0.92 mo (p<1e-300). Stratified across 30+ subgroups
+  defined by feature_001/006/014/016/018/022/023/028/005/021/002/020/027/012/031
+  and age tertiles, the effect ranged from −0.78 to −1.01 mo, NEVER reversing
+  direction. The strongest interaction (with feature_015, p=6e-78) only
+  modulates magnitude, not sign. Consistent with a uniform-effect
+  randomized harmful treatment OR a perfectly balanced strong baseline marker.
+
+`feature_012` (prev 50%, perfectly balanced):
+  Marginal effect −0.035 mo (p=0.08, NULL). Smallest interaction p across
+  33 modifiers = 0.003 (with feature_010), does not survive Bonferroni.
+  No detectable HTE — a true null treatment.
+
+`feature_023` (prev 65%, balanced): Strong negative main effect (−1.44 mo).
+  Top interaction is with feature_015 (-0.014/year, p=1.3e-89): gradient,
+  not a clean responder subgroup. Behaves like a baseline severity marker.
+
+`feature_002`, `feature_005`, `feature_027`, `feature_020`, `feature_031`:
+  Top-scoring interactions for each are with feature_018 / feature_016 — i.e.
+  these are echoes of the feature_018 responder subgroup itself, not
+  independent treatments with HTE.
+
+============================================================
+5. NON-RANDOMIZED MARKERS
+============================================================
+
+`feature_021` (prev 28.5%): Strongly imbalanced with feature_001 (smoking, p~0),
+feature_022 (p=2e-117), feature_006 (p=1e-67), feature_016, feature_028.
+Adjusted main effect ≈ 0. A biology-driven indicator, not a treatment.
+
+`feature_022` and `feature_028`: Imbalanced with multiple baselines and act
+as biology markers. `feature_028` participates as a resistance modifier of
+the feature_018 treatment effect (see above).
+
+============================================================
+6. WHAT WAS REFUTED OR NULL
+============================================================
+
+  - feature_019 (PD-L1-shaped continuous): no detectable adjusted main
+    effect (p=0.67) and no interaction with any candidate treatment
+    surviving multiple testing. Candidate hypotheses positing PD-L1-like
+    interactions were not supported by these data.
+  - feature_012 has no main effect and no surviving HTE.
+  - feature_011's apparent strong main effect IS NOT effect heterogeneity:
+    direction is uniform across every subgroup we examined.
+  - Continuous lab-like variables feature_003, feature_030, feature_008,
+    feature_004, feature_013, feature_026, feature_029, feature_007,
+    feature_033, feature_009, feature_010, feature_024 are essentially
+    null in adjusted models.
+
+============================================================
+7. OVERALL CONCLUSIONS
+============================================================
+
+This cohort exhibits:
+
+  A. A strong, broadly distributed prognostic backbone for PFS:
+     feature_015 (age-like, +); feature_014 (severity, −); feature_023
+     (binary marker, −); feature_011 (binary marker, −); feature_006
+     squamous (−); feature_017 (lab, −); feature_025 (lab, +); feature_001
+     current smoking (−); feature_032 (small −).
+
+  B. ONE randomized treatment with massive predictive heterogeneity:
+     `feature_018`. Its effect is null overall on average and null in the
+     non-responder population, but adds approximately +5 months of PFS
+     in the complete responder subgroup defined by:
+       feature_016 = 1  AND  feature_031 = 0  AND  feature_028 = 0  AND  feature_005 = 0
+     (6.53% of the cohort). The treatment effect requires the favorable
+     value of EACH of the four subgroup variables; flipping any single one
+     to its unfavorable value abolishes the effect.
+
+  C. Other candidate randomized binaries (`feature_011`, `feature_012`,
+     and several rare features) are either uniform-effect (no HTE),
+     null, or are baseline biology indicators rather than treatments.
+
+The feature_018 / responder-subgroup pattern is the principal
+treatment-biomarker-outcome relationship in this NSCLC cohort.
