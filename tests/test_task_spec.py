@@ -128,7 +128,7 @@ def test_build_tasks_mirrors_synth_tree(tmp_path):
         min_buried_treated_subgroup_n=0,
         n_extra_covariates=6,
     )
-    chosen = [CancerType.crc, CancerType.breast]
+    chosen = [CancerType.crc_clinical, CancerType.breast_clinical]
     bundles = generate_multi_dataset(base, chosen)
     synth_root = tmp_path / "ds"
     write_multi_bundle_pair(bundles, synth_root, anon_seed=0)

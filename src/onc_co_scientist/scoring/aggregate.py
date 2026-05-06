@@ -3,7 +3,9 @@
 A ``ReplicateScore`` summarizes one transcript (one harness run on one
 dataset variant — named or anonymized). A ``BundleScore`` rolls up
 replicates of the same (dataset_id, variant) into mean ± SD of the two
-scoring metrics. A ``BatchPipelineScore`` rolls bundles up using an
+scoring metrics. The buried discovery iteration is averaged over exact
+recoveries only; recovery fractions retain all replicates as the denominator.
+A ``BatchPipelineScore`` rolls bundles up using an
 unweighted mean of bundle means, reported separately for the named and
 anonymized variants because the named-vs-anonymized gap is the eval's
 primary outcome metric.
@@ -59,7 +61,7 @@ class ReplicateScore:
         return self.novelty.frac_novel if self.novelty is not None else None
 
     @property
-    def buried_score(self) -> int:
+    def buried_score(self) -> int | None:
         return self.buried.score
 
     @property
@@ -218,7 +220,9 @@ def aggregate_replicates(scores: list[ReplicateScore]) -> BundleScore:
             f"Named and anonymized must aggregate into separate bundles."
         )
     frac_novels: list[float | None] = [s.frac_novel for s in scores]
-    buried_scores: list[float | None] = [float(s.buried_score) for s in scores]
+    buried_scores: list[float | None] = [
+        float(s.buried_score) if s.buried_score is not None else None for s in scores
+    ]
     n_uncovered = sum(1 for s in scores if s.uncovered)
     n_near_or_better = sum(1 for s in scores if s.near_or_better)
     n_component_or_better = sum(1 for s in scores if s.component_or_better)

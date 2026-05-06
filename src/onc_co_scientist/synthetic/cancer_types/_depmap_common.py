@@ -1,10 +1,10 @@
-"""CRISPR/DepMap-style cell-line dependency profile.
+"""Shared machinery for CRISPR/DepMap-style cell-line dependency profiles.
 
 Rows are cancer cell lines with CCLE-like lineage, mutation, copy-number,
 expression, and screen-quality annotations. Outcomes are CRISPR dependency
 scores for selected knockout genes, where more negative values indicate
-stronger dependency. Effect sizes are calibrated for evaluator power, not
-as literature estimates.
+stronger dependency. Public profile modules bind this shared sampler to one
+cancer lineage and one cancer-specific buried dependency signature.
 """
 
 from __future__ import annotations
@@ -108,7 +108,44 @@ def hidden_novel_catalog() -> list[AssociationSpec]:
     ]
 
 
-def buried_signature_catalog() -> list[AssociationSpec]:
+def nsclc_buried_signature_catalog() -> list[AssociationSpec]:
+    return [
+        AssociationSpec(
+            id="buried_rit1_lung_adenocarcinoma_kras_stk11",
+            paradigm_class=ParadigmClass.hidden_novel,
+            form=AssociationForm.subgroup_conditional,
+            variables=[
+                "lineage",
+                "lineage_subtype",
+                "kras_mutation",
+                "stk11_loss",
+                "dependency_RIT1",
+            ],
+            outcome="dependency_RIT1",
+            direction=-1,
+            effect_size=-1.05,
+            subgroup=SubgroupSpec(
+                name="lung_adeno_kras_stk11_signature",
+                predicate={
+                    "lineage": "lung",
+                    "lineage_subtype": "adenocarcinoma",
+                    "kras_mutation": 1,
+                    "stk11_loss": 1,
+                },
+                description=(
+                    "Lung adenocarcinoma cell lines with KRAS mutation and STK11 loss."
+                ),
+            ),
+            natural_language_description=(
+                "RIT1 knockout produces a stronger dependency signal in lung "
+                "adenocarcinoma cell lines with KRAS mutation and STK11 loss "
+                "than in other lung cancer cell lines."
+            ),
+        ),
+    ]
+
+
+def crc_buried_signature_catalog() -> list[AssociationSpec]:
     return [
         AssociationSpec(
             id="buried_kif18a_colorectal_apc_wnt_smad4_intact",
@@ -142,6 +179,11 @@ def buried_signature_catalog() -> list[AssociationSpec]:
                 "intact SMAD4, and high WNT activity than in other cell lines."
             ),
         ),
+    ]
+
+
+def breast_buried_signature_catalog() -> list[AssociationSpec]:
+    return [
         AssociationSpec(
             id="buried_tmed10_breast_pik3ca_luminal_erbb2_nonamp",
             paradigm_class=ParadigmClass.hidden_novel,
@@ -173,6 +215,80 @@ def buried_signature_catalog() -> list[AssociationSpec]:
                 "TMED10 knockout produces a much stronger dependency signal "
                 "in luminal, PIK3CA-mutant, ERBB2-non-amplified breast cancer "
                 "cell lines than in other cell lines."
+            ),
+        ),
+    ]
+
+
+def prostate_buried_signature_catalog() -> list[AssociationSpec]:
+    return [
+        AssociationSpec(
+            id="buried_polr2a_prostate_adeno_pten_brca2_intact",
+            paradigm_class=ParadigmClass.hidden_novel,
+            form=AssociationForm.subgroup_conditional,
+            variables=[
+                "lineage",
+                "lineage_subtype",
+                "pten_loss",
+                "brca2_loss",
+                "dependency_POLR2A",
+            ],
+            outcome="dependency_POLR2A",
+            direction=-1,
+            effect_size=-1.0,
+            subgroup=SubgroupSpec(
+                name="prostate_adeno_pten_loss_brca2_intact_signature",
+                predicate={
+                    "lineage": "prostate",
+                    "lineage_subtype": "adenocarcinoma",
+                    "pten_loss": 1,
+                    "brca2_loss": 0,
+                },
+                description=(
+                    "Prostate adenocarcinoma cell lines with PTEN loss and intact BRCA2."
+                ),
+            ),
+            natural_language_description=(
+                "POLR2A knockout produces a stronger dependency signal in "
+                "prostate adenocarcinoma cell lines with PTEN loss and intact "
+                "BRCA2 than in other prostate cancer cell lines."
+            ),
+        ),
+    ]
+
+
+def aml_buried_signature_catalog() -> list[AssociationSpec]:
+    return [
+        AssociationSpec(
+            id="buried_dhx9_aml_myc_rb1_intact",
+            paradigm_class=ParadigmClass.hidden_novel,
+            form=AssociationForm.subgroup_conditional,
+            variables=[
+                "lineage",
+                "lineage_subtype",
+                "myc_amplification",
+                "rb1_loss",
+                "dependency_DHX9",
+            ],
+            outcome="dependency_DHX9",
+            direction=-1,
+            effect_size=-1.0,
+            subgroup=SubgroupSpec(
+                name="aml_like_myc_amp_rb1_intact_signature",
+                predicate={
+                    "lineage": "hematopoietic",
+                    "lineage_subtype": "aml_like",
+                    "myc_amplification": 1,
+                    "rb1_loss": 0,
+                },
+                description=(
+                    "AML-like hematopoietic cell lines with MYC amplification and intact RB1."
+                ),
+            ),
+            natural_language_description=(
+                "DHX9 knockout produces a stronger dependency signal in AML-like "
+                "hematopoietic cancer cell lines with MYC amplification and "
+                "intact RB1 than in other AML-like cell lines."
             ),
         ),
     ]
@@ -221,6 +337,14 @@ LINEAGE_PROBS: tuple[float, ...] = (
     0.05,
 )
 
+LINEAGE_SUBTYPE_SPECS: dict[str, tuple[tuple[str, ...], tuple[float, ...]]] = {
+    "breast": (("luminal", "basal", "her2_enriched"), (0.55, 0.30, 0.15)),
+    "lung": (("adenocarcinoma", "squamous"), (0.70, 0.30)),
+    "colorectal": (("left_sided", "right_sided", "rectal"), (0.45, 0.35, 0.20)),
+    "hematopoietic": (("aml_like", "other_myeloid", "lymphoid"), (0.65, 0.20, 0.15)),
+    "prostate": (("adenocarcinoma", "neuroendocrine_like"), (0.90, 0.10)),
+}
+
 
 def _lineage_indicator(lineage: np.ndarray, value: str) -> np.ndarray:
     return (lineage == value).astype(float)
@@ -238,6 +362,15 @@ def _lineage_bernoulli(
     return rng.binomial(1, probs).astype(int)
 
 
+def _sample_lineage_subtype(rng: np.random.Generator, lineage: np.ndarray) -> np.ndarray:
+    subtype = np.full(len(lineage), "not_applicable", dtype=object)
+    for name, (choices, probs) in LINEAGE_SUBTYPE_SPECS.items():
+        mask = lineage == name
+        if mask.any():
+            subtype[mask] = rng.choice(choices, size=int(mask.sum()), p=probs)
+    return subtype
+
+
 def _dependency(
     rng: np.random.Generator,
     n: int,
@@ -247,22 +380,19 @@ def _dependency(
     return np.round(np.asarray(mean) + rng.normal(0.0, sigma, size=n), 3)
 
 
-def base_frame_fn(config: GeneratorConfig) -> pd.DataFrame:
+def base_frame_fn(
+    config: GeneratorConfig,
+    *,
+    lineages: tuple[str, ...] = LINEAGES,
+    lineage_probs: tuple[float, ...] = LINEAGE_PROBS,
+) -> pd.DataFrame:
     rng = np.random.default_rng(config.seed)
     n = config.patient_n
     overrides = config.covariate_prevalences
 
     cell_line_id = [f"CL_{i:05d}" for i in range(n)]
-    lineage = rng.choice(LINEAGES, size=n, p=LINEAGE_PROBS)
-    lineage_subtype = np.where(
-        lineage == "breast",
-        rng.choice(["luminal", "basal", "her2_enriched"], size=n, p=[0.55, 0.30, 0.15]),
-        np.where(
-            lineage == "lung",
-            rng.choice(["adenocarcinoma", "squamous"], size=n, p=[0.70, 0.30]),
-            "not_applicable",
-        ),
-    )
+    lineage = rng.choice(lineages, size=n, p=lineage_probs)
+    lineage_subtype = _sample_lineage_subtype(rng, lineage)
     culture_type = np.where(
         lineage == "hematopoietic",
         "suspension",
@@ -476,18 +606,33 @@ def prognostic_contribution(frame: pd.DataFrame, outcome: str) -> np.ndarray:
     return contrib
 
 
-PROFILE = CancerProfile(
-    cancer_type="depmap",
-    display_name="CRISPR dependency map",
-    dataset_id_suffix="depmap",
-    base_frame_fn=base_frame_fn,
-    concordant_catalog=concordant_catalog,
-    discordant_catalog=discordant_catalog,
-    hidden_novel_catalog=hidden_novel_catalog,
-    buried_signature_catalog=buried_signature_catalog,
-    prognostic_contribution=prognostic_contribution,
-    background_prognostic_variables=DEPMAP_BACKGROUND_PROGNOSTIC_VARIABLES,
-    default_prevalences=DEFAULT_PREVALENCES,
-    dataset_kind="crispr_depmap",
-    id_columns=("cell_line_id",),
-)
+def _make_base_frame_fn(lineage: str):
+    def _base_frame_fn(config: GeneratorConfig) -> pd.DataFrame:
+        return base_frame_fn(config, lineages=(lineage,), lineage_probs=(1.0,))
+
+    return _base_frame_fn
+
+
+def build_depmap_profile(
+    *,
+    cancer_type: str,
+    display_name: str,
+    dataset_id_suffix: str,
+    lineage: str,
+    buried_signature_catalog,
+) -> CancerProfile:
+    return CancerProfile(
+        cancer_type=cancer_type,
+        display_name=display_name,
+        dataset_id_suffix=dataset_id_suffix,
+        base_frame_fn=_make_base_frame_fn(lineage),
+        concordant_catalog=concordant_catalog,
+        discordant_catalog=discordant_catalog,
+        hidden_novel_catalog=hidden_novel_catalog,
+        buried_signature_catalog=buried_signature_catalog,
+        prognostic_contribution=prognostic_contribution,
+        background_prognostic_variables=DEPMAP_BACKGROUND_PROGNOSTIC_VARIABLES,
+        default_prevalences=DEFAULT_PREVALENCES,
+        dataset_kind="crispr_depmap",
+        id_columns=("cell_line_id",),
+    )

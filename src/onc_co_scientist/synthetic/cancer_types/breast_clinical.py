@@ -374,9 +374,9 @@ def prognostic_contribution(frame: pd.DataFrame, outcome: str) -> np.ndarray:
 
 
 PROFILE = CancerProfile(
-    cancer_type="breast",
+    cancer_type="breast_clinical",
     display_name="Breast cancer",
-    dataset_id_suffix="breast",
+    dataset_id_suffix="breast_clinical",
     base_frame_fn=base_frame_fn,
     concordant_catalog=concordant_catalog,
     discordant_catalog=discordant_catalog,

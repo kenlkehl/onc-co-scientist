@@ -512,9 +512,9 @@ def prognostic_contribution(frame: pd.DataFrame, outcome: str) -> np.ndarray:
 
 
 PROFILE = CancerProfile(
-    cancer_type="nsclc",
+    cancer_type="nsclc_clinical",
     display_name="Non-small cell lung cancer",
-    dataset_id_suffix="nsclc",
+    dataset_id_suffix="nsclc_clinical",
     base_frame_fn=base_frame_fn,
     concordant_catalog=concordant_catalog,
     discordant_catalog=discordant_catalog,

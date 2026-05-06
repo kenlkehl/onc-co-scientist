@@ -95,10 +95,10 @@ class DatasetManifest(BaseModel):
     seed: int
     patient_n: int
     cancer_type: str = Field(
-        default="nsclc",
+        default="nsclc_clinical",
         description="Cancer type whose profile drove the base-frame and "
-        "paradigm catalogs. Defaults to 'nsclc' so manifests written before "
-        "multi-cancer support deserialize without modification.",
+        "paradigm catalogs. Defaults to 'nsclc_clinical'. Manifests written "
+        "before multi-cancer support still deserialize through the default.",
     )
     dataset_kind: str = Field(
         default="clinical_cohort",

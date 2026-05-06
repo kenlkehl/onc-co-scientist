@@ -157,7 +157,8 @@ def _parse_cancer_types(raw: str) -> list[CancerType]:
             chosen.append(ct)
     if not chosen:
         raise typer.BadParameter(
-            "No cancer types selected. Pass 'all' or a comma-separated list such as 'nsclc,crc'."
+            "No cancer types selected. Pass 'all' or a comma-separated list such as "
+            "'nsclc_clinical,crc_depmap'."
         )
     return chosen
 
@@ -179,17 +180,17 @@ def synth_generate(
         typer.Option(
             "--out",
             help="Output directory. One subfolder is written per dataset "
-            "profile (e.g. <out>/nsclc/, <out>/crc/, <out>/depmap/, ...).",
+            "profile (e.g. <out>/nsclc_clinical/, <out>/crc_depmap/, ...).",
         ),
     ],
     cancer_types: Annotated[
         str,
         typer.Option(
             "--cancer-types",
-            help="Comma-separated cancer types to generate: nsclc, crc, "
-            "breast, prostate, aml, depmap. Default 'all' generates every "
-            "registered profile. Each goes under its own "
-            "<out>/<cancer_type>/ subfolder.",
+            help="Comma-separated cancer profiles to generate, such as "
+            "nsclc_clinical, crc_clinical, breast_depmap, aml_depmap. "
+            "Default 'all' generates every registered profile. Each goes "
+            "under its own <out>/<cancer_type>/ subfolder.",
         ),
     ] = "all",
     seed: Annotated[
@@ -231,10 +232,11 @@ def synth_generate(
 ) -> None:
     """Generate one or more synthetic dataset bundles, keyed by cancer type.
 
-    By default this generates all registered dataset profiles (NSCLC, CRC,
-    breast, prostate, AML, and the CRISPR/DepMap profile), each into its own
-    subfolder of ``--out``. Pass ``--cancer-types nsclc,crc`` (etc.) to
-    restrict the run to a subset.
+    By default this generates all registered dataset profiles (clinical and
+    CRISPR/DepMap profiles for NSCLC, CRC, breast, prostate, and AML), each
+    into its own subfolder of ``--out``. Pass
+    ``--cancer-types nsclc_clinical,crc_depmap`` (etc.) to restrict the run
+    to a subset.
     The base ``dataset_id`` from the YAML is auto-suffixed with the cancer
     type so each bundle's manifest carries a distinct identifier.
     """
@@ -300,7 +302,7 @@ def harness_build_task(
             "--out",
             help="Directory to write the harness task bundle(s) into. In batch "
             "mode, per-bundle task dirs are written under here mirroring the "
-            "input tree (e.g. <out>/nsclc/anonymized/).",
+            "input tree (e.g. <out>/nsclc_clinical/anonymized/).",
         ),
     ],
     max_iterations: Annotated[
@@ -637,8 +639,7 @@ def score_batch(
         judge marks as going beyond paradigm consensus.
       - buried-discovery iteration (both variants): earliest iteration the
         pipeline both proposed and tested a hypothesis matching the
-        manifest's buried association; falls back to max_iterations if
-        never uncovered.
+        manifest's buried association; left absent when never uncovered.
 
     Both ``named`` and ``anonymized`` bundles are scored; the named-vs-
     anonymized gap on buried discovery is the primary outcome of the eval.

@@ -6,13 +6,13 @@ The benchmark asks: when an agentic harness analyzes a synthetic oncology datase
 
 ## What's in the box
 
-- **Synthetic dataset generator (Aim 1.1).** Large oncology cohorts (50,000 records by default). One bundle per supported clinical cancer type - **NSCLC, CRC, breast, prostate, AML** - plus a **CRISPR/DepMap-style cell-line dependency screen**. Each bundle contains a single buried multi-feature finding: a treatment exceptional only inside a 3-4 feature conjunction for clinical cohorts, or a gene dependency concentrated in a multi-feature cell-line subgroup for the DepMap profile. Each bundle ships in two parallel forms:
+- **Synthetic dataset generator (Aim 1.1).** Large datasets (50,000 records by default). Each supported cancer type - **NSCLC, CRC, breast, prostate, AML** - has a clinical cohort profile and a CRISPR/DepMap-style cell-line dependency profile. Each bundle contains a single buried multi-feature finding: a treatment exceptional only inside a 3-4 feature conjunction for clinical cohorts, or a gene dependency concentrated in a multi-feature cell-line subgroup for DepMap profiles. Each bundle ships in two parallel forms:
   - `named/` — real clinical column names.
   - `anonymized/` — non-outcome columns renamed to `feature_NNN`.
 - **Harness-agnostic task builder (Aim 1.2).** Emits a generic data-mining brief that any external agent (Claude Code, Codex, custom ReAct, …) can execute against a parquet file.
 - **LLM-judged scorer (Aim 1.2).** Two metrics per `(harness, dataset, replicate)`:
   - **Novelty %** — fraction of harness-proposed hypotheses an LLM judge marks as going beyond established oncology paradigm consensus.
-  - **Buried discovery iteration** — earliest iteration the pipeline both proposes and tests (with a direction-correct significant analysis) a hypothesis matching the buried finding. Falls back to `max_iterations` if never uncovered.
+  - **Buried discovery iteration** — earliest iteration the pipeline both proposes and tests (with a direction-correct significant analysis) a hypothesis matching the buried finding. Reported only for replicates where the buried finding is uncovered.
 
   Per-bundle scores are reported as mean ± SD across replicates; the pipeline-level figure is the unweighted mean of bundle means. Anonymized bundles are excluded from scoring (the LLM judge can't reason about `feature_NNN` columns).
 
@@ -52,7 +52,7 @@ scripts/run_all.sh
 | `CONFIG`          | `configs/synthetic.example.yaml`   | Generator config YAML                                       |
 | `OUT`             | `../data/ds001`                    | Output root (datasets, tasks, scores)                       |
 | `SEED`            | `0`                                | Generator seed                                              |
-| `CANCER_TYPES`    | `all`                              | `all` or comma list (`nsclc,crc,depmap`)                    |
+| `CANCER_TYPES`    | `all`                              | `all` or comma list (`nsclc_clinical,crc_depmap`)           |
 | `MAX_ITERATIONS`  | `10`                               | Iteration cap baked into the task brief                     |
 | `HARNESS`         | `claude`                           | First arg to `scripts/run_harness.sh` (any supported spec)  |
 | `JOBS`            | `4`                                | Bundles run in parallel                                     |
@@ -95,7 +95,7 @@ Per dataset profile, this writes:
         └── dataset_description.md
 ```
 
-Use `--cancer-types nsclc,crc` (etc.) to restrict the run, or `--variant named` / `--variant anonymized` to write a single twin instead of both.
+Use `--cancer-types nsclc_clinical,crc_depmap` (etc.) to restrict the run, or `--variant named` / `--variant anonymized` to write a single twin instead of both.
 
 ### 2. Build harness task bundles
 
@@ -163,9 +163,9 @@ For one-off scoring of a single transcript:
 
 ```bash
 ocs score run \
-    --dataset ../data/ds001/nsclc/named \
-    --transcript ../data/ds001/tasks/nsclc/named/runs/run_001/transcript.json \
-    --out ../data/ds001/nsclc/named/score \
+    --dataset ../data/ds001/nsclc_clinical/named \
+    --transcript ../data/ds001/tasks/nsclc_clinical/named/runs/run_001/transcript.json \
+    --out ../data/ds001/nsclc_clinical/named/score \
     --judge codex-cli
 ```
 

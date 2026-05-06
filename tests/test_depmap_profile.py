@@ -7,8 +7,8 @@ from onc_co_scientist.synthetic.io import read_description, read_frame, write_bu
 
 def _depmap_config(**overrides) -> GeneratorConfig:
     base = dict(
-        dataset_id="depmap_ds",
-        cancer_type="depmap",
+        dataset_id="crc_depmap_ds",
+        cancer_type="crc_depmap",
         patient_n=2_000,
         seed=0,
         n_concordant=0,
@@ -24,7 +24,7 @@ def _depmap_config(**overrides) -> GeneratorConfig:
 def test_depmap_profile_generates_dependency_map_context():
     bundle = generate_dataset(_depmap_config())
 
-    assert bundle.manifest.cancer_type == "depmap"
+    assert bundle.manifest.cancer_type == "crc_depmap"
     assert bundle.manifest.dataset_kind == "crispr_depmap"
     assert bundle.manifest.id_columns == ["cell_line_id"]
     assert "cell_line_id" in bundle.frame.columns
@@ -46,7 +46,7 @@ def test_depmap_profile_generates_dependency_map_context():
 
 def test_depmap_anonymized_description_and_task_prompt_use_cell_line_context(tmp_path):
     bundle = generate_dataset(_depmap_config(patient_n=300))
-    named_dir, anon_dir = write_bundle_pair(bundle, tmp_path / "depmap", anon_seed=0)
+    named_dir, anon_dir = write_bundle_pair(bundle, tmp_path / "crc_depmap", anon_seed=0)
 
     anon_frame = read_frame(anon_dir)
     assert "cell_line_id" in anon_frame.columns

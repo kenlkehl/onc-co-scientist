@@ -7,9 +7,9 @@ paradigm-discordant, and hidden-novel associations.
 
 Cancer-type behaviour (base-frame sampler, paradigm catalogs, prognostic
 layer, prevalence defaults) is owned by ``CancerProfile`` instances in
-``cancer_types/``. The default profile is NSCLC, preserving the pre-multi-
-cancer pipeline; CRC, breast, prostate, AML, and CRISPR/DepMap profiles add
-support for additional dataset modalities.
+``cancer_types/``. The default profile is NSCLC clinical, preserving the
+pre-multi-cancer pipeline; each supported cancer now has one clinical profile
+and one CRISPR/DepMap profile.
 
 Two backends are supported:
 
@@ -52,9 +52,9 @@ class GeneratorConfig:
 
     dataset_id: str
     # Cancer type whose ``CancerProfile`` drives the base-frame sampler and
-    # paradigm catalogs. Defaults to NSCLC for backward compatibility with the
-    # pre-multi-cancer pipeline.
-    cancer_type: str = "nsclc"
+    # paradigm catalogs. Defaults to NSCLC clinical for backward compatibility
+    # with the pre-multi-cancer pipeline.
+    cancer_type: str = "nsclc_clinical"
     # Default cohort size is large enough that statistical power is not the
     # bottleneck for recovering even multi-feature subgroup signals; the eval
     # is then a question of whether the agent reaches the right analysis.
@@ -83,8 +83,8 @@ class GeneratorConfig:
     continuous_outcome_sigma: float = 2.0
     # Per-covariate marginal-prevalence overrides for the builtin backend.
     # Keys that don't apply to the active profile (e.g. ``egfr_mutation`` when
-    # ``cancer_type='aml'``) are ignored at sampling time, so a single config
-    # can drive multiple cancer-type bundles.
+    # ``cancer_type='aml_clinical'``) are ignored at sampling time, so a single
+    # config can drive multiple cancer-type bundles.
     covariate_prevalences: dict[str, float] = field(default_factory=dict)
     # Number of realistic-looking "distractor" covariates appended to the
     # dataset, sampled independently of every outcome. Higher values force an
@@ -112,7 +112,7 @@ def _oci_base_frame(config: GeneratorConfig) -> pd.DataFrame:
     ``NotImplementedError`` rather than silently delivering NSCLC data under
     the wrong label.
     """
-    if CancerType(config.cancer_type) is not CancerType.nsclc:
+    if CancerType(config.cancer_type) is not CancerType.nsclc_clinical:
         raise NotImplementedError(
             "backend='onc_causal_inference' is currently NSCLC-only. "
             f"cancer_type={config.cancer_type!r} requires backend='builtin'."

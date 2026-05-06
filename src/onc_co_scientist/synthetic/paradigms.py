@@ -7,25 +7,25 @@ N entries from each catalog. The deterministic seed-path used by the initial
 pipeline (and tests) takes the first N entries from each catalog, so ordering
 inside each profile's catalog functions is part of the public contract.
 
-Backward-compatible re-exports point at the NSCLC profile so legacy callers
+Backward-compatible re-exports point at the NSCLC clinical profile so legacy callers
 that imported ``DEFAULT_POOL``, ``concordant_catalog``, etc. from this module
 keep working unchanged. The legacy ``select_associations`` signature (no
-profile argument) defaults to the NSCLC profile for the same reason.
+profile argument) defaults to the NSCLC clinical profile for the same reason.
 """
 
 from __future__ import annotations
 
 from .cancer_types import CancerProfile, get_profile
-from .cancer_types.nsclc import (
+from .cancer_types.nsclc_clinical import (
     buried_signature_catalog as _nsclc_buried_signature_catalog,
 )
-from .cancer_types.nsclc import (
+from .cancer_types.nsclc_clinical import (
     concordant_catalog as _nsclc_concordant_catalog,
 )
-from .cancer_types.nsclc import (
+from .cancer_types.nsclc_clinical import (
     discordant_catalog as _nsclc_discordant_catalog,
 )
-from .cancer_types.nsclc import (
+from .cancer_types.nsclc_clinical import (
     hidden_novel_catalog as _nsclc_hidden_novel_catalog,
 )
 from .schemas import AssociationSpec, ParadigmClass
@@ -55,8 +55,10 @@ def _profile_pool(
     }
 
 
-# Backward-compatible NSCLC pool. Constructed once at import time.
-DEFAULT_POOL: dict[ParadigmClass, list[AssociationSpec]] = _profile_pool(get_profile("nsclc"))
+# Backward-compatible NSCLC clinical pool. Constructed once at import time.
+DEFAULT_POOL: dict[ParadigmClass, list[AssociationSpec]] = _profile_pool(
+    get_profile("nsclc_clinical")
+)
 
 
 def select_associations(
@@ -76,7 +78,7 @@ def select_associations(
        (legacy direct-injection path used by tests and the LLM-driven
        expansion).
     2. Otherwise, if ``profile`` is supplied, its catalogs are used.
-    3. Otherwise, the NSCLC profile is used (backward compatible default).
+    3. Otherwise, the NSCLC clinical profile is used (backward compatible default).
 
     ``n_buried_signatures`` selects from the multi-feature buried catalog;
     these are tagged ``hidden_novel`` for scoring purposes but are counted
@@ -85,7 +87,7 @@ def select_associations(
     separately.
     """
     if pool is None or buried_pool is None:
-        active_profile = profile if profile is not None else get_profile("nsclc")
+        active_profile = profile if profile is not None else get_profile("nsclc_clinical")
         if pool is None:
             pool = _profile_pool(active_profile)
         if buried_pool is None:

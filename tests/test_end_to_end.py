@@ -185,7 +185,7 @@ def test_multi_cancer_pipeline_score_two_profiles(tmp_path):
         min_buried_treated_subgroup_n=0,
         n_extra_covariates=10,
     )
-    chosen = [CancerType.crc, CancerType.breast]
+    chosen = [CancerType.crc_clinical, CancerType.breast_clinical]
     bundles = generate_multi_dataset(base_config, chosen)
     written = write_multi_bundle_pair(bundles, tmp_path / "ds", anon_seed=0)
 

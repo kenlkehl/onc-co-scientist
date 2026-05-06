@@ -4,8 +4,8 @@ For each hidden_novel association in the manifest, find the earliest
 iteration at which the harness both (a) proposed a hypothesis matching the
 association and (b) ran an analysis with a direction-correct, significant
 result referencing that hypothesis. The bundle-level score is the earliest
-exact discovery iteration across hidden_novel associations, falling back to
-``transcript.max_iterations + 1`` when nothing was uncovered.
+exact discovery iteration across hidden_novel associations, or ``None`` when
+nothing was uncovered.
 
 Exact discovery is preserved as the strict metric. Each association also gets
 a graded recovery level (exact, near, component, none) so near-miss recovery
@@ -63,7 +63,7 @@ class BuriedScore:
     max_iterations: int
     per_association: list[BuriedDiscovery]
     earliest_iteration_uncovered: int | None
-    score: int
+    score: int | None
 
     @property
     def uncovered(self) -> bool:
@@ -404,10 +404,9 @@ def score_buried(
 
     earliest = [d.iteration_uncovered for d in per_association if d.iteration_uncovered is not None]
     earliest_iter = min(earliest) if earliest else None
-    score = earliest_iter if earliest_iter is not None else transcript.max_iterations + 1
     return BuriedScore(
         max_iterations=transcript.max_iterations,
         per_association=per_association,
         earliest_iteration_uncovered=earliest_iter,
-        score=score,
+        score=earliest_iter,
     )

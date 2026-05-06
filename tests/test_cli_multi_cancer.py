@@ -31,9 +31,9 @@ def test_parse_cancer_types_defaults_to_all() -> None:
 
 
 def test_parse_cancer_types_subset_preserves_order_and_dedupes() -> None:
-    assert _parse_cancer_types("crc, nsclc, crc") == [
-        CancerType.crc,
-        CancerType.nsclc,
+    assert _parse_cancer_types("crc_clinical, nsclc_clinical, crc_clinical") == [
+        CancerType.crc_clinical,
+        CancerType.nsclc_clinical,
     ]
 
 
@@ -41,7 +41,7 @@ def test_parse_cancer_types_rejects_unknown() -> None:
     import typer
 
     try:
-        _parse_cancer_types("nsclc, melanoma")
+        _parse_cancer_types("nsclc_clinical, melanoma")
     except typer.BadParameter as exc:
         assert "melanoma" in str(exc)
     else:
@@ -99,15 +99,15 @@ def test_subset_cli_writes_only_selected_cancer_types(tmp_path: Path) -> None:
             "--out",
             str(out_dir),
             "--cancer-types",
-            "crc,breast",
+            "crc_clinical,breast_clinical",
         ],
     )
     assert result.exit_code == 0, result.stdout
 
     written = {p.name for p in out_dir.iterdir() if p.is_dir()}
-    assert written == {"crc", "breast"}
-    assert (out_dir / "crc" / "named" / "manifest.json").exists()
-    assert (out_dir / "breast" / "anonymized" / "manifest.json").exists()
+    assert written == {"crc_clinical", "breast_clinical"}
+    assert (out_dir / "crc_clinical" / "named" / "manifest.json").exists()
+    assert (out_dir / "breast_clinical" / "anonymized" / "manifest.json").exists()
 
 
 def test_cli_named_only_variant_writes_bundle_root_per_cancer(
@@ -129,7 +129,7 @@ def test_cli_named_only_variant_writes_bundle_root_per_cancer(
             "--out",
             str(out_dir),
             "--cancer-types",
-            "nsclc",
+            "nsclc_clinical",
             "--variant",
             "named",
         ],
@@ -137,10 +137,10 @@ def test_cli_named_only_variant_writes_bundle_root_per_cancer(
     assert result.exit_code == 0, result.stdout
 
     # Bundle root sits directly under <out>/<cancer_type>/.
-    assert (out_dir / "nsclc" / "manifest.json").exists()
-    assert (out_dir / "nsclc" / "public" / "dataset.parquet").exists()
+    assert (out_dir / "nsclc_clinical" / "manifest.json").exists()
+    assert (out_dir / "nsclc_clinical" / "public" / "dataset.parquet").exists()
     # And there is no separate named/ subdirectory.
-    assert not (out_dir / "nsclc" / "named").exists()
+    assert not (out_dir / "nsclc_clinical" / "named").exists()
 
 
 def test_cli_harness_build_task_batches_synth_root(tmp_path: Path) -> None:
@@ -161,7 +161,7 @@ def test_cli_harness_build_task_batches_synth_root(tmp_path: Path) -> None:
             "--out",
             str(synth_root),
             "--cancer-types",
-            "crc,breast",
+            "crc_clinical,breast_clinical",
             "--seed",
             "0",
         ],
@@ -184,7 +184,7 @@ def test_cli_harness_build_task_batches_synth_root(tmp_path: Path) -> None:
     )
     assert result.exit_code == 0, result.stdout
 
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             task_dir = tasks_root / ct / variant
             assert (task_dir / "agent_instructions.md").exists()
@@ -209,12 +209,12 @@ def test_cli_harness_build_task_single_bundle_compat(tmp_path: Path) -> None:
             "--out",
             str(synth_root),
             "--cancer-types",
-            "nsclc",
+            "nsclc_clinical",
         ],
     )
     assert gen.exit_code == 0, gen.stdout
 
-    bundle = synth_root / "nsclc" / "anonymized"
+    bundle = synth_root / "nsclc_clinical" / "anonymized"
     task_dir = tmp_path / "single_task"
     result = runner.invoke(
         app,
@@ -233,7 +233,7 @@ def test_cli_harness_build_task_single_bundle_compat(tmp_path: Path) -> None:
     assert (task_dir / "agent_instructions.md").exists()
     assert (task_dir / "dataset.parquet").exists()
     # And no nested per-cancer-type subdir was created.
-    assert not (task_dir / "nsclc").exists()
+    assert not (task_dir / "nsclc_clinical").exists()
 
 
 def test_cli_harness_build_task_errors_on_empty_dir(tmp_path: Path) -> None:

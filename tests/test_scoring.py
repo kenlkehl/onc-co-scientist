@@ -21,7 +21,7 @@ def _replicate(
     harness_id: str = "harness@1",
     max_iterations: int = 5,
     frac_novel: float | None,
-    buried_score: int,
+    buried_score: int | None,
     uncovered: bool,
 ) -> ReplicateScore:
     if frac_novel is None:
@@ -53,24 +53,25 @@ def _replicate(
 def test_aggregate_replicates_mean_and_sd():
     reps = [
         _replicate(frac_novel=0.5, buried_score=2, uncovered=True),
-        _replicate(frac_novel=0.7, buried_score=5, uncovered=False),
+        _replicate(frac_novel=0.7, buried_score=4, uncovered=True),
+        _replicate(frac_novel=0.7, buried_score=None, uncovered=False),
     ]
     bundle = aggregate_replicates(reps)
     assert bundle.dataset_id == "ds_a"
-    assert bundle.n_replicates == 2
-    assert bundle.frac_novel_mean == 0.6
-    assert bundle.frac_novel_sd == stdev([0.5, 0.7])
-    assert bundle.buried_score_mean == 3.5
-    assert bundle.buried_score_sd == stdev([2.0, 5.0])
-    assert bundle.n_replicates_uncovered == 1
-    assert bundle.fraction_uncovered == 0.5
-    assert bundle.n_replicates_near_or_better == 1
-    assert bundle.n_replicates_component_or_better == 1
+    assert bundle.n_replicates == 3
+    assert bundle.frac_novel_mean == 0.6333333333333333
+    assert bundle.frac_novel_sd == stdev([0.5, 0.7, 0.7])
+    assert bundle.buried_score_mean == 3.0
+    assert bundle.buried_score_sd == stdev([2.0, 4.0])
+    assert bundle.n_replicates_uncovered == 2
+    assert bundle.fraction_uncovered == 2 / 3
+    assert bundle.n_replicates_near_or_better == 2
+    assert bundle.n_replicates_component_or_better == 2
     assert bundle.recovery_level_counts == {
         "none": 1,
         "component": 0,
         "near": 0,
-        "exact": 1,
+        "exact": 2,
     }
 
 
@@ -85,7 +86,7 @@ def test_aggregate_replicates_single_run_sd_none():
 
 def test_aggregate_replicates_rejects_mixed_dataset_ids():
     a = _replicate(frac_novel=0.5, buried_score=3, uncovered=True)
-    b = _replicate(dataset_id="ds_b", frac_novel=0.6, buried_score=4, uncovered=False)
+    b = _replicate(dataset_id="ds_b", frac_novel=0.6, buried_score=None, uncovered=False)
     try:
         aggregate_replicates([a, b])
     except ValueError as exc:
@@ -109,7 +110,7 @@ def test_aggregate_batch_means_of_bundle_means():
             _replicate(
                 dataset_id="ds_b",
                 frac_novel=0.9,
-                buried_score=5,
+                buried_score=None,
                 uncovered=False,
             )
         ]
@@ -120,7 +121,7 @@ def test_aggregate_batch_means_of_bundle_means():
     assert batch.n_bundles_anonymized == 0
     assert batch.n_replicates_total == 4
     assert batch.frac_novel == 0.7
-    assert batch.buried_score_named == 3.5
+    assert batch.buried_score_named == 2.0
     assert batch.buried_score_anonymized is None
     # fraction_uncovered_named: bundle_a 1.0, bundle_b 0.0 → mean 0.5
     assert batch.fraction_uncovered_named == 0.5
@@ -128,11 +129,11 @@ def test_aggregate_batch_means_of_bundle_means():
 
 
 def test_aggregate_batch_named_and_anonymized_split():
-    """Anonymized bundles emit None novelty; their buried score lands in
-    the dedicated _anonymized headline field."""
+    """Anonymized bundles emit None novelty; unrecovered buried iterations
+    stay absent from the dedicated _anonymized headline field."""
     named_a = aggregate_replicates([_replicate(frac_novel=0.5, buried_score=1, uncovered=True)])
     anon_a = aggregate_replicates(
-        [_replicate(variant="anonymized", frac_novel=None, buried_score=4, uncovered=False)]
+        [_replicate(variant="anonymized", frac_novel=None, buried_score=None, uncovered=False)]
     )
     batch = aggregate_batch([named_a, anon_a])
     assert batch.n_bundles == 2
@@ -140,14 +141,14 @@ def test_aggregate_batch_named_and_anonymized_split():
     assert batch.n_bundles_anonymized == 1
     assert batch.frac_novel == 0.5
     assert batch.buried_score_named == 1.0
-    assert batch.buried_score_anonymized == 4.0
+    assert batch.buried_score_anonymized is None
     assert batch.fraction_uncovered_named == 1.0
     assert batch.fraction_uncovered_anonymized == 0.0
 
 
 def test_aggregate_replicates_rejects_mixed_variants():
     a = _replicate(frac_novel=0.5, buried_score=3, uncovered=True)
-    b = _replicate(variant="anonymized", frac_novel=None, buried_score=4, uncovered=False)
+    b = _replicate(variant="anonymized", frac_novel=None, buried_score=None, uncovered=False)
     try:
         aggregate_replicates([a, b])
     except ValueError as exc:

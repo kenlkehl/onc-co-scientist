@@ -366,9 +366,9 @@ def prognostic_contribution(frame: pd.DataFrame, outcome: str) -> np.ndarray:
 
 
 PROFILE = CancerProfile(
-    cancer_type="aml",
+    cancer_type="aml_clinical",
     display_name="Acute myeloid leukemia",
-    dataset_id_suffix="aml",
+    dataset_id_suffix="aml_clinical",
     base_frame_fn=base_frame_fn,
     concordant_catalog=concordant_catalog,
     discordant_catalog=discordant_catalog,

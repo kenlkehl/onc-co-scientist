@@ -19,7 +19,8 @@ contribution (ECOG, age, albumin, LDH, weight loss, CRP) implemented in
 ``cancer_types.base`` and a cancer-specific contribution attached to each
 ``CancerProfile``. The injector sums both. The legacy
 ``BACKGROUND_PROGNOSTIC_VARIABLES`` constant equals the union of the shared
-variables and the NSCLC profile's variables, preserving its prior value.
+variables and the NSCLC clinical profile's variables, preserving its prior
+value.
 """
 
 from __future__ import annotations
@@ -54,12 +55,12 @@ def background_prognostic_variables(profile: CancerProfile) -> frozenset[str]:
     return SHARED_BACKGROUND_PROGNOSTIC_VARIABLES | profile.background_prognostic_variables
 
 
-# Legacy module-level constant. Equals the union for the NSCLC profile so
+# Legacy module-level constant. Equals the union for the NSCLC clinical profile so
 # pre-multi-cancer test fixtures and external callers see the same set they
 # always have. New code should call ``background_prognostic_variables(profile)``
 # instead.
 BACKGROUND_PROGNOSTIC_VARIABLES: frozenset[str] = background_prognostic_variables(
-    get_profile("nsclc")
+    get_profile("nsclc_clinical")
 )
 
 
@@ -135,11 +136,11 @@ def _profile_prognostic_contribution(
 ) -> np.ndarray:
     """Sum the universal and cancer-specific background-prognostic layers.
 
-    ``profile=None`` falls back to the NSCLC profile, preserving the
+    ``profile=None`` falls back to the NSCLC clinical profile, preserving the
     pre-refactor behaviour for any caller that hasn't yet started passing a
     profile through.
     """
-    active = profile if profile is not None else get_profile("nsclc")
+    active = profile if profile is not None else get_profile("nsclc_clinical")
     return shared_prognostic_contribution(frame, outcome) + active.prognostic_contribution(
         frame, outcome
     )

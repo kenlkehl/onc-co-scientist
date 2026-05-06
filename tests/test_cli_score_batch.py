@@ -35,7 +35,7 @@ def _build_synth_and_tasks(tmp_path: Path) -> tuple[Path, Path]:
         min_buried_treated_subgroup_n=0,
         n_extra_covariates=4,
     )
-    chosen = [CancerType.crc, CancerType.breast]
+    chosen = [CancerType.crc_clinical, CancerType.breast_clinical]
     bundles = generate_multi_dataset(base, chosen)
     synth_root = tmp_path / "ds"
     write_multi_bundle_pair(bundles, synth_root, anon_seed=0)
@@ -106,13 +106,15 @@ def test_score_batch_scores_named_and_anonymized_and_writes_report(tmp_path: Pat
     # Drop two replicate transcripts under each bundle (named AND
     # anonymized) — both variants should now be scored, with novelty
     # only computed for named.
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             manifest = read_manifest(synth_root / ct / variant)
             for idx in (1, 2):
                 run_dir = tasks_root / ct / variant / "runs" / f"run_{idx:03d}"
                 encoding = (
-                    "utf-8-sig" if ct == "crc" and variant == "named" and idx == 1 else "utf-8"
+                    "utf-8-sig"
+                    if ct == "crc_clinical" and variant == "named" and idx == 1
+                    else "utf-8"
                 )
                 _write_transcript(
                     run_dir / "transcript.json",
@@ -149,10 +151,13 @@ def test_score_batch_scores_named_and_anonymized_and_writes_report(tmp_path: Pat
     assert payload["n_bundles_named"] == 2
     assert payload["n_bundles_anonymized"] == 2
     assert payload["n_replicates_total"] == 8
+    assert payload["buried_score_named"] is None
+    assert payload["buried_score_anonymized"] is None
 
     by_variant: dict[str, list] = {"named": [], "anonymized": []}
     for b in payload["per_bundle"]:
         by_variant[b["variant"]].append(b)
+        assert b["buried_score_mean"] is None
     assert len(by_variant["named"]) == 2
     assert len(by_variant["anonymized"]) == 2
 
@@ -170,6 +175,8 @@ def test_score_batch_scores_named_and_anonymized_and_writes_report(tmp_path: Pat
     assert "Novelty %" in md
     assert "Buried discovery iteration — named" in md
     assert "Buried discovery iteration — anonymized" in md
+    assert "exact recoveries only" in md
+    assert "max_iterations + 1" not in md
     assert "Fraction near-or-better recovery" in md
     assert "component-or-better recovery" in md
 
@@ -258,9 +265,9 @@ def test_score_batch_explains_task_only_synth_root(tmp_path: Path) -> None:
 
 def test_score_run_writes_single_replicate_report(tmp_path: Path) -> None:
     synth_root, tasks_root = _build_synth_and_tasks(tmp_path)
-    bundle = synth_root / "crc" / "named"
+    bundle = synth_root / "crc_clinical" / "named"
     manifest = read_manifest(bundle)
-    transcript_path = tasks_root / "crc" / "named" / "runs" / "run_001" / "transcript.json"
+    transcript_path = tasks_root / "crc_clinical" / "named" / "runs" / "run_001" / "transcript.json"
     _write_transcript(transcript_path, manifest.dataset_id, encoding="utf-8-sig")
 
     runner = CliRunner()

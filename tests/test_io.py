@@ -79,7 +79,7 @@ def test_discover_bundles_walks_paired_layout(tmp_path):
         min_buried_treated_subgroup_n=0,
         n_extra_covariates=5,
     )
-    chosen = [CancerType.crc, CancerType.breast]
+    chosen = [CancerType.crc_clinical, CancerType.breast_clinical]
     bundles = generate_multi_dataset(base, chosen)
     write_multi_bundle_pair(bundles, tmp_path / "ds", anon_seed=0)
 
@@ -103,7 +103,7 @@ def test_discover_bundles_walks_single_variant_layout(tmp_path):
         min_buried_treated_subgroup_n=0,
         n_extra_covariates=4,
     )
-    chosen = [CancerType.nsclc, CancerType.aml]
+    chosen = [CancerType.nsclc_clinical, CancerType.aml_clinical]
     bundles = generate_multi_dataset(base, chosen)
     write_multi_bundle(bundles, tmp_path / "ds", anonymize=False)
 

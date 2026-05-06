@@ -39,7 +39,7 @@ def _build_two_cancer_tasks(tmp_path: Path) -> Path:
         min_buried_treated_subgroup_n=0,
         n_extra_covariates=4,
     )
-    chosen = [CancerType.crc, CancerType.breast]
+    chosen = [CancerType.crc_clinical, CancerType.breast_clinical]
     bundles = generate_multi_dataset(base, chosen)
     synth_root = tmp_path / "ds"
     write_multi_bundle_pair(bundles, synth_root, anon_seed=0)
@@ -137,7 +137,7 @@ def test_run_harness_writes_transcript_per_bundle(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
 
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
             assert (run_dir / "transcript.json").exists()
@@ -161,7 +161,7 @@ def test_run_harness_parallel_jobs_writes_per_bundle_log(tmp_path: Path) -> None
     )
     assert result.returncode == 0, result.stderr
 
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
             assert (run_dir / "transcript.json").exists()
@@ -179,7 +179,7 @@ def test_run_harness_dry_run_does_not_create_run_dirs(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "would run replicate run_001" in result.stdout
 
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             assert not (tasks_root / ct / variant / "runs").exists()
 
@@ -189,7 +189,7 @@ def test_run_harness_skip_existing_skips_bundles_with_transcript(tmp_path: Path)
     bin_dir = tmp_path / "bin"
     _write_fake_harness(bin_dir)
 
-    sentinel_run = _bundle_run_dir(tasks_root, "crc", "named", 1)
+    sentinel_run = _bundle_run_dir(tasks_root, "crc_clinical", "named", 1)
     sentinel_run.mkdir(parents=True)
     pre_existing = sentinel_run / "transcript.json"
     pre_existing.write_text('{"do":"not overwrite"}')
@@ -205,7 +205,11 @@ def test_run_harness_skip_existing_skips_bundles_with_transcript(tmp_path: Path)
     # Pre-existing transcript was untouched.
     assert pre_existing.read_text() == '{"do":"not overwrite"}'
     # And the other three bundles still ran.
-    for ct, variant in (("crc", "anonymized"), ("breast", "named"), ("breast", "anonymized")):
+    for ct, variant in (
+        ("crc_clinical", "anonymized"),
+        ("breast_clinical", "named"),
+        ("breast_clinical", "anonymized"),
+    ):
         run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
         assert (run_dir / "transcript.json").exists()
 
@@ -229,7 +233,7 @@ def test_run_harness_cwd_isolation(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
 
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
             summary = (run_dir / "analysis_summary.txt").read_text()
@@ -308,7 +312,7 @@ def test_run_harness_ollama_wrapped_inserts_double_dash(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
     # Every bundle got its transcript via the wrapped form.
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
             assert (run_dir / "transcript.json").exists()
@@ -380,7 +384,7 @@ def test_run_harness_codex_profile_invokes_exec_with_workspace_write(
     )
     assert result.returncode == 0, result.stderr
 
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             run_dir = _bundle_run_dir(tasks_root, ct, variant, 1)
             assert (run_dir / "transcript.json").exists()
@@ -406,7 +410,7 @@ def test_run_harness_replicates_runs_n_times(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
 
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             for idx in (1, 2, 3):
                 run_dir = _bundle_run_dir(tasks_root, ct, variant, idx)
@@ -428,7 +432,7 @@ def test_run_harness_replicates_top_up(tmp_path: Path) -> None:
         '{"dataset_id":"x","model_id":"seed","harness_id":"seed@1",'
         '"max_iterations":1,"iterations":[]}'
     )
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             for idx in (1, 2):
                 run_dir = _bundle_run_dir(tasks_root, ct, variant, idx)
@@ -445,7 +449,7 @@ def test_run_harness_replicates_top_up(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
     # Seed transcripts are untouched.
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             for idx in (1, 2):
                 run_dir = _bundle_run_dir(tasks_root, ct, variant, idx)
@@ -470,7 +474,7 @@ def test_run_harness_replicates_idempotent(tmp_path: Path) -> None:
         '{"dataset_id":"x","model_id":"seed","harness_id":"seed@1",'
         '"max_iterations":1,"iterations":[]}'
     )
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             for idx in (1, 2, 3):
                 run_dir = _bundle_run_dir(tasks_root, ct, variant, idx)
@@ -488,6 +492,6 @@ def test_run_harness_replicates_idempotent(tmp_path: Path) -> None:
 
     # Counter file was never created (harness was never invoked).
     assert not counter.exists()
-    for ct in ("crc", "breast"):
+    for ct in ("crc_clinical", "breast_clinical"):
         for variant in ("named", "anonymized"):
             assert not _bundle_run_dir(tasks_root, ct, variant, 4).exists()

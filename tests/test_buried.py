@@ -67,7 +67,7 @@ def test_perfect_transcript_uncovers_buried_at_iteration_2():
     assert all(j.rationale for j in discovery.match_judgments)
 
 
-def test_empty_transcript_falls_back_to_max_iterations():
+def test_empty_transcript_has_no_buried_score():
     manifest = _buried_manifest()
     transcript = Transcript(
         dataset_id="score_ds",
@@ -79,7 +79,7 @@ def test_empty_transcript_falls_back_to_max_iterations():
     judge = StubJudge()
     score = score_buried(manifest, transcript, judge)
     assert score.earliest_iteration_uncovered is None
-    assert score.score == 6
+    assert score.score is None
     assert score.uncovered is False
     assert score.recovery_level == "none"
 
@@ -107,7 +107,7 @@ def test_proposed_but_not_tested_does_not_count():
     )
     score = score_buried(manifest, transcript, judge)
     assert score.earliest_iteration_uncovered is None
-    assert score.score == 5
+    assert score.score is None
     assert score.per_association[0].proposed_iteration == 1
     assert score.per_association[0].tested_iteration is None
     assert score.recovery_level == "none"
@@ -151,7 +151,7 @@ def test_wrong_direction_analysis_does_not_count():
     )
     score = score_buried(manifest, transcript, judge)
     assert score.earliest_iteration_uncovered is None
-    assert score.score == 4
+    assert score.score is None
 
 
 def test_near_recovery_is_reported_without_exact_uncovered():
@@ -188,7 +188,7 @@ def test_near_recovery_is_reported_without_exact_uncovered():
     score = score_buried(manifest, transcript, judge)
 
     assert score.uncovered is False
-    assert score.score == 5
+    assert score.score is None
     assert score.recovery_level == "near"
     assert score.recovery_iteration == 2
     assert score.near_or_better is True
@@ -229,14 +229,14 @@ def test_component_recovery_accepts_significant_partial_signal():
     score = score_buried(manifest, transcript, judge)
 
     assert score.uncovered is False
-    assert score.score == 5
+    assert score.score is None
     assert score.recovery_level == "component"
     assert score.recovery_iteration == 1
     assert score.near_or_better is False
     assert score.component_or_better is True
 
 
-def test_manifest_with_no_hidden_novel_yields_max_iterations_score():
+def test_manifest_with_no_hidden_novel_yields_no_buried_score():
     manifest = DatasetManifest(
         dataset_id="score_ds",
         seed=0,
@@ -255,7 +255,7 @@ def test_manifest_with_no_hidden_novel_yields_max_iterations_score():
         iterations=[],
     )
     score = score_buried(manifest, transcript, StubJudge())
-    assert score.score == 5
+    assert score.score is None
     assert score.per_association == []
 
 

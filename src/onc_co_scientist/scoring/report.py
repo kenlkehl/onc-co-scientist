@@ -22,6 +22,12 @@ def _fmt_pair(value: float | None, sd: float | None, digits: int = 3) -> str:
     return f"{value:.{digits}f} ± {sd:.{digits}f}"
 
 
+def _fmt_iteration(value: int | None) -> str:
+    if value is None:
+        return "n/a"
+    return str(value)
+
+
 def _sample_novel(replicate: ReplicateScore, *, k: int = 3) -> list[str]:
     if replicate.novelty is None:
         return []
@@ -54,7 +60,8 @@ def _render_variant_block(bundle: BundleScore) -> list[str]:
     if bundle.variant == "named":
         lines.append(f"- frac_novel: {_fmt_pair(bundle.frac_novel_mean, bundle.frac_novel_sd)}")
     lines.append(
-        f"- buried_score: {_fmt_pair(bundle.buried_score_mean, bundle.buried_score_sd, digits=2)}"
+        f"- buried_score (exact recoveries only): "
+        f"{_fmt_pair(bundle.buried_score_mean, bundle.buried_score_sd, digits=2)}"
     )
     lines.append(f"- replicates uncovered: {bundle.n_replicates_uncovered}/{bundle.n_replicates}")
     lines.append(
@@ -95,14 +102,14 @@ def _render_variant_block(bundle: BundleScore) -> list[str]:
             sample_md = "<br>".join(_md_escape(s) for s in sample) if sample else "—"
             lines.append(
                 f"| {i:03d} | {rep.model_id} | {rep.harness_id} | "
-                f"{_fmt(rep.frac_novel)} | {rep.buried_score} | "
+                f"{_fmt(rep.frac_novel)} | {_fmt_iteration(rep.buried_score)} | "
                 f"{uncovered_at} | {rep.recovery_level} | {recovery_at} | "
                 f"{sample_md} |"
             )
         else:
             lines.append(
                 f"| {i:03d} | {rep.model_id} | {rep.harness_id} | "
-                f"{rep.buried_score} | {uncovered_at} | "
+                f"{_fmt_iteration(rep.buried_score)} | {uncovered_at} | "
                 f"{rep.recovery_level} | {recovery_at} |"
             )
     return lines
@@ -122,11 +129,11 @@ def render_markdown_batch(batch: BatchPipelineScore) -> str:
     )
     lines.append(
         f"- **Buried discovery iteration — named** (lower = uncovers earlier; "
-        f"exact only; no exact = max_iterations + 1): {_fmt(batch.buried_score_named)}"
+        f"exact recoveries only): {_fmt(batch.buried_score_named)}"
     )
     lines.append(
         f"- **Buried discovery iteration — anonymized** "
-        f"(exact only; no exact = max_iterations + 1): "
+        f"(exact recoveries only): "
         f"{_fmt(batch.buried_score_anonymized)}"
     )
     lines.append(
@@ -154,7 +161,7 @@ def render_markdown_batch(batch: BatchPipelineScore) -> str:
         f"{_fmt(batch.fraction_component_or_better_anonymized)}"
     )
     lines.append("")
-    lines.append("## Per-bundle detail (mean ± SD across replicates)")
+    lines.append("## Per-bundle detail (mean ± SD; buried iteration over exact recoveries only)")
     for dataset_id, group in _group_by_dataset(batch.per_bundle):
         lines.append("")
         lines.append(f"### {dataset_id}")
