@@ -21,7 +21,12 @@ import yaml
 from pydantic import ValidationError
 from rich.console import Console
 
-from .harness.task_spec import build_task, build_tasks
+from .harness.task_spec import (
+    INSTRUCTIONS_FILENAME,
+    TASK_DATASET_LINK,
+    build_task,
+    build_tasks,
+)
 from .harness.transcript import Transcript
 from .interventions import (
     VectorBundle,
@@ -502,6 +507,35 @@ def _load_transcript(path: Path) -> Transcript:
         raise typer.BadParameter(f"Transcript is not valid UTF-8 at {path}: {exc}") from exc
 
 
+def _discover_task_bundle_dirs(root: Path) -> list[Path]:
+    """Find task bundle dirs without treating them as scoreable source bundles."""
+    return sorted(
+        path.parent
+        for path in root.rglob(INSTRUCTIONS_FILENAME)
+        if (path.parent / TASK_DATASET_LINK).is_file()
+    )
+
+
+def _no_source_bundles_message(synth_root: Path, tasks_root: Path) -> str:
+    message = (
+        f"No source dataset bundles found under {synth_root}. Each must contain "
+        f"manifest.json and public/dataset.parquet."
+    )
+    task_bundles = _discover_task_bundle_dirs(synth_root)
+    task_root_hint = synth_root
+    if not task_bundles and tasks_root != synth_root:
+        task_bundles = _discover_task_bundle_dirs(tasks_root)
+        task_root_hint = tasks_root
+    if task_bundles:
+        message += (
+            f" Found {len(task_bundles)} task bundle(s) under {task_root_hint}, "
+            "but task bundles intentionally omit manifest.json so agents cannot "
+            "see the ground truth. Pass the synth output root to --synth-root "
+            "(or set SYNTH_ROOT when using scripts/resume.sh), not a task-only tree."
+        )
+    return message
+
+
 @score_app.command("run")
 def score_run(
     dataset: Annotated[
@@ -611,10 +645,7 @@ def score_batch(
     """
     bundles = discover_bundles(synth_root)
     if not bundles:
-        raise typer.BadParameter(
-            f"No dataset bundles found under {synth_root}. Each must contain "
-            f"manifest.json and public/dataset.parquet."
-        )
+        raise typer.BadParameter(_no_source_bundles_message(synth_root, tasks_root))
 
     judge = _build_judge(
         judge_backend,

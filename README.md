@@ -62,6 +62,9 @@ scripts/run_all.sh
 | `JUDGE_CLI`       | `auto`                             | CLI binary for `claude-cli`/`codex-cli` judges (`auto`, `claude`, `codex`, or a path) |
 | `JUDGE_MODEL`     | unset                              | Optional model id for `anthropic-vertex` or `codex-cli`     |
 
+`scripts/resume.sh` also accepts `SYNTH_ROOT` (default: `OUT`) for cases where
+the task runs live separately from the source bundles used for scoring.
+
 ## Running steps individually
 
 The same four commands `run_all.sh` invokes:

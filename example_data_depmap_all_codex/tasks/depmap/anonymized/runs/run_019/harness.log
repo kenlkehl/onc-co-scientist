@@ -1,0 +1,1844 @@
+Reading additional input from stdin...
+OpenAI Codex v0.128.0 (research preview)
+--------
+workdir: /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: workspace-write [workdir, /tmp, /home/klkehl/.codex/memories]
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019df85e-7797-7a51-b3e3-e94daffc048c
+--------
+user
+Read agent_instructions.md in the current working directory and follow its instructions exactly. Emit transcript.json and analysis_summary.txt in this directory when done. Do not access any files outside this directory.
+codex
+I’ll read the local instructions first, then keep all subsequent reads and writes within the current directory.
+exec
+/bin/bash -lc "pwd && ls -la && sed -n '1,240p' agent_instructions.md" in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+ succeeded in 178ms:
+/data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+total 3312
+drwxr-xr-x 1 nobody nogroup    4096 May  5 09:40 .
+drwxr-xr-x 1 nobody nogroup    4096 May  4 20:13 ..
+dr-xr-xr-x 2 klkehl klkehl       40 May  5 09:40 .agents
+dr-xr-xr-x 2 klkehl klkehl       40 May  5 09:40 .codex
+-rw-r--r-- 1 nobody nogroup    4089 May  4 20:13 agent_instructions.md
+-rw-r--r-- 1 nobody nogroup 3356609 May  4 20:13 dataset.parquet
+-rw-r--r-- 1 nobody nogroup    1363 May  4 20:13 dataset_description.md
+drwxr-xr-x 1 nobody nogroup    4096 May  5 09:40 runs
+-rw-r--r-- 1 nobody nogroup    1580 May  4 20:13 transcript_example.json
+-rw-r--r-- 1 nobody nogroup    4861 May  4 20:13 transcript_schema.json
+# CRISPR Dependency Map Analysis - Task Brief
+
+**Dataset:** `ds001_depmap`
+**Cell lines:** 50000
+**Maximum iterations (N):** 10
+
+## Your role
+
+You have been asked to analyze a cancer cell-line CRISPR knockout screen dataset in the style of DepMap/CCLE. Your job is to explore the dataset and surface biologically meaningful patterns - main effects, subgroup heterogeneity, and multivariable interactions among cell-line features and gene dependency outcomes - testing each pattern statistically and refining your ideas as evidence accumulates across iterations.
+
+## Dataset
+
+The dataset is available at:
+
+- `dataset.parquet` (Parquet)
+
+A human-readable column description is provided in `dataset_description.md`.
+
+
+You must not look outside the current working directory for additional data or context. Use only the local task bundle so every harness is evaluated against the same evidence.
+
+## Protocol (up to 10 iterations)
+
+In each iteration:
+
+1. **Propose hypotheses.** State one or more natural-language hypotheses about patterns in the data - relationships among cell-line features, molecular subgroups, screen covariates, and dependency-score outcomes.
+2. **Test them.** Execute statistical analyses on the dataset (e.g., regression with interactions, stratified comparisons, subgroup analyses). Record the signed effect estimate, the p-value, and whether the result was significant.
+3. **Update.** Use the results to propose new hypotheses or refine existing ones in the next iteration.
+
+Stop when you have thoroughly probed the dataset or when you reach the iteration cap.
+
+Do not stop after main effects. Before your final transcript, run at least one systematic dependency-heterogeneity search for each dependency outcome. Appropriate approaches include feature-by-feature interaction screening, joint models over the strongest modifiers, tree/rule-based subgroup discovery, or exhaustive checks of small multi-feature subgroups. When a dependency appears concentrated in a subgroup, state and test the complete subgroup definition, including variables whose value appears to suppress or enable the dependency.
+
+## Required output
+
+Emit two files in this bundle directory:
+
+1. `transcript.json` - conforming to the schema in this bundle (`transcript_schema.json`). A minimal example is provided in `transcript_example.json`.
+2. `analysis_summary.txt` - a plain-text narrative that synthesizes and summarizes the results of all analyses you ran. Walk through the hypotheses you explored across iterations, what the statistical evidence showed (direction, magnitude, significance), which hypotheses were supported vs. refuted, and any overall conclusions about feature-outcome relationships in this dataset.
+
+Critical fields to include in `transcript.json`:
+
+- `iterations[].proposed_hypotheses[].text` - the natural-language hypothesis. Make these **self-contained**: name the variables, the direction of effect, and any subgroup.
+- `iterations[].analyses[].hypothesis_ids` - every analysis must list the IDs of the hypotheses it addresses.
+- `iterations[].analyses[].effect_estimate` - signed on the outcome's natural scale; used to verify direction.
+- `iterations[].analyses[].p_value` or `significant` - used to verify statistical support.
+
+Top-level fields `dataset_id`, `model_id`, `harness_id`, and `max_iterations` must be set. Set `max_iterations` to the cap you were given (10).
+
+## What makes a good transcript
+
+- Hypotheses that name specific columns and a signed direction (e.g., "In cell lines with `feature_example` set, `dependency_gene_example` is more negative than in cell lines without it"). Use the actual column names from the dataset, not placeholder labels.
+- Analyses that directly test each proposed hypothesis.
+- Appropriate use of interaction and subgroup analyses where the data structure warrants them, rather than stopping at main effects.
+- A final best-supported dependency subgroup hypothesis for each dependency outcome where one is plausible, naming the dependency outcome, direction, and all subgroup predicates you believe define the effect.
+
+codex
+The task requires a bounded local statistical pass: I’ve loaded the protocol, and next I’m checking the dataset description plus the required JSON shape before touching the data.
+exec
+/bin/bash -lc "sed -n '1,240p' dataset_description.md" in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+exec
+/bin/bash -lc "sed -n '1,260p' transcript_schema.json" in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+exec
+/bin/bash -lc "sed -n '1,220p' transcript_example.json" in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+ succeeded in 287ms:
+# CRISPR dependency map `ds001_depmap`
+
+This dataset contains 50000 cancer cell-line records from a CRISPR knockout dependency screen with CCLE-style molecular annotations. Cell-line feature names have been replaced with opaque labels (`feature_001`, `feature_002`, ...); dependency outcome columns retain their original gene names. More negative dependency scores indicate stronger dependency after knockout.
+
+## Columns
+
+### Identifiers
+- `cell_line_id`
+
+### Cell-line features
+- `feature_011`
+- `feature_010`
+- `feature_004`
+- `feature_005`
+- `feature_001`
+- `feature_026`
+- `feature_016`
+- `feature_025`
+- `feature_019`
+- `feature_015`
+- `feature_014`
+- `feature_009`
+- `feature_022`
+- `feature_024`
+- `feature_029`
+- `feature_035`
+- `feature_020`
+- `feature_027`
+- `feature_012`
+- `feature_018`
+- `feature_008`
+- `feature_006`
+- `feature_032`
+- `feature_021`
+- `feature_030`
+- `feature_028`
+- `feature_007`
+- `feature_031`
+- `feature_013`
+- `feature_033`
+- `feature_003`
+- `feature_036`
+- `feature_023`
+- `feature_034`
+- `feature_002`
+- `feature_017`
+
+### Dependency outcomes
+- `dependency_BRAF`
+- `dependency_EGFR`
+- `dependency_ERBB2`
+- `dependency_KRAS`
+- `dependency_RIT1`
+- `dependency_KIF18A`
+- `dependency_TMED10`
+- `dependency_DHX9`
+- `dependency_POLR2A`
+- `dependency_RPL11`
+
+Each row represents one cancer cell line; no missing values are present.
+
+ succeeded in 277ms:
+{
+  "dataset_id": "depmap_ds",
+  "model_id": "claude-sonnet-4-6",
+  "harness_id": "claude-code@example",
+  "max_iterations": 5,
+  "iterations": [
+    {
+      "index": 1,
+      "proposed_hypotheses": [
+        {
+          "id": "h1",
+          "text": "Cell lines with high wnt_activity_score have more negative dependency_KIF18A scores than cell lines with low wnt_activity_score.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h1"],
+          "code": "from scipy import stats\nhi = df['wnt_activity_score'] >= df['wnt_activity_score'].quantile(0.75)\nstats.ttest_ind(df.loc[hi, 'dependency_KIF18A'], df.loc[~hi, 'dependency_KIF18A'])",
+          "result_summary": "Mean dependency_KIF18A is -0.42 in high-WNT lines vs -0.28 in other lines (t-test p=0.08).",
+          "p_value": 0.08,
+          "effect_estimate": -0.14,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "proposed_hypotheses": [
+        {
+          "id": "h2",
+          "text": "A lineage-specific subgroup may show stronger dependency_KIF18A signal than the overall screen average.",
+          "kind": "refined"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h2"],
+          "code": "df.groupby('lineage')['dependency_KIF18A'].mean().sort_values()",
+          "result_summary": "Colorectal lines have the lowest mean dependency_KIF18A score among lineages.",
+          "p_value": 0.03,
+          "effect_estimate": -0.22,
+          "significant": true
+        }
+      ]
+    }
+  ]
+}
+
+ succeeded in 297ms:
+{
+  "$defs": {
+    "AnalysisRecord": {
+      "additionalProperties": true,
+      "description": "One statistical analysis the harness performed to test hypotheses.",
+      "properties": {
+        "hypothesis_ids": {
+          "description": "IDs of the hypotheses this analysis addresses.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Hypothesis Ids",
+          "type": "array"
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional: the code executed (for reasoning-trace audits).",
+          "title": "Code"
+        },
+        "result_summary": {
+          "description": "Free-text summary of the statistical result.",
+          "title": "Result Summary",
+          "type": "string"
+        },
+        "p_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "P Value"
+        },
+        "effect_estimate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Signed effect estimate on the outcome's natural scale. Scoring uses the sign to verify the direction matches ground truth.",
+          "title": "Effect Estimate"
+        },
+        "significant": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the harness deemed the result statistically significant. If omitted and p_value is present, scoring uses p < 0.05.",
+          "title": "Significant"
+        }
+      },
+      "required": [
+        "hypothesis_ids",
+        "result_summary"
+      ],
+      "title": "AnalysisRecord",
+      "type": "object"
+    },
+    "HypothesisRecord": {
+      "additionalProperties": true,
+      "description": "One hypothesis proposed by the harness within an iteration.",
+      "properties": {
+        "id": {
+          "description": "Stable within a transcript.",
+          "title": "Id",
+          "type": "string"
+        },
+        "text": {
+          "description": "Natural-language statement of the hypothesis.",
+          "title": "Text",
+          "type": "string"
+        },
+        "kind": {
+          "default": "novel",
+          "enum": [
+            "novel",
+            "refined"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "title": "HypothesisRecord",
+      "type": "object"
+    },
+    "IterationRecord": {
+      "additionalProperties": true,
+      "description": "One full iteration of the propose-analyze-refine loop.",
+      "properties": {
+        "index": {
+          "description": "1-based iteration index.",
+          "minimum": 1,
+          "title": "Index",
+          "type": "integer"
+        },
+        "proposed_hypotheses": {
+          "items": {
+            "$ref": "#/$defs/HypothesisRecord"
+          },
+          "title": "Proposed Hypotheses",
+          "type": "array"
+        },
+        "analyses": {
+          "items": {
+            "$ref": "#/$defs/AnalysisRecord"
+          },
+          "title": "Analyses",
+          "type": "array"
+        }
+      },
+      "required": [
+        "index",
+        "proposed_hypotheses"
+      ],
+      "title": "IterationRecord",
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "description": "Top-level transcript emitted by an external harness.\n\nA harness should emit exactly one file named ``transcript.json`` conforming\nto this schema when it finishes a dataset.",
+  "properties": {
+    "dataset_id": {
+      "title": "Dataset Id",
+      "type": "string"
+    },
+    "model_id": {
+      "description": "Model used by the harness (e.g. 'claude-opus-4-7').",
+      "title": "Model Id",
+      "type": "string"
+    },
+    "harness_id": {
+      "description": "Identifier for the harness implementation and version (e.g. 'claude-code@2.3.1', 'codex-cli@0.8.0', 'custom-react@sha-deadbee').",
+      "title": "Harness Id",
+      "type": "string"
+    },
+    "max_iterations": {
+      "minimum": 1,
+      "title": "Max Iterations",
+      "type": "integer"
+    },
+    "iterations": {
+      "items": {
+        "$ref": "#/$defs/IterationRecord"
+      },
+      "title": "Iterations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "dataset_id",
+    "model_id",
+    "harness_id",
+    "max_iterations",
+    "iterations"
+  ],
+  "title": "Transcript",
+  "type": "object"
+}
+
+codex
+The schema is permissive but the transcript must carry signed estimates and p-values. I’m profiling feature prevalence and outcome distributions now so the hypotheses are specific rather than generic.
+exec
+/bin/bash -lc "python - <<'PY'
+import pandas as pd
+import numpy as np
+from pathlib import Path
+p=Path('dataset.parquet')
+df=pd.read_parquet(p)
+print(df.shape)
+print(df.dtypes.to_string())
+print('\\nFirst rows:')
+print(df.head().to_string())
+features=[c for c in df.columns if c.startswith('feature_')]
+outcomes=[c for c in df.columns if c.startswith('dependency_')]
+print('\\nFeature unique counts/prevalence:')
+for c in features:
+    vals=df[c].unique()
+    print(c, df[c].dtype, len(vals), sorted(vals)[:10], 'mean=', float(df[c].mean()) if np.issubdtype(df[c].dtype, np.number) else None)
+print('\\nOutcome summary:')
+print(df[outcomes].describe().T.to_string())
+print('\\nOutcome correlations:')
+print(df[outcomes].corr().round(3).to_string())
+PY" in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+ succeeded in 6194ms:
+(50000, 47)
+cell_line_id          object
+feature_011           object
+feature_010           object
+feature_004           object
+feature_005           object
+feature_001          float64
+feature_026          float64
+feature_016          float64
+feature_025          float64
+feature_019          float64
+feature_015          float64
+feature_014            int64
+feature_009            int64
+feature_022            int64
+feature_024            int64
+feature_029            int64
+feature_035            int64
+feature_020            int64
+feature_027            int64
+feature_012            int64
+feature_018            int64
+feature_008            int64
+feature_006            int64
+feature_032            int64
+feature_021            int64
+feature_030            int64
+feature_028          float64
+feature_007          float64
+feature_031          float64
+feature_013          float64
+feature_033          float64
+feature_003          float64
+feature_036          float64
+feature_023          float64
+feature_034          float64
+feature_002          float64
+feature_017          float64
+dependency_BRAF      float64
+dependency_EGFR      float64
+dependency_ERBB2     float64
+dependency_KRAS      float64
+dependency_RIT1      float64
+dependency_KIF18A    float64
+dependency_TMED10    float64
+dependency_DHX9      float64
+dependency_POLR2A    float64
+dependency_RPL11     float64
+
+First rows:
+  cell_line_id    feature_011     feature_010 feature_004 feature_005  feature_001  feature_026  feature_016  feature_025  feature_019  feature_015  feature_014  feature_009  feature_022  feature_024  feature_029  feature_035  feature_020  feature_027  feature_012  feature_018  feature_008  feature_006  feature_032  feature_021  feature_030  feature_028  feature_007  feature_031  feature_013  feature_033  feature_003  feature_036  feature_023  feature_034  feature_002  feature_017  dependency_BRAF  dependency_EGFR  dependency_ERBB2  dependency_KRAS  dependency_RIT1  dependency_KIF18A  dependency_TMED10  dependency_DHX9  dependency_POLR2A  dependency_RPL11
+0     CL_00000        ovarian  not_applicable    adherent     batch_c         10.0        1.239        0.717        2.301        0.665        7.303            0            0            1            0            0            0            0            0            0            0            0            1            0            0            0        0.049        1.999        1.124       -0.389       -0.864        0.129       -0.377        5.209        2.022        4.069        2.876            0.198           -0.506            -0.720           -0.018           -0.771          -0.208834             -0.559           -0.248             -0.156             0.046
+1     CL_00001     colorectal  not_applicable    adherent     batch_a         10.0        1.043        0.707        3.464        0.145        4.300            0            0            0            0            0            0            0            0            0            0            1            0            0            0            0        1.384       -1.554       -0.257       -0.323       -2.286       -0.097       -0.811        4.876        3.082        4.189        3.880            0.132           -0.356             0.153           -0.490           -0.210          -0.305657             -0.311           -0.327             -0.317            -0.598
+2     CL_00002           lung  adenocarcinoma    adherent     batch_a         10.0        1.122        0.921        3.035        0.331       18.750            0            1            0            0            1            0            0            1            0            0            0            0            1            0            0        0.671       -0.646        0.763       -0.323        0.199       -0.357        0.264        4.802        2.404        3.280        2.494           -0.192           -0.200             0.056           -0.420            0.444          -0.054412             -0.136            0.189             -1.077            -0.508
+3     CL_00003           lung        squamous    adherent     batch_d         10.0        1.230        0.805        2.435        0.450        2.806            1            0            0            0            0            0            0            0            0            0            1            0            0            0            0       -0.536       -1.278       -1.629        0.171        0.244        0.215       -1.253        4.664        1.454        5.538        4.266            0.185           -0.372            -0.400           -0.668           -0.049          -0.226885             -0.369            0.462              0.021            -0.382
+4     CL_00004  hematopoietic  not_applicable  suspension     batch_b         10.0        0.982        0.772        4.214        0.473       10.052            0            0            0            0            1            0            0            0            0            1            0            0            1            0            0        0.496       -0.596        0.366        0.657        0.692        0.904        0.072        7.109        1.037        5.796        4.472           -0.021           -0.035            -0.110           -0.177           -0.235          -0.463524             -0.203           -0.457             -0.368            -0.514
+
+Feature unique counts/prevalence:
+feature_011 object 10 ['brain', 'breast', 'colorectal', 'gastric', 'hematopoietic', 'lung', 'ovarian', 'pancreatic', 'prostate', 'skin'] mean= None
+feature_010 object 6 ['adenocarcinoma', 'basal', 'her2_enriched', 'luminal', 'not_applicable', 'squamous'] mean= None
+feature_004 object 3 ['adherent', 'semi_adherent', 'suspension'] mean= None
+feature_005 object 4 ['batch_a', 'batch_b', 'batch_c', 'batch_d'] mean= None
+feature_001 float64 3 [np.float64(2.0), np.float64(5.0), np.float64(10.0)] mean= 7.54266
+feature_026 float64 795 [np.float64(0.552), np.float64(0.556), np.float64(0.562), np.float64(0.573), np.float64(0.574), np.float64(0.576), np.float64(0.582), np.float64(0.584), np.float64(0.586), np.float64(0.587)] mean= 0.99997514
+feature_016 float64 1257 [np.float64(0.15), np.float64(0.158), np.float64(0.161), np.float64(0.163), np.float64(0.164), np.float64(0.165), np.float64(0.166), np.float64(0.169), np.float64(0.17), np.float64(0.171)] mean= 0.8289503
+feature_025 float64 3026 [np.float64(1.2), np.float64(1.205), np.float64(1.207), np.float64(1.208), np.float64(1.209), np.float64(1.21), np.float64(1.213), np.float64(1.217), np.float64(1.223), np.float64(1.225)] mean= 2.70109798
+feature_019 float64 906 [np.float64(0.0), np.float64(0.001), np.float64(0.002), np.float64(0.003), np.float64(0.004), np.float64(0.005), np.float64(0.006), np.float64(0.007), np.float64(0.008), np.float64(0.009)] mean= 0.36770476
+feature_015 float64 14907 [np.float64(0.324), np.float64(0.382), np.float64(0.387), np.float64(0.398), np.float64(0.419), np.float64(0.428), np.float64(0.429), np.float64(0.447), np.float64(0.456), np.float64(0.466)] mean= 6.5587659799999996
+feature_014 int64 2 [np.int64(0), np.int64(1)] mean= 0.23684
+feature_009 int64 2 [np.int64(0), np.int64(1)] mean= 0.11148
+feature_022 int64 2 [np.int64(0), np.int64(1)] mean= 0.0776
+feature_024 int64 2 [np.int64(0), np.int64(1)] mean= 0.0978
+feature_029 int64 2 [np.int64(0), np.int64(1)] mean= 0.20382
+feature_035 int64 2 [np.int64(0), np.int64(1)] mean= 0.1857
+feature_020 int64 2 [np.int64(0), np.int64(1)] mean= 0.13498
+feature_027 int64 2 [np.int64(0), np.int64(1)] mean= 0.0912
+feature_012 int64 2 [np.int64(0), np.int64(1)] mean= 0.10204
+feature_018 int64 2 [np.int64(0), np.int64(1)] mean= 0.1611
+feature_008 int64 2 [np.int64(0), np.int64(1)] mean= 0.20264
+feature_006 int64 2 [np.int64(0), np.int64(1)] mean= 0.1299
+feature_032 int64 2 [np.int64(0), np.int64(1)] mean= 0.08706
+feature_021 int64 2 [np.int64(0), np.int64(1)] mean= 0.04972
+feature_030 int64 2 [np.int64(0), np.int64(1)] mean= 0.06896
+feature_028 float64 4934 [np.float64(-3.292), np.float64(-3.144), np.float64(-3.13), np.float64(-2.936), np.float64(-2.885), np.float64(-2.86), np.float64(-2.804), np.float64(-2.79), np.float64(-2.782), np.float64(-2.739)] mean= 0.22703433999999997
+feature_007 float64 4894 [np.float64(-3.601), np.float64(-3.413), np.float64(-3.359), np.float64(-3.303), np.float64(-3.22), np.float64(-3.181), np.float64(-3.176), np.float64(-3.169), np.float64(-3.139), np.float64(-3.132)] mean= 0.077399
+feature_031 float64 4827 [np.float64(-3.864), np.float64(-3.698), np.float64(-3.624), np.float64(-3.47), np.float64(-3.354), np.float64(-3.244), np.float64(-3.241), np.float64(-3.21), np.float64(-3.204), np.float64(-3.15)] mean= 0.04639282
+feature_013 float64 4429 [np.float64(-3.397), np.float64(-3.209), np.float64(-3.188), np.float64(-3.105), np.float64(-3.082), np.float64(-3.029), np.float64(-3.024), np.float64(-2.91), np.float64(-2.873), np.float64(-2.855)] mean= -0.01911988
+feature_033 float64 4814 [np.float64(-4.498), np.float64(-3.638), np.float64(-3.49), np.float64(-3.445), np.float64(-3.322), np.float64(-3.269), np.float64(-3.215), np.float64(-3.105), np.float64(-3.084), np.float64(-3.083)] mean= 0.00168246
+feature_003 float64 2959 [np.float64(-1.482), np.float64(-1.395), np.float64(-1.37), np.float64(-1.359), np.float64(-1.311), np.float64(-1.284), np.float64(-1.273), np.float64(-1.263), np.float64(-1.251), np.float64(-1.231)] mean= 0.17754912
+feature_036 float64 2864 [np.float64(-2.241), np.float64(-2.236), np.float64(-2.183), np.float64(-2.155), np.float64(-2.15), np.float64(-2.145), np.float64(-2.143), np.float64(-2.139), np.float64(-2.124), np.float64(-2.116)] mean= -0.20511369999999998
+feature_023 float64 5563 [np.float64(0.894), np.float64(1.113), np.float64(1.217), np.float64(1.27), np.float64(1.276), np.float64(1.278), np.float64(1.293), np.float64(1.313), np.float64(1.34), np.float64(1.369)] mean= 4.95693116
+feature_034 float64 6363 [np.float64(0.0), np.float64(0.001), np.float64(0.003), np.float64(0.004), np.float64(0.007), np.float64(0.008), np.float64(0.01), np.float64(0.011), np.float64(0.013), np.float64(0.014)] mean= 3.2520310199999996
+feature_002 float64 5718 [np.float64(0.0), np.float64(0.006), np.float64(0.009), np.float64(0.013), np.float64(0.018), np.float64(0.019), np.float64(0.026), np.float64(0.03), np.float64(0.031), np.float64(0.061)] mean= 3.7006483800000005
+feature_017 float64 5736 [np.float64(0.0), np.float64(0.001), np.float64(0.003), np.float64(0.004), np.float64(0.005), np.float64(0.007), np.float64(0.011), np.float64(0.012), np.float64(0.013), np.float64(0.014)] mean= 2.7649547599999997
+
+Outcome summary:
+                     count      mean       std      min       25%       50%       75%       max
+dependency_BRAF    50000.0 -0.311396  0.392458 -2.11300 -0.561000 -0.297000 -0.044000  1.144000
+dependency_EGFR    50000.0 -0.279462  0.361470 -1.86300 -0.523000 -0.278000 -0.033000  1.248000
+dependency_ERBB2   50000.0 -0.295735  0.374142 -2.29600 -0.544000 -0.290000 -0.043000  1.178000
+dependency_KRAS    50000.0 -0.324777  0.374468 -1.82200 -0.579000 -0.320000 -0.070000  1.178000
+dependency_RIT1    50000.0 -0.265907  0.351255 -1.92900 -0.503000 -0.267000 -0.030000  1.264000
+dependency_KIF18A  50000.0 -0.306830  0.426506 -2.60374 -0.532623 -0.276513 -0.028037  1.423705
+dependency_TMED10  50000.0 -0.254005  0.350034 -1.75200 -0.492000 -0.255000 -0.016000  1.123000
+dependency_DHX9    50000.0 -0.333667  0.350139 -1.73300 -0.567000 -0.330000 -0.095000  1.020000
+dependency_POLR2A  50000.0 -0.419075  0.355448 -2.06200 -0.659000 -0.421000 -0.179000  1.121000
+dependency_RPL11   50000.0 -0.269904  0.355227 -1.74000 -0.509000 -0.269000 -0.030000  1.147000
+
+Outcome correlations:
+                   dependency_BRAF  dependency_EGFR  dependency_ERBB2  dependency_KRAS  dependency_RIT1  dependency_KIF18A  dependency_TMED10  dependency_DHX9  dependency_POLR2A  dependency_RPL11
+dependency_BRAF              1.000            0.007             0.006           -0.001           -0.003             -0.003              0.001           -0.003              0.008             0.001
+dependency_EGFR              0.007            1.000             0.008            0.002            0.002              0.001              0.001           -0.001              0.015             0.008
+dependency_ERBB2             0.006            0.008             1.000            0.005           -0.001              0.002              0.005            0.005              0.007             0.006
+dependency_KRAS             -0.001            0.002             0.005            1.000            0.006              0.026              0.008            0.007              0.012             0.004
+dependency_RIT1             -0.003            0.002            -0.001            0.006            1.000              0.013              0.000            0.004              0.018            -0.001
+dependency_KIF18A           -0.003            0.001             0.002            0.026            0.013              1.000              0.008            0.001              0.006             0.007
+dependency_TMED10            0.001            0.001             0.005            0.008            0.000              0.008              1.000            0.011              0.008             0.004
+dependency_DHX9             -0.003           -0.001             0.005            0.007            0.004              0.001              0.011            1.000              0.013             0.006
+dependency_POLR2A            0.008            0.015             0.007            0.012            0.018              0.006              0.008            0.013              1.000             0.013
+dependency_RPL11             0.001            0.008             0.006            0.004           -0.001              0.007              0.004            0.006              0.013             1.000
+
+codex
+The feature matrix has a mix of lineage-like categories, binary flags, and continuous measurements. I’m going to combine main-effect screens with exhaustive subgroup scans so every dependency outcome gets both direct and heterogeneity checks.
+exec
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy import stats
+from itertools import combinations
+from math import isfinite
+
+df=pd.read_parquet('dataset.parquet')
+features=[c for c in df.columns if c.startswith('feature_')]
+outcomes=[c for c in df.columns if c.startswith('dependency_')]
+cat_features=[c for c in features if df[c].dtype=='object']
+# treat low-card numeric as categorical
+lowcard=[c for c in features if df[c].dtype"'!='"'object' and df[c].nunique()<=6]
+bin_features=[c for c in features if df[c].dtype"'!='"'object' and set(df[c].unique()).issubset({0,1})]
+cont_features=[c for c in features if c not in cat_features+lowcard and c not in bin_features]
+print('cats',cat_features,'lowcard',lowcard,'bin',len(bin_features),bin_features,'cont',len(cont_features),cont_features)
+
+def welch(y,mask):
+    a=y[mask]
+    b=y[~mask]
+    if len(a)<2 or len(b)<2: return np.nan,np.nan,len(a),len(b),np.nan,np.nan
+    effect=a.mean()-b.mean()
+    p=stats.ttest_ind(a,b,equal_var=False).pvalue
+    return effect,p,len(a),len(b),a.mean(),b.mean()
+
+# create predicate masks
+preds=[]
+for c in cat_features:
+    for lev in sorted(df[c].unique()):
+        m=(df[c]==lev).to_numpy()
+        preds.append((f'{c} == {lev}', c, str(lev), m))
+for c in lowcard:
+    for lev in sorted(df[c].unique()):
+        m=(df[c]==lev).to_numpy()
+        preds.append((f'{c} == {lev:g}', c, str(lev), m))
+for c in bin_features:
+    m=(df[c]==1).to_numpy()
+    preds.append((f'{c} == 1', c, '1', m))
+for c in cont_features:
+    q25=df[c].quantile(.25); q75=df[c].quantile(.75)
+    preds.append((f'{c} <= Q1 ({q25:.3g})', c, 'low', (df[c]<=q25).to_numpy()))
+    preds.append((f'{c} >= Q3 ({q75:.3g})', c, 'high', (df[c]>=q75).to_numpy()))
+print('predicates',len(preds))
+
+# main univariate: continuous slopes and predicate differences
+for out in outcomes:
+    y=df[out].to_numpy()
+    rec=[]
+    # predicate diff
+    for name,c,v,m in preds:
+        n=m.sum()
+        if n<200 or n>len(df)-200: continue
+        eff,p,n1,n0,ma,mb=welch(y,m)
+        rec.append((p,eff,name,n1,ma,mb,'group'))
+    # continuous slope per SD
+    for c in cont_features:
+        x=df[c].to_numpy().astype(float)
+        xs=(x-x.mean())/x.std(ddof=0)
+        slope, intercept, r, p, se=stats.linregress(xs,y)
+        rec.append((p,slope,f'{c} per +1 SD',len(df),np.nan,np.nan,'slope'))
+    rec=sorted([r for r in rec if np.isfinite(r[0])], key=lambda r:r[0])
+    print('\\nMAIN',out)
+    for p,eff,name,n,ma,mb,typ in rec[:12]:
+        if typ=='group':
+            print(f'  {name:32s} n={n:5d} eff={eff:+.4f} mean={ma:+.4f} other={mb:+.4f} p={p:.2e}')
+        else:
+            print(f'  {name:32s} slope={eff:+.4f} p={p:.2e}')
+
+# Pairwise/triple subgroup search with no same feature conflict.
+def bh_q(pvals):
+    p=np.array(pvals,float); n=len(p)
+    order=np.argsort(p); q=np.empty(n,float); prev=1.0
+    for idx in order[::-1]:
+        rank=np.where(order==idx)[0][0]+1
+    # efficient
+    sortedp=p[order]
+    adj=sortedp*n/np.arange(1,n+1)
+    adj=np.minimum.accumulate(adj[::-1])[::-1]
+    q[order]=np.minimum(adj,1.0)
+    return q
+
+for out in outcomes:
+    y=df[out].to_numpy()
+    rows=[]
+    # singles and pairs
+    for i,(n1,f1,v1,m1) in enumerate(preds):
+        n=m1.sum()
+        if 300<=n<=len(df)-300:
+            eff,p,_,_,ma,mb=welch(y,m1)
+            rows.append({'defs':(n1,), 'features':(f1,), 'mask':m1, 'n':int(n), 'eff':eff,'p':p,'mean':ma,'other':mb})
+    for i,j in combinations(range(len(preds)),2):
+        n1,f1,v1,m1=preds[i]; n2,f2,v2,m2=preds[j]
+        if f1==f2: continue
+        m=m1 & m2; n=m.sum()
+        if n<300 or n>len(df)-300: continue
+        eff,p,_,_,ma,mb=welch(y,m)
+        if np.isfinite(p):
+            rows.append({'defs':(n1,n2), 'features':(f1,f2), 'mask':m, 'n':int(n), 'eff':eff,'p':p,'mean':ma,'other':mb})
+    # extend top 150 negative rows to triples
+    seeds=sorted(rows, key=lambda r:(r['eff'], r['p']))[:150]
+    seen=set(tuple(sorted(r['defs'])) for r in rows)
+    for r in seeds:
+        for name,f,v,m0 in preds:
+            if f in r['features']: continue
+            defs=tuple(sorted(r['defs']+(name,)))
+            if defs in seen: continue
+            seen.add(defs)
+            m=r['mask'] & m0; n=m.sum()
+            if n<300 or n>len(df)-300: continue
+            eff,p,_,_,ma,mb=welch(y,m)
+            if np.isfinite(p):
+                rows.append({'defs':defs, 'features':r['features']+(f,), 'mask':m, 'n':int(n), 'eff':eff,'p':p,'mean':ma,'other':mb})
+    rows=[r for r in rows if np.isfinite(r['p'])]
+    qs=bh_q([r['p'] for r in rows])
+    for r,q in zip(rows,qs): r['q']=q
+    # rank by strong mean lower and significance, prefer effects not tiny and not only batch
+    neg=sorted(rows, key=lambda r:(r['eff'], r['q']))
+    print('\\nSUBGROUP',out,'searched',len(rows))
+    for r in neg[:15]:
+        print(f\"  n={r['n']:5d} eff={r['eff']:+.4f} mean={r['mean']:+.4f} other={r['other']:+.4f} p={r['p']:.1e} q={r['q']:.1e} :: \" + ' AND '.join(r['defs']))
+PY" in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+codex
+The early screens are showing clear engineered-looking signals: BRAF tracks `feature_009`, EGFR tracks `feature_022`, ERBB2 tracks `feature_024`, KRAS tracks `feature_014`, and KIF18A has a much stronger colorectal/high-`feature_028` pattern. I’m letting the subgroup search finish for the weaker outcomes before writing the transcript.
+ succeeded in 103044ms:
+cats ['feature_011', 'feature_010', 'feature_004', 'feature_005'] lowcard ['feature_001', 'feature_014', 'feature_009', 'feature_022', 'feature_024', 'feature_029', 'feature_035', 'feature_020', 'feature_027', 'feature_012', 'feature_018', 'feature_008', 'feature_006', 'feature_032', 'feature_021', 'feature_030'] bin 15 ['feature_014', 'feature_009', 'feature_022', 'feature_024', 'feature_029', 'feature_035', 'feature_020', 'feature_027', 'feature_012', 'feature_018', 'feature_008', 'feature_006', 'feature_032', 'feature_021', 'feature_030'] cont 16 ['feature_026', 'feature_016', 'feature_025', 'feature_019', 'feature_015', 'feature_028', 'feature_007', 'feature_031', 'feature_013', 'feature_033', 'feature_003', 'feature_036', 'feature_023', 'feature_034', 'feature_002', 'feature_017']
+predicates 103
+
+MAIN dependency_BRAF
+  feature_009 == 0                 n=44426 eff=+0.5552 mean=-0.2495 other=-0.8047 p=0.00e+00
+  feature_009 == 1                 n= 5574 eff=-0.5552 mean=-0.8047 other=-0.2495 p=0.00e+00
+  feature_009 == 1                 n= 5574 eff=-0.5552 mean=-0.8047 other=-0.2495 p=0.00e+00
+  feature_011 == skin              n= 4935 eff=-0.1783 mean=-0.4721 other=-0.2938 p=2.55e-151
+  feature_016 per +1 SD            slope=-0.0221 p=1.74e-36
+  feature_016 <= Q1 (0.694)        n=12574 eff=+0.0444 mean=-0.2782 other=-0.3226 p=2.36e-28
+  feature_016 >= Q3 (0.964)        n=12577 eff=-0.0321 mean=-0.3354 other=-0.3033 p=1.79e-15
+  feature_010 == not_applicable    n=34966 eff=-0.0287 mean=-0.3200 other=-0.2914 p=2.83e-14
+  feature_011 == lung              n= 8027 eff=+0.0312 mean=-0.2852 other=-0.3164 p=2.68e-11
+  feature_010 == adenocarcinoma    n= 5649 eff=+0.0294 mean=-0.2853 other=-0.3147 p=5.98e-08
+  feature_014 == 0                 n=38158 eff=-0.0209 mean=-0.3164 other=-0.2954 p=3.06e-07
+  feature_014 == 1                 n=11842 eff=+0.0209 mean=-0.2954 other=-0.3164 p=3.06e-07
+
+MAIN dependency_EGFR
+  feature_022 == 0                 n=46120 eff=+0.3486 mean=-0.2524 other=-0.6010 p=0.00e+00
+  feature_022 == 1                 n= 3880 eff=-0.3486 mean=-0.6010 other=-0.2524 p=0.00e+00
+  feature_022 == 1                 n= 3880 eff=-0.3486 mean=-0.6010 other=-0.2524 p=0.00e+00
+  feature_016 per +1 SD            slope=-0.0217 p=3.96e-41
+  feature_016 <= Q1 (0.694)        n=12574 eff=+0.0418 mean=-0.2481 other=-0.2900 p=5.61e-29
+  feature_016 >= Q3 (0.964)        n=12577 eff=-0.0326 mean=-0.3039 other=-0.2713 p=1.76e-18
+  feature_011 == brain             n= 3565 eff=-0.0552 mean=-0.3307 other=-0.2755 p=1.14e-16
+  feature_026 per +1 SD            slope=-0.0124 p=1.88e-14
+  feature_026 <= Q1 (0.919)        n=12559 eff=+0.0228 mean=-0.2624 other=-0.2852 p=1.12e-09
+  feature_026 >= Q3 (1.08)         n=12635 eff=-0.0198 mean=-0.2943 other=-0.2744 p=1.00e-07
+  feature_011 == colorectal        n= 5816 eff=+0.0140 mean=-0.2671 other=-0.2811 p=5.02e-03
+  feature_014 == 0                 n=38158 eff=-0.0082 mean=-0.2814 other=-0.2732 p=3.22e-02
+
+MAIN dependency_ERBB2
+  feature_024 == 0                 n=45110 eff=+0.4321 mean=-0.2535 other=-0.6856 p=0.00e+00
+  feature_024 == 1                 n= 4890 eff=-0.4321 mean=-0.6856 other=-0.2535 p=0.00e+00
+  feature_024 == 1                 n= 4890 eff=-0.4321 mean=-0.6856 other=-0.2535 p=0.00e+00
+  feature_016 per +1 SD            slope=-0.0201 p=2.30e-33
+  feature_016 <= Q1 (0.694)        n=12574 eff=+0.0358 mean=-0.2689 other=-0.3047 p=2.47e-20
+  feature_016 >= Q3 (0.964)        n=12577 eff=-0.0351 mean=-0.3220 other=-0.2869 p=9.36e-20
+  feature_026 per +1 SD            slope=-0.0098 p=4.39e-09
+  feature_011 == breast            n= 7007 eff=-0.0292 mean=-0.3208 other=-0.2916 p=6.56e-09
+  feature_010 == luminal           n= 3898 eff=-0.0300 mean=-0.3234 other=-0.2934 p=5.42e-06
+  feature_026 >= Q3 (1.08)         n=12635 eff=-0.0172 mean=-0.3086 other=-0.2914 p=7.16e-06
+  feature_011 == gastric           n= 2863 eff=-0.0284 mean=-0.3225 other=-0.2941 p=1.31e-04
+  feature_026 <= Q1 (0.919)        n=12559 eff=+0.0146 mean=-0.2848 other=-0.2994 p=1.45e-04
+
+MAIN dependency_KRAS
+  feature_014 == 0                 n=38158 eff=+0.3075 mean=-0.2520 other=-0.5594 p=0.00e+00
+  feature_014 == 1                 n=11842 eff=-0.3075 mean=-0.5594 other=-0.2520 p=0.00e+00
+  feature_014 == 1                 n=11842 eff=-0.3075 mean=-0.5594 other=-0.2520 p=0.00e+00
+  feature_011 == pancreatic        n= 5102 eff=-0.1127 mean=-0.4260 other=-0.3133 p=1.33e-86
+  feature_016 per +1 SD            slope=-0.0249 p=5.50e-50
+  feature_016 <= Q1 (0.694)        n=12574 eff=+0.0436 mean=-0.2921 other=-0.3357 p=1.80e-29
+  feature_016 >= Q3 (0.964)        n=12577 eff=-0.0400 mean=-0.3547 other=-0.3147 p=2.56e-25
+  feature_011 == colorectal        n= 5816 eff=-0.0500 mean=-0.3689 other=-0.3190 p=7.71e-21
+  feature_011 == hematopoietic     n= 6089 eff=+0.0303 mean=-0.2982 other=-0.3285 p=3.00e-09
+  feature_004 == suspension        n= 6089 eff=+0.0303 mean=-0.2982 other=-0.3285 p=3.00e-09
+  feature_004 == adherent          n=38711 eff=-0.0219 mean=-0.3297 other=-0.3078 p=4.47e-08
+  feature_011 == breast            n= 7007 eff=+0.0257 mean=-0.3027 other=-0.3284 p=6.00e-08
+
+MAIN dependency_RIT1
+  feature_027 == 0                 n=45440 eff=+0.0955 mean=-0.2572 other=-0.3527 p=1.55e-68
+  feature_027 == 1                 n= 4560 eff=-0.0955 mean=-0.3527 other=-0.2572 p=1.55e-68
+  feature_027 == 1                 n= 4560 eff=-0.0955 mean=-0.3527 other=-0.2572 p=1.55e-68
+  feature_016 per +1 SD            slope=-0.0177 p=1.67e-29
+  feature_016 >= Q3 (0.964)        n=12577 eff=-0.0313 mean=-0.2893 other=-0.2580 p=5.60e-18
+  feature_016 <= Q1 (0.694)        n=12574 eff=+0.0265 mean=-0.2461 other=-0.2726 p=1.73e-13
+  feature_026 per +1 SD            slope=-0.0093 p=2.74e-09
+  feature_026 <= Q1 (0.919)        n=12559 eff=+0.0190 mean=-0.2517 other=-0.2707 p=1.55e-07
+  feature_026 >= Q3 (1.08)         n=12635 eff=-0.0159 mean=-0.2778 other=-0.2619 p=1.22e-05
+  feature_008 == 0                 n=39868 eff=-0.0102 mean=-0.2680 other=-0.2577 p=9.10e-03
+  feature_008 == 1                 n=10132 eff=+0.0102 mean=-0.2577 other=-0.2680 p=9.10e-03
+  feature_008 == 1                 n=10132 eff=+0.0102 mean=-0.2577 other=-0.2680 p=9.10e-03
+
+MAIN dependency_KIF18A
+  feature_011 == colorectal        n= 5816 eff=-0.4680 mean=-0.7204 other=-0.2524 p=0.00e+00
+  feature_035 == 0                 n=40715 eff=+0.2921 mean=-0.2526 other=-0.5447 p=0.00e+00
+  feature_035 == 1                 n= 9285 eff=-0.2921 mean=-0.5447 other=-0.2526 p=0.00e+00
+  feature_035 == 1                 n= 9285 eff=-0.2921 mean=-0.5447 other=-0.2526 p=0.00e+00
+  feature_028 >= Q3 (0.819)        n=12508 eff=-0.2168 mean=-0.4694 other=-0.2526 p=0.00e+00
+  feature_028 per +1 SD            slope=-0.0973 p=0.00e+00
+  feature_017 per +1 SD            slope=-0.0540 p=5.59e-178
+  feature_017 >= Q3 (3.56)         n=12510 eff=-0.1083 mean=-0.3880 other=-0.2797 p=1.73e-104
+  feature_010 == not_applicable    n=34966 eff=-0.0801 mean=-0.3309 other=-0.2508 p=2.52e-100
+  feature_028 <= Q1 (-0.406)       n=12512 eff=+0.0783 mean=-0.2481 other=-0.3264 p=1.28e-89
+  feature_017 <= Q1 (1.96)         n=12502 eff=+0.0643 mean=-0.2586 other=-0.3229 p=4.23e-58
+  feature_011 == lung              n= 8027 eff=+0.0672 mean=-0.2505 other=-0.3176 p=9.50e-51
+
+MAIN dependency_TMED10
+  feature_016 per +1 SD            slope=-0.0203 p=1.28e-38
+  feature_016 >= Q3 (0.964)        n=12577 eff=-0.0369 mean=-0.2816 other=-0.2447 p=2.52e-24
+  feature_016 <= Q1 (0.694)        n=12574 eff=+0.0330 mean=-0.2293 other=-0.2623 p=3.60e-20
+  feature_026 per +1 SD            slope=-0.0125 p=1.44e-15
+  feature_026 >= Q3 (1.08)         n=12635 eff=-0.0205 mean=-0.2693 other=-0.2488 p=1.32e-08
+  feature_026 <= Q1 (0.919)        n=12559 eff=+0.0197 mean=-0.2393 other=-0.2589 p=4.98e-08
+  feature_011 == gastric           n= 2863 eff=+0.0190 mean=-0.2361 other=-0.2551 p=4.90e-03
+  feature_027 == 0                 n=45440 eff=+0.0137 mean=-0.2528 other=-0.2665 p=1.05e-02
+  feature_027 == 1                 n= 4560 eff=-0.0137 mean=-0.2665 other=-0.2528 p=1.05e-02
+  feature_027 == 1                 n= 4560 eff=-0.0137 mean=-0.2665 other=-0.2528 p=1.05e-02
+  feature_003 >= Q3 (0.428)        n=12501 eff=-0.0079 mean=-0.2599 other=-0.2520 p=2.84e-02
+  feature_023 >= Q3 (5.67)         n=12501 eff=-0.0078 mean=-0.2599 other=-0.2520 p=2.97e-02
+
+MAIN dependency_DHX9
+  feature_016 per +1 SD            slope=-0.0218 p=3.31e-44
+  feature_023 per +1 SD            slope=-0.0172 p=5.41e-28
+  feature_016 <= Q1 (0.694)        n=12574 eff=+0.0394 mean=-0.3042 other=-0.3436 p=5.66e-28
+  feature_016 >= Q3 (0.964)        n=12577 eff=-0.0371 mean=-0.3614 other=-0.3243 p=1.71e-24
+  feature_023 <= Q1 (4.23)         n=12504 eff=+0.0302 mean=-0.3110 other=-0.3412 p=6.38e-17
+  feature_023 >= Q3 (5.67)         n=12501 eff=-0.0286 mean=-0.3551 other=-0.3265 p=2.05e-15
+  feature_026 per +1 SD            slope=-0.0103 p=3.89e-11
+  feature_026 <= Q1 (0.919)        n=12559 eff=+0.0173 mean=-0.3207 other=-0.3380 p=1.71e-06
+  feature_026 >= Q3 (1.08)         n=12635 eff=-0.0161 mean=-0.3457 other=-0.3296 p=7.13e-06
+  feature_018 == 0                 n=41945 eff=+0.0184 mean=-0.3307 other=-0.3491 p=1.69e-05
+  feature_018 == 1                 n= 8055 eff=-0.0184 mean=-0.3491 other=-0.3307 p=1.69e-05
+  feature_018 == 1                 n= 8055 eff=-0.0184 mean=-0.3491 other=-0.3307 p=1.69e-05
+
+MAIN dependency_POLR2A
+  feature_016 per +1 SD            slope=-0.0612 p=0.00e+00
+  feature_016 >= Q3 (0.964)        n=12577 eff=-0.1043 mean=-0.4972 other=-0.3928 p=1.01e-179
+  feature_016 <= Q1 (0.694)        n=12574 eff=+0.1005 mean=-0.3439 other=-0.4443 p=1.20e-166
+  feature_026 per +1 SD            slope=-0.0125 p=3.61e-15
+  feature_026 <= Q1 (0.919)        n=12559 eff=+0.0239 mean=-0.4012 other=-0.4251 p=6.46e-11
+  feature_026 >= Q3 (1.08)         n=12635 eff=-0.0209 mean=-0.4347 other=-0.4138 p=1.05e-08
+  feature_011 == lung              n= 8027 eff=-0.0112 mean=-0.4285 other=-0.4173 p=9.48e-03
+  feature_003 per +1 SD            slope=-0.0039 p=1.40e-02
+  feature_018 == 0                 n=41945 eff=+0.0104 mean=-0.4174 other=-0.4278 p=1.63e-02
+  feature_018 == 1                 n= 8055 eff=-0.0104 mean=-0.4278 other=-0.4174 p=1.63e-02
+  feature_018 == 1                 n= 8055 eff=-0.0104 mean=-0.4278 other=-0.4174 p=1.63e-02
+  feature_010 == adenocarcinoma    n= 5649 eff=-0.0118 mean=-0.4296 other=-0.4177 p=1.90e-02
+
+MAIN dependency_RPL11
+  feature_003 per +1 SD            slope=-0.0544 p=1.01e-259
+  feature_003 >= Q3 (0.428)        n=12501 eff=-0.0988 mean=-0.3440 other=-0.2452 p=7.61e-160
+  feature_018 == 0                 n=41945 eff=+0.1091 mean=-0.2523 other=-0.3614 p=5.71e-140
+  feature_018 == 1                 n= 8055 eff=-0.1091 mean=-0.3614 other=-0.2523 p=5.71e-140
+  feature_018 == 1                 n= 8055 eff=-0.1091 mean=-0.3614 other=-0.2523 p=5.71e-140
+  feature_003 <= Q1 (-0.186)       n=12507 eff=+0.0788 mean=-0.2108 other=-0.2896 p=1.30e-101
+  feature_016 per +1 SD            slope=-0.0231 p=4.71e-48
+  feature_016 >= Q3 (0.964)        n=12577 eff=-0.0418 mean=-0.3012 other=-0.2594 p=6.57e-30
+  feature_016 <= Q1 (0.694)        n=12574 eff=+0.0338 mean=-0.2446 other=-0.2784 p=2.39e-20
+  feature_023 per +1 SD            slope=-0.0128 p=6.32e-16
+  feature_023 >= Q3 (5.67)         n=12501 eff=-0.0286 mean=-0.2914 other=-0.2628 p=7.17e-15
+  feature_026 per +1 SD            slope=-0.0100 p=3.02e-10
+
+SUBGROUP dependency_BRAF searched 6759
+  n=  387 eff=-0.5554 mean=-0.8625 other=-0.3071 p=1.2e-111 q=6.4e-111 :: feature_009 == 1 AND feature_026 >= Q3 (1.08) AND feature_033 >= Q3 (0.602)
+  n= 5574 eff=-0.5552 mean=-0.8047 other=-0.2495 p=0.0e+00 q=0.0e+00 :: feature_009 == 1
+  n= 5574 eff=-0.5552 mean=-0.8047 other=-0.2495 p=0.0e+00 q=0.0e+00 :: feature_009 == 1
+  n= 5200 eff=-0.5514 mean=-0.8055 other=-0.2540 p=0.0e+00 q=0.0e+00 :: feature_009 == 1 AND feature_030 == 0
+  n= 5200 eff=-0.5514 mean=-0.8055 other=-0.2540 p=0.0e+00 q=0.0e+00 :: feature_030 == 0 AND feature_009 == 1
+  n= 5167 eff=-0.5512 mean=-0.8056 other=-0.2544 p=0.0e+00 q=0.0e+00 :: feature_009 == 1 AND feature_022 == 0
+  n= 5167 eff=-0.5512 mean=-0.8056 other=-0.2544 p=0.0e+00 q=0.0e+00 :: feature_022 == 0 AND feature_009 == 1
+  n= 5085 eff=-0.5509 mean=-0.8063 other=-0.2554 p=0.0e+00 q=0.0e+00 :: feature_009 == 1 AND feature_027 == 0
+  n= 5085 eff=-0.5509 mean=-0.8063 other=-0.2554 p=0.0e+00 q=0.0e+00 :: feature_027 == 0 AND feature_009 == 1
+  n=  374 eff=-0.5504 mean=-0.8576 other=-0.3073 p=1.4e-105 q=7.6e-105 :: feature_005 == batch_d AND feature_009 == 1 AND feature_031 <= Q1 (-0.567)
+  n= 5153 eff=-0.5503 mean=-0.8050 other=-0.2547 p=0.0e+00 q=0.0e+00 :: feature_009 == 1 AND feature_032 == 0
+  n= 5153 eff=-0.5503 mean=-0.8050 other=-0.2547 p=0.0e+00 q=0.0e+00 :: feature_032 == 0 AND feature_009 == 1
+  n= 5279 eff=-0.5496 mean=-0.8030 other=-0.2534 p=0.0e+00 q=0.0e+00 :: feature_009 == 1 AND feature_021 == 0
+  n= 5279 eff=-0.5496 mean=-0.8030 other=-0.2534 p=0.0e+00 q=0.0e+00 :: feature_021 == 0 AND feature_009 == 1
+  n= 4825 eff=-0.5482 mean=-0.8067 other=-0.2585 p=0.0e+00 q=0.0e+00 :: feature_009 == 1 AND feature_022 == 0 AND feature_030 == 0
+
+SUBGROUP dependency_EGFR searched 6009
+  n=  773 eff=-0.3683 mean=-0.6421 other=-0.2738 p=4.6e-126 q=7.1e-125 :: feature_004 == adherent AND feature_016 >= Q3 (0.964) AND feature_022 == 1
+  n=  666 eff=-0.3595 mean=-0.6342 other=-0.2747 p=4.4e-109 q=3.7e-108 :: feature_010 == not_applicable AND feature_016 >= Q3 (0.964) AND feature_022 == 1
+  n=  349 eff=-0.3585 mean=-0.6354 other=-0.2770 p=4.9e-57 q=2.7e-56 :: feature_003 >= Q3 (0.428) AND feature_018 == 0 AND feature_022 == 1
+  n=  739 eff=-0.3581 mean=-0.6323 other=-0.2742 p=1.1e-115 q=1.1e-114 :: feature_014 == 0 AND feature_022 == 1 AND feature_023 >= Q3 (5.67)
+  n=  533 eff=-0.3579 mean=-0.6335 other=-0.2756 p=9.3e-88 q=5.9e-87 :: feature_018 == 0 AND feature_022 == 1 AND feature_035 == 1
+  n=  593 eff=-0.3569 mean=-0.6321 other=-0.2752 p=9.0e-98 q=6.2e-97 :: feature_001 == 10 AND feature_022 == 1 AND feature_023 >= Q3 (5.67)
+  n=  561 eff=-0.3566 mean=-0.6321 other=-0.2755 p=9.8e-93 q=6.4e-92 :: feature_001 == 10 AND feature_003 >= Q3 (0.428) AND feature_022 == 1
+  n=  570 eff=-0.3565 mean=-0.6319 other=-0.2754 p=5.4e-92 q=3.5e-91 :: feature_012 == 0 AND feature_022 == 1 AND feature_035 == 1
+  n=  371 eff=-0.3564 mean=-0.6332 other=-0.2768 p=2.0e-61 q=1.1e-60 :: feature_001 == 10 AND feature_018 == 1 AND feature_022 == 1
+  n=  833 eff=-0.3558 mean=-0.6294 other=-0.2735 p=1.2e-130 q=2.2e-129 :: feature_020 == 0 AND feature_022 == 1 AND feature_023 >= Q3 (5.67)
+  n=  855 eff=-0.3558 mean=-0.6292 other=-0.2734 p=4.8e-131 q=9.5e-130 :: feature_022 == 1 AND feature_023 >= Q3 (5.67) AND feature_024 == 0
+  n=  879 eff=-0.3554 mean=-0.6286 other=-0.2732 p=1.6e-137 q=4.1e-136 :: feature_016 >= Q3 (0.964) AND feature_022 == 1 AND feature_024 == 0
+  n=  635 eff=-0.3552 mean=-0.6301 other=-0.2750 p=2.9e-97 q=2.0e-96 :: feature_018 == 0 AND feature_022 == 1 AND feature_023 >= Q3 (5.67)
+  n=  834 eff=-0.3550 mean=-0.6285 other=-0.2735 p=8.7e-127 q=1.4e-125 :: feature_009 == 0 AND feature_022 == 1 AND feature_023 >= Q3 (5.67)
+  n=  809 eff=-0.3546 mean=-0.6283 other=-0.2737 p=8.6e-126 q=1.3e-124 :: feature_004 == adherent AND feature_022 == 1 AND feature_026 >= Q3 (1.08)
+
+SUBGROUP dependency_ERBB2 searched 6485
+  n=  303 eff=-0.4530 mean=-0.7460 other=-0.2930 p=2.2e-66 q=1.0e-65 :: feature_023 >= Q3 (5.67) AND feature_024 == 1 AND feature_026 >= Q3 (1.08)
+  n=  302 eff=-0.4517 mean=-0.7447 other=-0.2930 p=1.0e-68 q=5.1e-68 :: feature_005 == batch_d AND feature_024 == 1 AND feature_034 >= Q3 (4.13)
+  n=  304 eff=-0.4458 mean=-0.7389 other=-0.2930 p=5.0e-67 q=2.5e-66 :: feature_005 == batch_d AND feature_024 == 1 AND feature_033 <= Q1 (-0.609)
+  n=  306 eff=-0.4444 mean=-0.7374 other=-0.2930 p=2.8e-62 q=1.3e-61 :: feature_024 == 1 AND feature_026 >= Q3 (1.08) AND feature_036 >= Q3 (0.165)
+  n=  308 eff=-0.4407 mean=-0.7337 other=-0.2930 p=7.5e-67 q=3.6e-66 :: feature_024 == 1 AND feature_026 >= Q3 (1.08) AND feature_028 <= Q1 (-0.406)
+  n=  300 eff=-0.4379 mean=-0.7310 other=-0.2931 p=7.8e-60 q=3.4e-59 :: feature_001 == 5 AND feature_024 == 1 AND feature_026 >= Q3 (1.08)
+  n=  302 eff=-0.4343 mean=-0.7274 other=-0.2931 p=4.8e-63 q=2.2e-62 :: feature_007 >= Q3 (0.695) AND feature_019 >= Q3 (0.478) AND feature_024 == 1
+  n=  305 eff=-0.4339 mean=-0.7270 other=-0.2931 p=4.4e-62 q=2.0e-61 :: feature_005 == batch_d AND feature_024 == 1 AND feature_025 >= Q3 (3.07)
+  n=  300 eff=-0.4324 mean=-0.7255 other=-0.2931 p=2.0e-59 q=8.7e-59 :: feature_001 == 5 AND feature_024 == 1 AND feature_025 >= Q3 (3.07)
+  n= 4890 eff=-0.4321 mean=-0.6856 other=-0.2535 p=0.0e+00 q=0.0e+00 :: feature_024 == 1
+  n= 4890 eff=-0.4321 mean=-0.6856 other=-0.2535 p=0.0e+00 q=0.0e+00 :: feature_024 == 1
+  n=  329 eff=-0.4312 mean=-0.7241 other=-0.2929 p=8.9e-69 q=4.4e-68 :: feature_005 == batch_c AND feature_024 == 1 AND feature_034 <= Q1 (2.37)
+  n=  314 eff=-0.4306 mean=-0.7237 other=-0.2930 p=1.8e-60 q=7.8e-60 :: feature_024 == 1 AND feature_028 <= Q1 (-0.406) AND feature_033 <= Q1 (-0.609)
+  n=  432 eff=-0.4295 mean=-0.7216 other=-0.2920 p=1.2e-90 q=6.8e-90 :: feature_006 == 0 AND feature_009 == 1 AND feature_024 == 1
+  n=  305 eff=-0.4295 mean=-0.7226 other=-0.2931 p=6.3e-67 q=3.1e-66 :: feature_001 == 10 AND feature_009 == 1 AND feature_024 == 1
+
+SUBGROUP dependency_KRAS searched 7308
+  n=  678 eff=-0.3091 mean=-0.6296 other=-0.3206 p=1.3e-84 q=7.6e-84 :: feature_014 == 1 AND feature_016 >= Q3 (0.964) AND feature_028 <= Q1 (-0.406)
+  n=11842 eff=-0.3075 mean=-0.5594 other=-0.2520 p=0.0e+00 q=0.0e+00 :: feature_014 == 1
+  n=11842 eff=-0.3075 mean=-0.5594 other=-0.2520 p=0.0e+00 q=0.0e+00 :: feature_014 == 1
+  n=11218 eff=-0.3014 mean=-0.5586 other=-0.2571 p=0.0e+00 q=0.0e+00 :: feature_014 == 1 AND feature_021 == 0
+  n=11218 eff=-0.3014 mean=-0.5586 other=-0.2571 p=0.0e+00 q=0.0e+00 :: feature_021 == 0 AND feature_014 == 1
+  n=11015 eff=-0.3011 mean=-0.5596 other=-0.2584 p=0.0e+00 q=0.0e+00 :: feature_014 == 1 AND feature_030 == 0
+  n=11015 eff=-0.3011 mean=-0.5596 other=-0.2584 p=0.0e+00 q=0.0e+00 :: feature_030 == 0 AND feature_014 == 1
+  n=10781 eff=-0.3006 mean=-0.5605 other=-0.2600 p=0.0e+00 q=0.0e+00 :: feature_014 == 1 AND feature_027 == 0
+  n=10781 eff=-0.3006 mean=-0.5605 other=-0.2600 p=0.0e+00 q=0.0e+00 :: feature_027 == 0 AND feature_014 == 1
+  n=10976 eff=-0.3006 mean=-0.5594 other=-0.2588 p=0.0e+00 q=0.0e+00 :: feature_014 == 1 AND feature_022 == 0
+  n=10976 eff=-0.3006 mean=-0.5594 other=-0.2588 p=0.0e+00 q=0.0e+00 :: feature_022 == 0 AND feature_014 == 1
+  n=10781 eff=-0.2992 mean=-0.5595 other=-0.2603 p=0.0e+00 q=0.0e+00 :: feature_014 == 1 AND feature_032 == 0
+  n=10781 eff=-0.2992 mean=-0.5595 other=-0.2603 p=0.0e+00 q=0.0e+00 :: feature_032 == 0 AND feature_014 == 1
+  n=10745 eff=-0.2992 mean=-0.5597 other=-0.2605 p=0.0e+00 q=0.0e+00 :: feature_014 == 1 AND feature_024 == 0
+  n=10745 eff=-0.2992 mean=-0.5597 other=-0.2605 p=0.0e+00 q=0.0e+00 :: feature_024 == 0 AND feature_014 == 1
+
+SUBGROUP dependency_RIT1 searched 6189
+  n=  312 eff=-0.1408 mean=-0.4058 other=-0.2650 p=2.6e-12 q=2.0e-11 :: feature_011 == brain AND feature_021 == 0 AND feature_027 == 1
+  n=  329 eff=-0.1397 mean=-0.4047 other=-0.2650 p=1.0e-12 q=8.0e-12 :: feature_011 == brain AND feature_027 == 1
+  n=  329 eff=-0.1397 mean=-0.4047 other=-0.2650 p=1.0e-12 q=8.0e-12 :: feature_011 == brain AND feature_027 == 1
+  n=  329 eff=-0.1397 mean=-0.4047 other=-0.2650 p=1.0e-12 q=8.0e-12 :: feature_010 == not_applicable AND feature_011 == brain AND feature_027 == 1
+  n=  302 eff=-0.1386 mean=-0.4037 other=-0.2651 p=2.2e-11 q=1.5e-10 :: feature_009 == 0 AND feature_011 == brain AND feature_027 == 1
+  n=  310 eff=-0.1385 mean=-0.4036 other=-0.2650 p=1.1e-11 q=7.7e-11 :: feature_011 == brain AND feature_027 == 1 AND feature_030 == 0
+  n=  300 eff=-0.1350 mean=-0.4001 other=-0.2651 p=4.7e-11 q=3.1e-10 :: feature_011 == brain AND feature_020 == 0 AND feature_027 == 1
+  n=  302 eff=-0.1298 mean=-0.3949 other=-0.2651 p=3.9e-10 q=2.4e-09 :: feature_017 >= Q3 (3.56) AND feature_023 <= Q1 (4.23) AND feature_027 == 1
+  n=  307 eff=-0.1257 mean=-0.3908 other=-0.2651 p=1.5e-09 q=8.7e-09 :: feature_016 >= Q3 (0.964) AND feature_017 <= Q1 (1.96) AND feature_027 == 1
+  n=  300 eff=-0.1237 mean=-0.3889 other=-0.2652 p=7.3e-09 q=4.1e-08 :: feature_005 == batch_d AND feature_023 <= Q1 (4.23) AND feature_027 == 1
+  n=  881 eff=-0.1234 mean=-0.3871 other=-0.2637 p=6.3e-24 q=2.0e-22 :: feature_004 == adherent AND feature_023 <= Q1 (4.23) AND feature_027 == 1
+  n=  306 eff=-0.1227 mean=-0.3878 other=-0.2652 p=6.1e-09 q=3.5e-08 :: feature_023 <= Q1 (4.23) AND feature_026 >= Q3 (1.08) AND feature_027 == 1
+  n=  983 eff=-0.1208 mean=-0.3843 other=-0.2635 p=1.1e-25 q=3.6e-24 :: feature_006 == 0 AND feature_023 <= Q1 (4.23) AND feature_027 == 1
+  n= 1044 eff=-0.1195 mean=-0.3829 other=-0.2634 p=4.1e-26 q=1.4e-24 :: feature_023 <= Q1 (4.23) AND feature_024 == 0 AND feature_027 == 1
+  n= 1051 eff=-0.1195 mean=-0.3829 other=-0.2634 p=1.2e-26 q=4.0e-25 :: feature_022 == 0 AND feature_023 <= Q1 (4.23) AND feature_027 == 1
+
+SUBGROUP dependency_KIF18A searched 8330
+  n= 3133 eff=-0.8589 mean=-1.1119 other=-0.2530 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_028 >= Q3 (0.819) AND feature_035 == 1
+  n= 3226 eff=-0.8396 mean=-1.0922 other=-0.2527 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_020 == 0 AND feature_035 == 1
+  n= 3269 eff=-0.8277 mean=-1.0804 other=-0.2527 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_020 == 0 AND feature_028 >= Q3 (0.819)
+  n= 2040 eff=-0.7851 mean=-1.0599 other=-0.2748 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_017 >= Q3 (3.56) AND feature_035 == 1
+  n= 2243 eff=-0.7155 mean=-0.9902 other=-0.2747 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_017 >= Q3 (3.56) AND feature_020 == 0
+  n= 1011 eff=-0.6938 mean=-0.9866 other=-0.2928 p=7.0e-172 q=1.2e-170 :: feature_007 <= Q1 (-0.544) AND feature_011 == colorectal AND feature_035 == 1
+  n= 2303 eff=-0.6922 mean=-0.9671 other=-0.2749 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_017 >= Q3 (3.56) AND feature_028 >= Q3 (0.819)
+  n= 3925 eff=-0.6899 mean=-0.9425 other=-0.2527 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_035 == 1
+  n= 3925 eff=-0.6899 mean=-0.9425 other=-0.2527 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_035 == 1
+  n= 3925 eff=-0.6899 mean=-0.9425 other=-0.2527 p=0.0e+00 q=0.0e+00 :: feature_010 == not_applicable AND feature_011 == colorectal AND feature_035 == 1
+  n= 3566 eff=-0.6882 mean=-0.9459 other=-0.2577 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_027 == 0 AND feature_035 == 1
+  n= 3677 eff=-0.6876 mean=-0.9439 other=-0.2563 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_022 == 0 AND feature_035 == 1
+  n= 3457 eff=-0.6870 mean=-0.9463 other=-0.2593 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_030 == 0 AND feature_035 == 1
+  n= 3637 eff=-0.6861 mean=-0.9430 other=-0.2569 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_032 == 0 AND feature_035 == 1
+  n= 3748 eff=-0.6856 mean=-0.9410 other=-0.2554 p=0.0e+00 q=0.0e+00 :: feature_011 == colorectal AND feature_021 == 0 AND feature_035 == 1
+
+SUBGROUP dependency_TMED10 searched 8579
+  n=  307 eff=-0.1022 mean=-0.3556 other=-0.2534 p=6.9e-08 q=2.2e-06 :: feature_016 >= Q3 (0.964) AND feature_017 <= Q1 (1.96) AND feature_027 == 1
+  n=  306 eff=-0.0767 mean=-0.3302 other=-0.2535 p=1.8e-04 q=1.6e-03 :: feature_023 <= Q1 (4.23) AND feature_026 >= Q3 (1.08) AND feature_027 == 1
+  n=  303 eff=-0.0759 mean=-0.3294 other=-0.2535 p=3.2e-04 q=2.6e-03 :: feature_005 == batch_a AND feature_011 == skin AND feature_016 >= Q3 (0.964)
+  n=  419 eff=-0.0718 mean=-0.3252 other=-0.2534 p=1.8e-05 q=2.4e-04 :: feature_002 >= Q3 (4.44) AND feature_011 == breast AND feature_026 >= Q3 (1.08)
+  n=  493 eff=-0.0692 mean=-0.3225 other=-0.2533 p=6.6e-06 q=1.1e-04 :: feature_011 == prostate AND feature_016 >= Q3 (0.964) AND feature_018 == 0
+  n=  323 eff=-0.0688 mean=-0.3224 other=-0.2536 p=9.5e-04 q=6.3e-03 :: feature_012 == 1 AND feature_016 >= Q3 (0.964) AND feature_019 >= Q3 (0.478)
+  n=  327 eff=-0.0686 mean=-0.3221 other=-0.2536 p=3.2e-04 q=2.6e-03 :: feature_012 == 1 AND feature_016 >= Q3 (0.964) AND feature_036 >= Q3 (0.165)
+  n=  314 eff=-0.0667 mean=-0.3203 other=-0.2536 p=6.7e-04 q=4.7e-03 :: feature_016 >= Q3 (0.964) AND feature_026 >= Q3 (1.08) AND feature_027 == 1
+  n=  383 eff=-0.0654 mean=-0.3189 other=-0.2535 p=2.1e-04 q=1.8e-03 :: feature_001 == 10 AND feature_011 == prostate AND feature_016 >= Q3 (0.964)
+  n=  353 eff=-0.0654 mean=-0.3189 other=-0.2535 p=9.7e-04 q=6.4e-03 :: feature_009 == 1 AND feature_016 >= Q3 (0.964) AND feature_026 >= Q3 (1.08)
+  n=  401 eff=-0.0652 mean=-0.3187 other=-0.2535 p=2.9e-04 q=2.4e-03 :: feature_006 == 1 AND feature_007 <= Q1 (-0.544) AND feature_016 >= Q3 (0.964)
+  n=  404 eff=-0.0652 mean=-0.3186 other=-0.2535 p=2.6e-04 q=2.2e-03 :: feature_001 == 5 AND feature_011 == breast AND feature_016 >= Q3 (0.964)
+  n=  567 eff=-0.0649 mean=-0.3181 other=-0.2533 p=6.5e-06 q=1.1e-04 :: feature_011 == prostate AND feature_012 == 0 AND feature_016 >= Q3 (0.964)
+  n=  371 eff=-0.0633 mean=-0.3169 other=-0.2535 p=5.0e-04 q=3.7e-03 :: feature_011 == colorectal AND feature_016 >= Q3 (0.964) AND feature_031 <= Q1 (-0.567)
+  n=  315 eff=-0.0633 mean=-0.3169 other=-0.2536 p=2.0e-03 q=1.2e-02 :: feature_011 == skin AND feature_016 >= Q3 (0.964) AND feature_028 <= Q1 (-0.406)
+
+SUBGROUP dependency_DHX9 searched 9485
+  n=  488 eff=-0.0840 mean=-0.4168 other=-0.3328 p=1.6e-07 q=2.8e-06 :: feature_010 == squamous AND feature_023 >= Q3 (5.67) AND feature_029 == 0
+  n=  355 eff=-0.0804 mean=-0.4135 other=-0.3331 p=2.1e-05 q=1.9e-04 :: feature_006 == 1 AND feature_016 >= Q3 (0.964) AND feature_018 == 1
+  n=  347 eff=-0.0791 mean=-0.4123 other=-0.3331 p=7.2e-05 q=5.5e-04 :: feature_001 == 5 AND feature_009 == 1 AND feature_023 >= Q3 (5.67)
+  n=  470 eff=-0.0766 mean=-0.4096 other=-0.3329 p=2.0e-06 q=2.6e-05 :: feature_016 >= Q3 (0.964) AND feature_020 == 1 AND feature_023 >= Q3 (5.67)
+  n=  522 eff=-0.0764 mean=-0.4093 other=-0.3329 p=9.3e-07 q=1.4e-05 :: feature_004 == adherent AND feature_010 == squamous AND feature_023 >= Q3 (5.67)
+  n=  830 eff=-0.0756 mean=-0.4080 other=-0.3324 p=5.4e-09 q=1.3e-07 :: feature_015 <= Q1 (3.23) AND feature_016 >= Q3 (0.964) AND feature_023 >= Q3 (5.67)
+  n=  425 eff=-0.0756 mean=-0.4086 other=-0.3330 p=1.6e-05 q=1.6e-04 :: feature_010 == squamous AND feature_014 == 0 AND feature_023 >= Q3 (5.67)
+  n=  317 eff=-0.0743 mean=-0.4075 other=-0.3332 p=2.4e-04 q=1.5e-03 :: feature_008 == 1 AND feature_011 == hematopoietic AND feature_016 >= Q3 (0.964)
+  n=  317 eff=-0.0743 mean=-0.4075 other=-0.3332 p=2.4e-04 q=1.5e-03 :: feature_004 == suspension AND feature_008 == 1 AND feature_016 >= Q3 (0.964)
+  n=  319 eff=-0.0728 mean=-0.4060 other=-0.3332 p=3.6e-04 q=2.1e-03 :: feature_011 == hematopoietic AND feature_016 >= Q3 (0.964) AND feature_018 == 1
+  n=  319 eff=-0.0728 mean=-0.4060 other=-0.3332 p=3.6e-04 q=2.1e-03 :: feature_004 == suspension AND feature_016 >= Q3 (0.964) AND feature_018 == 1
+  n=  862 eff=-0.0727 mean=-0.4051 other=-0.3324 p=4.3e-09 q=1.1e-07 :: feature_016 >= Q3 (0.964) AND feature_023 >= Q3 (5.67) AND feature_034 <= Q1 (2.37)
+  n=  515 eff=-0.0720 mean=-0.4050 other=-0.3329 p=5.4e-06 q=6.3e-05 :: feature_010 == squamous AND feature_022 == 0 AND feature_023 >= Q3 (5.67)
+  n=  303 eff=-0.0710 mean=-0.4043 other=-0.3332 p=4.6e-04 q=2.6e-03 :: feature_005 == batch_b AND feature_016 >= Q3 (0.964) AND feature_027 == 1
+  n=  553 eff=-0.0707 mean=-0.4036 other=-0.3329 p=4.2e-06 q=5.1e-05 :: feature_010 == squamous AND feature_023 >= Q3 (5.67) AND feature_030 == 0
+
+SUBGROUP dependency_POLR2A searched 8281
+  n=  315 eff=-0.1291 mean=-0.5474 other=-0.4183 p=2.4e-10 q=1.2e-09 :: feature_011 == skin AND feature_016 >= Q3 (0.964) AND feature_026 >= Q3 (1.08)
+  n=  359 eff=-0.1272 mean=-0.5454 other=-0.4182 p=2.8e-11 q=1.4e-10 :: feature_002 >= Q3 (4.44) AND feature_010 == adenocarcinoma AND feature_016 >= Q3 (0.964)
+  n=  376 eff=-0.1263 mean=-0.5444 other=-0.4181 p=2.1e-11 q=1.1e-10 :: feature_008 == 1 AND feature_011 == lung AND feature_016 >= Q3 (0.964)
+  n=  487 eff=-0.1254 mean=-0.5432 other=-0.4179 p=2.4e-14 q=1.5e-13 :: feature_011 == colorectal AND feature_016 >= Q3 (0.964) AND feature_035 == 0
+  n=  669 eff=-0.1239 mean=-0.5413 other=-0.4174 p=1.2e-18 q=9.3e-18 :: feature_013 >= Q3 (0.519) AND feature_016 >= Q3 (0.964) AND feature_036 <= Q1 (-0.497)
+  n=  504 eff=-0.1237 mean=-0.5416 other=-0.4178 p=7.9e-15 q=5.0e-14 :: feature_002 >= Q3 (4.44) AND feature_011 == lung AND feature_016 >= Q3 (0.964)
+  n=  330 eff=-0.1226 mean=-0.5409 other=-0.4183 p=7.3e-09 q=3.1e-08 :: feature_003 <= Q1 (-0.186) AND feature_010 == adenocarcinoma AND feature_016 >= Q3 (0.964)
+  n=  344 eff=-0.1216 mean=-0.5399 other=-0.4182 p=1.4e-09 q=6.5e-09 :: feature_011 == colorectal AND feature_013 <= Q1 (-0.559) AND feature_016 >= Q3 (0.964)
+  n=  331 eff=-0.1207 mean=-0.5390 other=-0.4183 p=7.5e-09 q=3.1e-08 :: feature_010 == adenocarcinoma AND feature_015 <= Q1 (3.23) AND feature_016 >= Q3 (0.964)
+  n=  382 eff=-0.1207 mean=-0.5388 other=-0.4182 p=5.5e-11 q=2.8e-10 :: feature_007 <= Q1 (-0.544) AND feature_010 == adenocarcinoma AND feature_016 >= Q3 (0.964)
+  n=  369 eff=-0.1206 mean=-0.5388 other=-0.4182 p=1.8e-11 q=9.5e-11 :: feature_011 == colorectal AND feature_016 >= Q3 (0.964) AND feature_025 >= Q3 (3.07)
+  n=  475 eff=-0.1203 mean=-0.5382 other=-0.4179 p=3.4e-13 q=2.0e-12 :: feature_008 == 1 AND feature_013 >= Q3 (0.519) AND feature_016 >= Q3 (0.964)
+  n=  824 eff=-0.1201 mean=-0.5372 other=-0.4171 p=2.8e-21 q=2.3e-20 :: feature_005 == batch_d AND feature_016 >= Q3 (0.964) AND feature_036 <= Q1 (-0.497)
+  n=  496 eff=-0.1198 mean=-0.5376 other=-0.4179 p=7.7e-14 q=4.7e-13 :: feature_001 == 2 AND feature_016 >= Q3 (0.964) AND feature_019 <= Q1 (0.256)
+  n=  351 eff=-0.1197 mean=-0.5380 other=-0.4182 p=5.6e-10 q=2.6e-09 :: feature_011 == colorectal AND feature_016 >= Q3 (0.964) AND feature_033 >= Q3 (0.602)
+
+SUBGROUP dependency_RPL11 searched 8097
+  n=  609 eff=-0.1512 mean=-0.4193 other=-0.2681 p=1.5e-24 q=8.7e-24 :: feature_016 >= Q3 (0.964) AND feature_018 == 1 AND feature_031 >= Q3 (0.654)
+  n=  384 eff=-0.1475 mean=-0.4163 other=-0.2688 p=1.1e-15 q=4.2e-15 :: feature_016 >= Q3 (0.964) AND feature_018 == 1 AND feature_020 == 1
+  n=  608 eff=-0.1467 mean=-0.4148 other=-0.2681 p=3.7e-22 q=2.0e-21 :: feature_014 == 1 AND feature_016 >= Q3 (0.964) AND feature_018 == 1
+  n=  650 eff=-0.1458 mean=-0.4138 other=-0.2680 p=4.9e-23 q=2.7e-22 :: feature_016 >= Q3 (0.964) AND feature_018 == 1 AND feature_025 >= Q3 (3.07)
+  n=  602 eff=-0.1455 mean=-0.4136 other=-0.2682 p=7.3e-23 q=4.0e-22 :: feature_016 >= Q3 (0.964) AND feature_018 == 1 AND feature_033 >= Q3 (0.602)
+  n=  381 eff=-0.1447 mean=-0.4135 other=-0.2688 p=4.5e-15 q=1.8e-14 :: feature_018 == 1 AND feature_029 == 1 AND feature_031 >= Q3 (0.654)
+  n=  319 eff=-0.1431 mean=-0.4121 other=-0.2690 p=5.3e-13 q=1.9e-12 :: feature_011 == hematopoietic AND feature_016 >= Q3 (0.964) AND feature_018 == 1
+  n=  319 eff=-0.1431 mean=-0.4121 other=-0.2690 p=5.3e-13 q=1.9e-12 :: feature_004 == suspension AND feature_016 >= Q3 (0.964) AND feature_018 == 1
+  n=  461 eff=-0.1421 mean=-0.4107 other=-0.2686 p=7.9e-18 q=3.5e-17 :: feature_005 == batch_b AND feature_018 == 1 AND feature_031 >= Q3 (0.654)
+  n=  308 eff=-0.1418 mean=-0.4109 other=-0.2690 p=2.0e-12 q=7.1e-12 :: feature_001 == 2 AND feature_018 == 1 AND feature_031 >= Q3 (0.654)
+  n=  496 eff=-0.1415 mean=-0.4100 other=-0.2685 p=1.7e-16 q=7.1e-16 :: feature_013 >= Q3 (0.519) AND feature_018 == 1 AND feature_028 <= Q1 (-0.406)
+  n=  627 eff=-0.1397 mean=-0.4079 other=-0.2682 p=2.2e-20 q=1.1e-19 :: feature_016 >= Q3 (0.964) AND feature_018 == 1 AND feature_026 >= Q3 (1.08)
+  n=  301 eff=-0.1396 mean=-0.4087 other=-0.2691 p=1.3e-10 q=4.1e-10 :: feature_001 == 2 AND feature_018 == 1 AND feature_028 <= Q1 (-0.406)
+  n=  491 eff=-0.1391 mean=-0.4076 other=-0.2685 p=1.1e-17 q=4.6e-17 :: feature_001 == 5 AND feature_018 == 1 AND feature_031 >= Q3 (0.654)
+  n=  631 eff=-0.1388 mean=-0.4069 other=-0.2682 p=2.5e-22 q=1.4e-21 :: feature_016 >= Q3 (0.964) AND feature_018 == 1 AND feature_036 <= Q1 (-0.497)
+
+codex
+The broad screen is finished. I’m now calculating exact follow-up tests for the candidate subgroups and interaction terms so the final files have stable effect estimates rather than relying only on ranked output.
+exec
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy import stats
+from itertools import combinations
+
+df=pd.read_parquet('dataset.parquet')
+outcomes=[c for c in df.columns if c.startswith('dependency_')]
+
+def welch(out, mask):
+    y=df[out].to_numpy(); m=np.asarray(mask,bool)
+    a=y[m]; b=y[~m]
+    t=stats.ttest_ind(a,b,equal_var=False)
+    return dict(outcome=out,n=int(m.sum()),mean=float(a.mean()),other_mean=float(b.mean()),effect=float(a.mean()-b.mean()),p=float(t.pvalue))
+
+def print_w(name,out,mask):
+    r=welch(out,mask)
+    print(f\"{name:55s} {out:20s} n={r['n']:5d} mean={r['mean']:+.6f} other={r['other_mean']:+.6f} eff={r['effect']:+.6f} p={r['p']:.4e}\")
+
+def ols_coef(y, X, names, term):
+    y=np.asarray(y,float); X=np.asarray(X,float)
+    beta=np.linalg.lstsq(X,y,rcond=None)[0]
+    resid=y-X@beta
+    n,p=X.shape
+    s2=float(resid@resid/(n-p))
+    XtX_inv=np.linalg.inv(X.T@X)
+    se=np.sqrt(np.diag(XtX_inv)*s2)
+    t=beta/se
+    pv=2*stats.t.sf(np.abs(t), n-p)
+    idx=names.index(term)
+    return dict(term=term,beta=float(beta[idx]),se=float(se[idx]),t=float(t[idx]),p=float(pv[idx]),df=int(n-p))
+
+def interaction(out, terms, term_name):
+    # terms dict bool/float vectors, include intercept automatically
+    names=['Intercept']+list(terms.keys())
+    X=[np.ones(len(df))]+[np.asarray(v,float) for v in terms.values()]
+    res=ols_coef(df[out].to_numpy(), np.column_stack(X), names, term_name)
+    print(f\"OLS {out:20s} {term_name:35s} beta={res['beta']:+.6f} se={res['se']:.6f} p={res['p']:.4e}\")
+    return res
+
+q=lambda c,p: df[c].quantile(p)
+high016=df['feature_016']>=q('feature_016',.75)
+low016=df['feature_016']<=q('feature_016',.25)
+high026=df['feature_026']>=q('feature_026',.75)
+high028=df['feature_028']>=q('feature_028',.75)
+low017=df['feature_017']<=q('feature_017',.25)
+high017=df['feature_017']>=q('feature_017',.75)
+high023=df['feature_023']>=q('feature_023',.75)
+low023=df['feature_023']<=q('feature_023',.25)
+high031=df['feature_031']>=q('feature_031',.75)
+high003=df['feature_003']>=q('feature_003',.75)
+col=df['feature_011'].eq('colorectal')
+skin=df['feature_011'].eq('skin')
+brain=df['feature_011'].eq('brain')
+panc=df['feature_011'].eq('pancreatic')
+squam=df['feature_010'].eq('squamous')
+
+print('Quantiles:')
+for c in ['feature_016','feature_026','feature_028','feature_017','feature_023','feature_031','feature_003']:
+    print(c,'q25',q(c,.25),'q75',q(c,.75))
+print('\\nSelected Welch tests:')
+sel=[
+('feature_009 == 1','dependency_BRAF',df.feature_009.eq(1)),
+('skin lineage','dependency_BRAF',skin),
+('feature_009 == 1 AND skin','dependency_BRAF',df.feature_009.eq(1)&skin),
+('feature_022 == 1','dependency_EGFR',df.feature_022.eq(1)),
+('feature_022 == 1 AND high feature_016','dependency_EGFR',df.feature_022.eq(1)&high016),
+('feature_024 == 1','dependency_ERBB2',df.feature_024.eq(1)),
+('feature_024 == 1 AND high feature_026','dependency_ERBB2',df.feature_024.eq(1)&high026),
+('feature_014 == 1','dependency_KRAS',df.feature_014.eq(1)),
+('feature_014 == 1 AND pancreatic','dependency_KRAS',df.feature_014.eq(1)&panc),
+('feature_027 == 1','dependency_RIT1',df.feature_027.eq(1)),
+('feature_027 == 1 AND brain','dependency_RIT1',df.feature_027.eq(1)&brain),
+('colorectal','dependency_KIF18A',col),
+('feature_035 == 1','dependency_KIF18A',df.feature_035.eq(1)),
+('high feature_028','dependency_KIF18A',high028),
+('colorectal AND feature_035 == 1','dependency_KIF18A',col&df.feature_035.eq(1)),
+('colorectal AND feature_035 == 1 AND high feature_028','dependency_KIF18A',col&df.feature_035.eq(1)&high028),
+('high feature_016','dependency_TMED10',high016),
+('high feature_016 AND feature_027 == 1 AND low feature_017','dependency_TMED10',high016&df.feature_027.eq(1)&low017),
+('high feature_016','dependency_DHX9',high016),
+('high feature_023','dependency_DHX9',high023),
+('squamous AND high feature_023 AND feature_029 == 0','dependency_DHX9',squam&high023&df.feature_029.eq(0)),
+('high feature_016','dependency_POLR2A',high016),
+('skin AND high feature_016 AND high feature_026','dependency_POLR2A',skin&high016&high026),
+('feature_018 == 1','dependency_RPL11',df.feature_018.eq(1)),
+('high feature_003','dependency_RPL11',high003),
+('feature_018 == 1 AND high feature_016 AND high feature_031','dependency_RPL11',df.feature_018.eq(1)&high016&high031),
+]
+for name,out,mask in sel:
+    print_w(name,out,mask)
+
+print('\\nWithin-subgroup contrasts:')
+# within colorectal KIF18A, both features vs rest colorectal
+m_base=col; m_en=col & df.feature_035.eq(1)&high028
+a=df.loc[m_en,'dependency_KIF18A']; b=df.loc[m_base & ~m_en,'dependency_KIF18A']
+print(f\"KIF18A within colorectal enabled n={len(a)} vs other colorectal n={len(b)} mean={a.mean():+.6f} other={b.mean():+.6f} eff={a.mean()-b.mean():+.6f} p={stats.ttest_ind(a,b,equal_var=False).pvalue:.4e}\")
+# feature035 only within colorectal high028? high028 only within colorectal f035?
+for desc,maskA,maskB in [
+    ('feature_035 effect inside colorectal & high028', col&high028&df.feature_035.eq(1), col&high028&df.feature_035.eq(0)),
+    ('high028 effect inside colorectal & feature_035=1', col&df.feature_035.eq(1)&high028, col&df.feature_035.eq(1)&~high028),
+    ('colorectal effect inside feature_035=1 & high028', col&df.feature_035.eq(1)&high028, (~col)&df.feature_035.eq(1)&high028),
+]:
+    a=df.loc[maskA,'dependency_KIF18A']; b=df.loc[maskB,'dependency_KIF18A']
+    print(f\"{desc}: n={len(a)} vs {len(b)} mean={a.mean():+.6f} other={b.mean():+.6f} eff={a.mean()-b.mean():+.6f} p={stats.ttest_ind(a,b,equal_var=False).pvalue:.4e}\")
+
+print('\\nInteraction OLS:')
+# two-way selected interactions include all lower terms
+interaction('dependency_EGFR',{
+    'feature_022':df.feature_022.eq(1), 'high016':high016, 'feature_022:high016':df.feature_022.eq(1)&high016}, 'feature_022:high016')
+interaction('dependency_ERBB2',{
+    'feature_024':df.feature_024.eq(1), 'high026':high026, 'feature_024:high026':df.feature_024.eq(1)&high026}, 'feature_024:high026')
+interaction('dependency_KRAS',{
+    'feature_014':df.feature_014.eq(1), 'pancreatic':panc, 'feature_014:pancreatic':df.feature_014.eq(1)&panc}, 'feature_014:pancreatic')
+interaction('dependency_RIT1',{
+    'feature_027':df.feature_027.eq(1), 'brain':brain, 'feature_027:brain':df.feature_027.eq(1)&brain}, 'feature_027:brain')
+# 3-way KIF18A
+A=col; B=df.feature_035.eq(1); C=high028
+terms={'colorectal':A, 'feature_035':B, 'high028':C, 'colorectal:feature_035':A&B, 'colorectal:high028':A&C, 'feature_035:high028':B&C, 'colorectal:feature_035:high028':A&B&C}
+interaction('dependency_KIF18A',terms,'colorectal:feature_035:high028')
+# process interactions
+A=high016; B=df.feature_027.eq(1); C=low017
+interaction('dependency_TMED10',{'high016':A,'feature_027':B,'low017':C,'high016:feature_027':A&B,'high016:low017':A&C,'feature_027:low017':B&C,'high016:feature_027:low017':A&B&C},'high016:feature_027:low017')
+A=high016; B=high023
+interaction('dependency_DHX9',{'high016':A,'high023':B,'high016:high023':A&B},'high016:high023')
+A=high016; B=high026; C=skin
+interaction('dependency_POLR2A',{'high016':A,'high026':B,'skin':C,'high016:high026':A&B,'high016:skin':A&C,'high026:skin':B&C,'high016:high026:skin':A&B&C},'high016:high026:skin')
+A=df.feature_018.eq(1); B=high016; C=high031
+interaction('dependency_RPL11',{'feature_018':A,'high016':B,'high031':C,'feature_018:high016':A&B,'feature_018:high031':A&C,'high016:high031':B&C,'feature_018:high016:high031':A&B&C},'feature_018:high016:high031')
+
+# adjusted full main-effects model key coefficients (with continuous standardized and categorical dummies)
+print('\\nAdjusted key coefficients in all-main-effect model:')
+features=[c for c in df.columns if c.startswith('feature_')]
+cat=[c for c in features if df[c].dtype=='object']
+lowcard=[c for c in features if df[c].dtype"'!='"'object' and df[c].nunique()<=6]
+bin_f=[c for c in features if df[c].dtype"'!='"'object' and set(df[c].unique()).issubset({0,1})]
+cont=[c for c in features if c not in cat+lowcard and c not in bin_f]
+# avoid duplicate bin lowcard: treat feature_001 categorical, binary as binary, cont as cont
+X_parts=[]; names=['Intercept']; X_parts.append(np.ones(len(df)))
+for c in cat:
+    vals=sorted(df[c].unique())
+    ref=vals[0]
+    for v in vals[1:]:
+        names.append(f'{c}={v}')
+        X_parts.append(df[c].eq(v).to_numpy(float))
+# feature_001 dummies
+for v in sorted(df['feature_001'].unique())[1:]:
+    names.append(f'feature_001={v:g}')
+    X_parts.append(df['feature_001'].eq(v).to_numpy(float))
+for c in bin_f:
+    names.append(c)
+    X_parts.append(df[c].to_numpy(float))
+for c in cont:
+    x=df[c].to_numpy(float); xs=(x-x.mean())/x.std(ddof=0)
+    names.append(f'{c}_z')
+    X_parts.append(xs)
+X=np.column_stack(X_parts)
+keys=[
+('dependency_BRAF','feature_009'),('dependency_EGFR','feature_022'),('dependency_ERBB2','feature_024'),('dependency_KRAS','feature_014'),('dependency_RIT1','feature_027'),('dependency_KIF18A','feature_011=colorectal'),('dependency_KIF18A','feature_035'),('dependency_KIF18A','feature_028_z'),('dependency_TMED10','feature_016_z'),('dependency_DHX9','feature_016_z'),('dependency_DHX9','feature_023_z'),('dependency_POLR2A','feature_016_z'),('dependency_RPL11','feature_018'),('dependency_RPL11','feature_003_z')]
+for out,term in keys:
+    r=ols_coef(df[out].to_numpy(),X,names,term)
+    print(f\"{out:20s} {term:26s} beta={r['beta']:+.6f} se={r['se']:.6f} p={r['p']:.4e}\")
+PY" in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+ succeeded in 14295ms:
+<stdin>:25: RuntimeWarning: invalid value encountered in sqrt
+Quantiles:
+feature_016 q25 0.694 q75 0.964
+feature_026 q25 0.919 q75 1.08
+feature_028 q25 -0.406 q75 0.819
+feature_017 q25 1.956 q75 3.559
+feature_023 q25 4.23 q75 5.669
+feature_031 q25 -0.567 q75 0.654
+feature_003 q25 -0.186 q75 0.428
+
+Selected Welch tests:
+feature_009 == 1                                        dependency_BRAF      n= 5574 mean=-0.804698 other=-0.249503 eff=-0.555195 p=0.0000e+00
+skin lineage                                            dependency_BRAF      n= 4935 mean=-0.472054 other=-0.293803 eff=-0.178251 p=2.5492e-151
+feature_009 == 1 AND skin                               dependency_BRAF      n= 1966 mean=-0.811388 other=-0.290932 eff=-0.520456 p=0.0000e+00
+feature_022 == 1                                        dependency_EGFR      n= 3880 mean=-0.601046 other=-0.252407 eff=-0.348638 p=0.0000e+00
+feature_022 == 1 AND high feature_016                   dependency_EGFR      n=  964 mean=-0.625265 other=-0.272664 eff=-0.352601 p=3.5369e-149
+feature_024 == 1                                        dependency_ERBB2     n= 4890 mean=-0.685595 other=-0.253473 eff=-0.432122 p=0.0000e+00
+feature_024 == 1 AND high feature_026                   dependency_ERBB2     n= 1190 mean=-0.707797 other=-0.285688 eff=-0.422108 p=1.3911e-230
+feature_014 == 1                                        dependency_KRAS      n=11842 mean=-0.559415 other=-0.251959 eff=-0.307456 p=0.0000e+00
+feature_014 == 1 AND pancreatic                         dependency_KRAS      n= 2913 mean=-0.559098 other=-0.310281 eff=-0.248817 p=6.4331e-251
+feature_027 == 1                                        dependency_RIT1      n= 4560 mean=-0.352716 other=-0.257196 eff=-0.095520 p=1.5528e-68
+feature_027 == 1 AND brain                              dependency_RIT1      n=  329 mean=-0.404687 other=-0.264988 eff=-0.139699 p=1.0123e-12
+colorectal                                              dependency_KIF18A    n= 5816 mean=-0.720354 other=-0.252397 eff=-0.467957 p=0.0000e+00
+feature_035 == 1                                        dependency_KIF18A    n= 9285 mean=-0.544702 other=-0.252583 eff=-0.292118 p=0.0000e+00
+high feature_028                                        dependency_KIF18A    n=12508 mean=-0.469402 other=-0.252593 eff=-0.216810 p=0.0000e+00
+colorectal AND feature_035 == 1                         dependency_KIF18A    n= 3925 mean=-0.942531 other=-0.252676 eff=-0.689855 p=0.0000e+00
+colorectal AND feature_035 == 1 AND high feature_028    dependency_KIF18A    n= 3133 mean=-1.111866 other=-0.253014 eff=-0.858852 p=0.0000e+00
+high feature_016                                        dependency_TMED10    n=12577 mean=-0.281605 other=-0.244729 eff=-0.036876 p=2.5201e-24
+high feature_016 AND feature_027 == 1 AND low feature_017 dependency_TMED10    n=  307 mean=-0.355564 other=-0.253377 eff=-0.102186 p=6.8787e-08
+high feature_016                                        dependency_DHX9      n=12577 mean=-0.361423 other=-0.324339 eff=-0.037084 p=1.7086e-24
+high feature_023                                        dependency_DHX9      n=12501 mean=-0.355124 other=-0.326514 eff=-0.028610 p=2.0502e-15
+squamous AND high feature_023 AND feature_029 == 0      dependency_DHX9      n=  488 mean=-0.416840 other=-0.332847 eff=-0.083993 p=1.5707e-07
+high feature_016                                        dependency_POLR2A    n=12577 mean=-0.497174 other=-0.392828 eff=-0.104346 p=1.0105e-179
+skin AND high feature_016 AND high feature_026          dependency_POLR2A    n=  315 mean=-0.547375 other=-0.418262 eff=-0.129113 p=2.4322e-10
+feature_018 == 1                                        dependency_RPL11     n= 8055 mean=-0.361392 other=-0.252335 eff=-0.109056 p=5.7118e-140
+high feature_003                                        dependency_RPL11     n=12501 mean=-0.343967 other=-0.245214 eff=-0.098753 p=7.6099e-160
+feature_018 == 1 AND high feature_016 AND high feature_031 dependency_RPL11     n=  609 mean=-0.419266 other=-0.268063 eff=-0.151203 p=1.4759e-24
+
+Within-subgroup contrasts:
+KIF18A within colorectal enabled n=3133 vs other colorectal n=2683 mean=-1.111866 other=-0.263175 eff=-0.848691 p=0.0000e+00
+feature_035 effect inside colorectal & high028: n=3133 vs 873 mean=-1.111866 other=-0.271825 eff=-0.840041 p=0.0000e+00
+high028 effect inside colorectal & feature_035=1: n=3133 vs 792 mean=-1.111866 other=-0.272673 eff=-0.839193 p=0.0000e+00
+colorectal effect inside feature_035=1 & high028: n=3133 vs 2494 mean=-1.111866 other=-0.252815 eff=-0.859051 p=0.0000e+00
+
+Interaction OLS:
+OLS dependency_EGFR      feature_022:high016                 beta=+0.000883 se=0.013494 p=9.4783e-01
+OLS dependency_ERBB2     feature_024:high026                 beta=-0.011056 se=0.012310 p=3.6913e-01
+OLS dependency_KRAS      feature_014:pancreatic              beta=-0.002798 se=0.010759 p=7.9480e-01
+OLS dependency_RIT1      feature_027:brain                   beta=-0.058229 se=0.021035 p=5.6383e-03
+OLS dependency_KIF18A    colorectal:feature_035:high028      beta=-0.817660 se=0.025403 p=5.3692e-225
+OLS dependency_TMED10    high016:feature_027:low017          beta=-0.071234 se=0.028522 p=1.2511e-02
+OLS dependency_DHX9      high016:high023                     beta=-0.013266 se=0.008224 p=1.0675e-01
+OLS dependency_POLR2A    high016:high026:skin                beta=-0.022667 se=0.027857 p=4.1583e-01
+OLS dependency_RPL11     feature_018:high016:high031         beta=-0.021184 se=0.021831 p=3.3188e-01
+
+Adjusted key coefficients in all-main-effect model:
+dependency_BRAF      feature_009                beta=-0.554280 se=0.005230 p=0.0000e+00
+dependency_EGFR      feature_022                beta=-0.349177 se=0.005890 p=0.0000e+00
+dependency_ERBB2     feature_024                beta=-0.432718 se=0.005300 p=0.0000e+00
+dependency_KRAS      feature_014                beta=-0.309702 se=0.003658 p=0.0000e+00
+dependency_RIT1      feature_027                beta=-0.095469 se=0.005433 p=6.5274e-69
+dependency_KIF18A    feature_011=colorectal     beta=-0.371385 se=0.006624 p=0.0000e+00
+dependency_KIF18A    feature_035                beta=-0.122115 se=0.005102 p=6.7211e-126
+dependency_KIF18A    feature_028_z              beta=-0.028818 se=0.001374 p=3.0053e-97
+dependency_TMED10    feature_016_z              beta=-0.020334 se=0.001568 p=2.1818e-38
+dependency_DHX9      feature_016_z              beta=-0.021480 se=0.001567 p=1.0399e-42
+dependency_DHX9      feature_023_z              beta=-0.016988 se=0.001665 p=2.0184e-24
+dependency_POLR2A    feature_016_z              beta=-0.061399 se=0.001571 p=0.0000e+00
+dependency_RPL11     feature_018                beta=+0.009026 se=0.006710 p=1.7856e-01
+dependency_RPL11     feature_003_z              beta=-0.055821 se=0.002392 p=8.1065e-120
+
+exec
+/bin/bash -lc "python - <<'PY'
+import pandas as pd, numpy as np
+from scipy import stats
+
+df=pd.read_parquet('dataset.parquet')
+features=[c for c in df.columns if c.startswith('feature_')]
+cat=[c for c in features if df[c].dtype=='object' and c"'!='"'feature_004'] # omit culture, largely redundant with lineage
+bin_f=[c for c in features if df[c].dtype"'!='"'object' and set(df[c].unique()).issubset({0,1})]
+cont=[c for c in features if df[c].dtype"'!='"'object' and c"'!='"'feature_001' and c not in bin_f]
+X_parts=[np.ones(len(df))]; names=['Intercept']
+for c in cat:
+    vals=sorted(df[c].unique())
+    for v in vals[1:]:
+        names.append(f'{c}={v}')
+        X_parts.append(df[c].eq(v).to_numpy(float))
+for v in sorted(df['feature_001'].unique())[1:]:
+    names.append(f'feature_001={v:g}')
+    X_parts.append(df['feature_001'].eq(v).to_numpy(float))
+for c in bin_f:
+    names.append(c)
+    X_parts.append(df[c].to_numpy(float))
+for c in cont:
+    x=df[c].to_numpy(float)
+    names.append(f'{c}_z')
+    X_parts.append((x-x.mean())/x.std(ddof=0))
+X=np.column_stack(X_parts)
+rank=np.linalg.matrix_rank(X)
+print('X shape',X.shape,'rank',rank)
+
+def ols(y,term):
+    y=np.asarray(y,float); beta=np.linalg.lstsq(X,y,rcond=None)[0]
+    resid=y-X@beta; n,p=X.shape; dfree=n-rank
+    s2=float(resid@resid/dfree)
+    cov=np.linalg.pinv(X.T@X)*s2
+    se=np.sqrt(np.maximum(np.diag(cov),0))
+    t=beta/se
+    pv=2*stats.t.sf(np.abs(t), dfree)
+    i=names.index(term)
+    return beta[i],se[i],pv[i]
+keys=[
+('dependency_BRAF','feature_009'),('dependency_EGFR','feature_022'),('dependency_ERBB2','feature_024'),('dependency_KRAS','feature_014'),('dependency_RIT1','feature_027'),('dependency_KIF18A','feature_011=colorectal'),('dependency_KIF18A','feature_035'),('dependency_KIF18A','feature_028_z'),('dependency_TMED10','feature_016_z'),('dependency_DHX9','feature_016_z'),('dependency_DHX9','feature_023_z'),('dependency_POLR2A','feature_016_z'),('dependency_RPL11','feature_018'),('dependency_RPL11','feature_003_z'),('dependency_RPL11','feature_016_z')]
+for out,term in keys:
+    b,se,p=ols(df[out].to_numpy(),term)
+    print(f\"{out:20s} {term:26s} beta={b:+.6f} se={se:.6f} p={p:.4e}\")
+PY" in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+ succeeded in 15599ms:
+X shape (50000, 51) rank 49
+dependency_BRAF      feature_009                beta=-0.554292 se=0.005229 p=0.0000e+00
+dependency_EGFR      feature_022                beta=-0.349174 se=0.005904 p=0.0000e+00
+dependency_ERBB2     feature_024                beta=-0.432693 se=0.005312 p=0.0000e+00
+dependency_KRAS      feature_014                beta=-0.309702 se=0.003908 p=0.0000e+00
+dependency_RIT1      feature_027                beta=-0.095478 se=0.005432 p=6.1322e-69
+dependency_KIF18A    feature_011=colorectal     beta=-0.371405 se=0.009138 p=0.0000e+00
+dependency_KIF18A    feature_035                beta=-0.122173 se=0.005348 p=6.1353e-115
+dependency_KIF18A    feature_028_z              beta=-0.028809 se=0.002316 p=1.8076e-35
+dependency_TMED10    feature_016_z              beta=-0.020325 se=0.001568 p=2.3826e-38
+dependency_DHX9      feature_016_z              beta=-0.021486 se=0.001567 p=1.0004e-42
+dependency_DHX9      feature_023_z              beta=-0.016992 se=0.001663 p=1.7993e-24
+dependency_POLR2A    feature_016_z              beta=-0.061396 se=0.001571 p=0.0000e+00
+dependency_RPL11     feature_018                beta=+0.009016 se=0.006682 p=1.7725e-01
+dependency_RPL11     feature_003_z              beta=-0.055791 se=0.002384 p=1.7993e-120
+dependency_RPL11     feature_016_z              beta=-0.019548 se=0.001574 p=2.2227e-35
+
+codex
+I have enough evidence to finalize. I’m writing the required JSON transcript and the plain-text synthesis in the current directory, with the systematic subgroup-search results included as explicit iterations.
+exec
+/bin/bash -lc "python - <<'PY'
+import json
+from pathlib import Path
+import pandas as pd
+import numpy as np
+from scipy import stats
+
+base = Path('.')
+df = pd.read_parquet(base / 'dataset.parquet')
+N = len(df)
+
+def pformat(p):
+    if p == 0 or p < 1e-300:
+        return '<1e-300'
+    return f'{p:.3g}'
+
+def welch(outcome, mask):
+    m = np.asarray(mask, dtype=bool)
+    y = df[outcome].to_numpy(float)
+    a = y[m]
+    b = y[~m]
+    res = stats.ttest_ind(a, b, equal_var=False)
+    return {
+        'n': int(m.sum()),
+        'group_mean': float(a.mean()),
+        'comparator_mean': float(b.mean()),
+        'effect': float(a.mean() - b.mean()),
+        'p': float(res.pvalue),
+    }
+
+def subset_contrast(outcome, mask_a, mask_b):
+    a = df.loc[mask_a, outcome].to_numpy(float)
+    b = df.loc[mask_b, outcome].to_numpy(float)
+    res = stats.ttest_ind(a, b, equal_var=False)
+    return {
+        'n': int(len(a)),
+        'comparator_n': int(len(b)),
+        'group_mean': float(a.mean()),
+        'comparator_mean': float(b.mean()),
+        'effect': float(a.mean() - b.mean()),
+        'p': float(res.pvalue),
+    }
+
+def ols_term(outcome, terms, term_name):
+    names = ['Intercept'] + list(terms.keys())
+    X = np.column_stack([np.ones(N)] + [np.asarray(v, dtype=float) for v in terms.values()])
+    y = df[outcome].to_numpy(float)
+    beta = np.linalg.lstsq(X, y, rcond=None)[0]
+    resid = y - X @ beta
+    n, p = X.shape
+    rank = np.linalg.matrix_rank(X)
+    dfree = n - rank
+    s2 = float(resid @ resid / dfree)
+    cov = np.linalg.pinv(X.T @ X) * s2
+    se = np.sqrt(np.maximum(np.diag(cov), 0))
+    t = beta / se
+    pv = 2 * stats.t.sf(np.abs(t), dfree)
+    i = names.index(term_name)
+    return {
+        'effect': float(beta[i]),
+        'se': float(se[i]),
+        'p': float(pv[i]),
+        'df': int(dfree),
+    }
+
+def adjusted_design():
+    features = [c for c in df.columns if c.startswith('feature_')]
+    cat = [c for c in features if df[c].dtype == 'object' and c "'!= '"'feature_004']
+    bin_f = [c for c in features if df[c].dtype "'!= '"'object' and set(df[c].unique()).issubset({0, 1})]
+    cont = [c for c in features if df[c].dtype "'!= '"'object' and c "'!= '"'feature_001' and c not in bin_f]
+    X_parts = [np.ones(N)]
+    names = ['Intercept']
+    for c in cat:
+        vals = sorted(df[c].unique())
+        for v in vals[1:]:
+            names.append(f'{c}={v}')
+            X_parts.append(df[c].eq(v).to_numpy(float))
+    for v in sorted(df['feature_001'].unique())[1:]:
+        names.append(f'feature_001={v:g}')
+        X_parts.append(df['feature_001'].eq(v).to_numpy(float))
+    for c in bin_f:
+        names.append(c)
+        X_parts.append(df[c].to_numpy(float))
+    for c in cont:
+        x = df[c].to_numpy(float)
+        names.append(f'{c}_z')
+        X_parts.append((x - x.mean()) / x.std(ddof=0))
+    return np.column_stack(X_parts), names
+
+X_adj, adj_names = adjusted_design()
+adj_rank = np.linalg.matrix_rank(X_adj)
+
+def adjusted_term(outcome, term_name):
+    y = df[outcome].to_numpy(float)
+    beta = np.linalg.lstsq(X_adj, y, rcond=None)[0]
+    resid = y - X_adj @ beta
+    dfree = N - adj_rank
+    s2 = float(resid @ resid / dfree)
+    cov = np.linalg.pinv(X_adj.T @ X_adj) * s2
+    se = np.sqrt(np.maximum(np.diag(cov), 0))
+    t = beta / se
+    pv = 2 * stats.t.sf(np.abs(t), dfree)
+    i = adj_names.index(term_name)
+    return {'effect': float(beta[i]), 'se': float(se[i]), 'p': float(pv[i]), 'df': int(dfree)}
+
+def make_analysis(hids, method, summary, result, extra=None):
+    rec = {
+        'hypothesis_ids': hids,
+        'method': method,
+        'result_summary': summary,
+        'effect_estimate': result.get('effect'),
+        'p_value': result.get('p'),
+        'significant': bool(result.get('p') is not None and result.get('p') < 0.05),
+    }
+    for key in ['n', 'comparator_n', 'group_mean', 'comparator_mean', 'se', 'df']:
+        if key in result:
+            rec[key] = result[key]
+    if extra:
+        rec.update(extra)
+    return rec
+
+def t_summary(label, outcome, r):
+    return (f'{label}: mean {outcome} was {r[\"group_mean\"]:.3f} in the subgroup '
+            f'(n={r[\"n\"]}) versus {r[\"comparator_mean\"]:.3f} in all other lines; '
+            f'signed mean difference {r[\"effect\"]:.3f}, Welch p={pformat(r[\"p\"])}.')
+
+def ols_summary(label, outcome, r):
+    return (f'{label}: OLS coefficient for {outcome} was {r[\"effect\"]:.3f} '
+            f'(SE {r[\"se\"]:.3f}, p={pformat(r[\"p\"])}).')
+
+# Common masks and thresholds.
+q016 = float(df['feature_016'].quantile(.75))
+q026 = float(df['feature_026'].quantile(.75))
+q028 = float(df['feature_028'].quantile(.75))
+q017_low = float(df['feature_017'].quantile(.25))
+q023 = float(df['feature_023'].quantile(.75))
+q031 = float(df['feature_031'].quantile(.75))
+q003 = float(df['feature_003'].quantile(.75))
+q033 = float(df['feature_033'].quantile(.75))
+
+high016 = df['feature_016'] >= q016
+high026 = df['feature_026'] >= q026
+high028 = df['feature_028'] >= q028
+low017 = df['feature_017'] <= q017_low
+high023 = df['feature_023'] >= q023
+high031 = df['feature_031'] >= q031
+high003 = df['feature_003'] >= q003
+high033 = df['feature_033'] >= q033
+col = df['feature_011'].eq('colorectal')
+skin = df['feature_011'].eq('skin')
+brain = df['feature_011'].eq('brain')
+panc = df['feature_011'].eq('pancreatic')
+squam = df['feature_010'].eq('squamous')
+adherent = df['feature_004'].eq('adherent')
+
+# Precompute results used in transcript.
+R = {}
+R['braf_f009'] = welch('dependency_BRAF', df['feature_009'].eq(1))
+R['egfr_f022'] = welch('dependency_EGFR', df['feature_022'].eq(1))
+R['erbb2_f024'] = welch('dependency_ERBB2', df['feature_024'].eq(1))
+R['kras_f014'] = welch('dependency_KRAS', df['feature_014'].eq(1))
+R['braf_skin'] = welch('dependency_BRAF', skin)
+R['braf_skin_f009'] = welch('dependency_BRAF', skin & df['feature_009'].eq(1))
+R['kras_pan_f014'] = welch('dependency_KRAS', panc & df['feature_014'].eq(1))
+R['kras_pan_int'] = ols_term('dependency_KRAS', {
+    'feature_014': df['feature_014'].eq(1),
+    'pancreatic': panc,
+    'feature_014:pancreatic': df['feature_014'].eq(1) & panc,
+}, 'feature_014:pancreatic')
+R['rit1_f027'] = welch('dependency_RIT1', df['feature_027'].eq(1))
+R['kif_col'] = welch('dependency_KIF18A', col)
+R['kif_f035'] = welch('dependency_KIF18A', df['feature_035'].eq(1))
+R['kif_high028'] = welch('dependency_KIF18A', high028)
+R['kif_triple'] = welch('dependency_KIF18A', col & df['feature_035'].eq(1) & high028)
+R['kif_triple_within_col'] = subset_contrast('dependency_KIF18A', col & df['feature_035'].eq(1) & high028, col & ~(df['feature_035'].eq(1) & high028))
+A = col; B = df['feature_035'].eq(1); C = high028
+R['kif_3way'] = ols_term('dependency_KIF18A', {
+    'colorectal': A, 'feature_035': B, 'high_feature_028': C,
+    'colorectal:feature_035': A & B,
+    'colorectal:high_feature_028': A & C,
+    'feature_035:high_feature_028': B & C,
+    'colorectal:feature_035:high_feature_028': A & B & C,
+}, 'colorectal:feature_035:high_feature_028')
+R['tmed10_high016'] = welch('dependency_TMED10', high016)
+R['dhx9_high016'] = welch('dependency_DHX9', high016)
+R['polr2a_high016'] = welch('dependency_POLR2A', high016)
+R['rpl11_high016'] = welch('dependency_RPL11', high016)
+R['rpl11_high003'] = welch('dependency_RPL11', high003)
+R['rpl11_f018'] = welch('dependency_RPL11', df['feature_018'].eq(1))
+R['dhx9_high023'] = welch('dependency_DHX9', high023)
+R['rpl11_adj_f003'] = adjusted_term('dependency_RPL11', 'feature_003_z')
+R['rpl11_adj_f018'] = adjusted_term('dependency_RPL11', 'feature_018')
+
+# Search top masks from the completed exhaustive 1-3 predicate scans.
+R['search_braf'] = welch('dependency_BRAF', df['feature_009'].eq(1) & high026 & high033)
+R['search_egfr'] = welch('dependency_EGFR', adherent & high016 & df['feature_022'].eq(1))
+R['search_erbb2'] = welch('dependency_ERBB2', high023 & df['feature_024'].eq(1) & high026)
+R['search_kras'] = welch('dependency_KRAS', df['feature_014'].eq(1) & high016 & (df['feature_028'] <= float(df['feature_028'].quantile(.25))))
+R['search_rit1'] = welch('dependency_RIT1', brain & df['feature_027'].eq(1))
+R['rit1_brain_int'] = ols_term('dependency_RIT1', {
+    'feature_027': df['feature_027'].eq(1),
+    'brain': brain,
+    'feature_027:brain': df['feature_027'].eq(1) & brain,
+}, 'feature_027:brain')
+R['search_tmed10'] = welch('dependency_TMED10', high016 & df['feature_027'].eq(1) & low017)
+R['tmed10_3way'] = ols_term('dependency_TMED10', {
+    'high_feature_016': high016,
+    'feature_027': df['feature_027'].eq(1),
+    'low_feature_017': low017,
+    'high_feature_016:feature_027': high016 & df['feature_027'].eq(1),
+    'high_feature_016:low_feature_017': high016 & low017,
+    'feature_027:low_feature_017': df['feature_027'].eq(1) & low017,
+    'high_feature_016:feature_027:low_feature_017': high016 & df['feature_027'].eq(1) & low017,
+}, 'high_feature_016:feature_027:low_feature_017')
+R['search_dhx9'] = welch('dependency_DHX9', squam & high023 & df['feature_029'].eq(0))
+R['dhx9_int'] = ols_term('dependency_DHX9', {
+    'high_feature_016': high016,
+    'high_feature_023': high023,
+    'high_feature_016:high_feature_023': high016 & high023,
+}, 'high_feature_016:high_feature_023')
+R['search_polr2a'] = welch('dependency_POLR2A', skin & high016 & high026)
+R['polr2a_3way'] = ols_term('dependency_POLR2A', {
+    'high_feature_016': high016,
+    'high_feature_026': high026,
+    'skin': skin,
+    'high_feature_016:high_feature_026': high016 & high026,
+    'high_feature_016:skin': high016 & skin,
+    'high_feature_026:skin': high026 & skin,
+    'high_feature_016:high_feature_026:skin': high016 & high026 & skin,
+}, 'high_feature_016:high_feature_026:skin')
+R['search_rpl11'] = welch('dependency_RPL11', df['feature_018'].eq(1) & high016 & high031)
+R['rpl11_3way'] = ols_term('dependency_RPL11', {
+    'feature_018': df['feature_018'].eq(1),
+    'high_feature_016': high016,
+    'high_feature_031': high031,
+    'feature_018:high_feature_016': df['feature_018'].eq(1) & high016,
+    'feature_018:high_feature_031': df['feature_018'].eq(1) & high031,
+    'high_feature_016:high_feature_031': high016 & high031,
+    'feature_018:high_feature_016:high_feature_031': df['feature_018'].eq(1) & high016 & high031,
+}, 'feature_018:high_feature_016:high_feature_031')
+
+# Adjusted main effects.
+for key, outcome, term in [
+    ('adj_braf', 'dependency_BRAF', 'feature_009'),
+    ('adj_egfr', 'dependency_EGFR', 'feature_022'),
+    ('adj_erbb2', 'dependency_ERBB2', 'feature_024'),
+    ('adj_kras', 'dependency_KRAS', 'feature_014'),
+    ('adj_rit1', 'dependency_RIT1', 'feature_027'),
+    ('adj_kif_col', 'dependency_KIF18A', 'feature_011=colorectal'),
+    ('adj_kif_f035', 'dependency_KIF18A', 'feature_035'),
+    ('adj_kif_f028', 'dependency_KIF18A', 'feature_028_z'),
+    ('adj_tmed10_f016', 'dependency_TMED10', 'feature_016_z'),
+    ('adj_dhx9_f016', 'dependency_DHX9', 'feature_016_z'),
+    ('adj_dhx9_f023', 'dependency_DHX9', 'feature_023_z'),
+    ('adj_polr2a_f016', 'dependency_POLR2A', 'feature_016_z'),
+    ('adj_rpl11_f003', 'dependency_RPL11', 'feature_003_z'),
+    ('adj_rpl11_f018', 'dependency_RPL11', 'feature_018'),
+]:
+    R[key] = adjusted_term(outcome, term)
+
+iterations = []
+iterations.append({
+    'index': 1,
+    'proposed_hypotheses': [
+        {'id': 'h1', 'text': 'Cell lines with "'`feature_009 == 1` have more negative `dependency_BRAF` scores than cell lines with `feature_009 == 0`.'"', 'kind': 'novel'},
+        {'id': 'h2', 'text': 'Cell lines with "'`feature_022 == 1` have more negative `dependency_EGFR` scores than cell lines with `feature_022 == 0`.'"', 'kind': 'novel'},
+        {'id': 'h3', 'text': 'Cell lines with "'`feature_024 == 1` have more negative `dependency_ERBB2` scores than cell lines with `feature_024 == 0`.'"', 'kind': 'novel'},
+        {'id': 'h4', 'text': 'Cell lines with "'`feature_014 == 1` have more negative `dependency_KRAS` scores than cell lines with `feature_014 == 0`.'"', 'kind': 'novel'},
+    ],
+    'analyses': [
+        make_analysis(['h1'], 'Welch two-sample t-test', t_summary('"'`feature_009 == 1`'"', 'dependency_BRAF', R['braf_f009']), R['braf_f009']),
+        make_analysis(['h2'], 'Welch two-sample t-test', t_summary('"'`feature_022 == 1`'"', 'dependency_EGFR', R['egfr_f022']), R['egfr_f022']),
+        make_analysis(['h3'], 'Welch two-sample t-test', t_summary('"'`feature_024 == 1`'"', 'dependency_ERBB2', R['erbb2_f024']), R['erbb2_f024']),
+        make_analysis(['h4'], 'Welch two-sample t-test', t_summary('"'`feature_014 == 1`'"', 'dependency_KRAS', R['kras_f014']), R['kras_f014']),
+    ]
+})
+iterations.append({
+    'index': 2,
+    'proposed_hypotheses': [
+        {'id': 'h5', 'text': 'Skin-lineage cell lines ("'`feature_011 == skin`) have more negative `dependency_BRAF` scores than non-skin cell lines.'"', 'kind': 'refined'},
+        {'id': 'h6', 'text': 'Cell lines satisfying both "'`feature_009 == 1` and `feature_011 == skin` have more negative `dependency_BRAF` scores than all other cell lines.'"', 'kind': 'refined'},
+        {'id': 'h7', 'text': 'Cell lines satisfying both "'`feature_014 == 1` and `feature_011 == pancreatic` have more negative `dependency_KRAS` scores than all other cell lines, and pancreatic lineage further strengthens the `feature_014` effect.'"', 'kind': 'refined'},
+    ],
+    'analyses': [
+        make_analysis(['h5'], 'Welch two-sample t-test', t_summary('"'`feature_011 == skin`'"', 'dependency_BRAF', R['braf_skin']), R['braf_skin']),
+        make_analysis(['h6'], 'Welch two-sample t-test', t_summary('"'`feature_009 == 1` and skin lineage'"', 'dependency_BRAF', R['braf_skin_f009']), R['braf_skin_f009']),
+        make_analysis(['h7'], 'Welch two-sample t-test', t_summary('"'`feature_014 == 1` and pancreatic lineage'"', 'dependency_KRAS', R['kras_pan_f014']), R['kras_pan_f014']),
+        make_analysis(['h7'], 'OLS interaction model', ols_summary('"'`feature_014:pancreatic` interaction'"', 'dependency_KRAS', R['kras_pan_int']), R['kras_pan_int']),
+    ]
+})
+iterations.append({
+    'index': 3,
+    'proposed_hypotheses': [
+        {'id': 'h8', 'text': 'Cell lines with "'`feature_027 == 1` have more negative `dependency_RIT1` scores than cell lines with `feature_027 == 0`.'"', 'kind': 'novel'},
+        {'id': 'h9', 'text': 'Colorectal cell lines ("'`feature_011 == colorectal`) have more negative `dependency_KIF18A` scores than non-colorectal cell lines.'"', 'kind': 'novel'},
+        {'id': 'h10', 'text': 'Cell lines with "'`feature_035 == 1` have more negative `dependency_KIF18A` scores than cell lines with `feature_035 == 0`.'"', 'kind': 'novel'},
+        {'id': 'h11', 'text': f'Cell lines with high "'`feature_028` (`feature_028 >= {q028:.3f}`) have more negative `dependency_KIF18A` scores than other cell lines.'"', 'kind': 'novel'},
+    ],
+    'analyses': [
+        make_analysis(['h8'], 'Welch two-sample t-test', t_summary('"'`feature_027 == 1`'"', 'dependency_RIT1', R['rit1_f027']), R['rit1_f027']),
+        make_analysis(['h9'], 'Welch two-sample t-test', t_summary('"'`feature_011 == colorectal`'"', 'dependency_KIF18A', R['kif_col']), R['kif_col']),
+        make_analysis(['h10'], 'Welch two-sample t-test', t_summary('"'`feature_035 == 1`'"', 'dependency_KIF18A', R['kif_f035']), R['kif_f035']),
+        make_analysis(['h11'], 'Welch two-sample t-test', t_summary(f'"'`feature_028 >= {q028:.3f}`'"', 'dependency_KIF18A', R['kif_high028']), R['kif_high028']),
+    ]
+})
+iterations.append({
+    'index': 4,
+    'proposed_hypotheses': [
+        {'id': 'h12', 'text': f'Cell lines with "'`feature_011 == colorectal`, `feature_035 == 1`, and high `feature_028` (`feature_028 >= {q028:.3f}`) have much more negative `dependency_KIF18A` scores than all other cell lines.'"', 'kind': 'refined'},
+        {'id': 'h13', 'text': f'Within colorectal cell lines, the complete subgroup "'`feature_035 == 1` and `feature_028 >= {q028:.3f}` has more negative `dependency_KIF18A` scores than other colorectal cell lines.'"', 'kind': 'refined'},
+        {'id': 'h14', 'text': f'The combination "'`feature_011 == colorectal`, `feature_035 == 1`, and `feature_028 >= {q028:.3f}` has a negative three-way interaction for `dependency_KIF18A`, beyond the lower-order terms.'"', 'kind': 'refined'},
+    ],
+    'analyses': [
+        make_analysis(['h12'], 'Welch two-sample t-test', t_summary(f'colorectal AND "'`feature_035 == 1` AND `feature_028 >= {q028:.3f}`'"', 'dependency_KIF18A', R['kif_triple']), R['kif_triple']),
+        make_analysis(['h13'], 'Within-colorectal Welch t-test', (f'Within colorectal lines, the complete subgroup mean "'`dependency_KIF18A` was {R["kif_triple_within_col"]["group_mean"]:.3f} (n={R["kif_triple_within_col"]["n"]}) versus {R["kif_triple_within_col"]["comparator_mean"]:.3f} in other colorectal lines (n={R["kif_triple_within_col"]["comparator_n"]}); signed difference {R["kif_triple_within_col"]["effect"]:.3f}, p={pformat(R["kif_triple_within_col"]["p"])}.'"'), R['kif_triple_within_col']),
+        make_analysis(['h14'], 'OLS saturated three-way interaction model', ols_summary('three-way KIF18A interaction', 'dependency_KIF18A', R['kif_3way']), R['kif_3way']),
+    ]
+})
+iterations.append({
+    'index': 5,
+    'proposed_hypotheses': [
+        {'id': 'h15', 'text': f'Cell lines with high "'`feature_016` (`feature_016 >= {q016:.3f}`) have more negative `dependency_TMED10` scores than other cell lines.'"', 'kind': 'novel'},
+        {'id': 'h16', 'text': f'Cell lines with high "'`feature_016` (`feature_016 >= {q016:.3f}`) have more negative `dependency_DHX9` scores than other cell lines.'"', 'kind': 'novel'},
+        {'id': 'h17', 'text': f'Cell lines with high "'`feature_016` (`feature_016 >= {q016:.3f}`) have more negative `dependency_POLR2A` scores than other cell lines.'"', 'kind': 'novel'},
+        {'id': 'h18', 'text': f'Cell lines with high "'`feature_016` (`feature_016 >= {q016:.3f}`) have more negative `dependency_RPL11` scores than other cell lines.'"', 'kind': 'novel'},
+    ],
+    'analyses': [
+        make_analysis(['h15'], 'Welch two-sample t-test', t_summary(f'"'`feature_016 >= {q016:.3f}`'"', 'dependency_TMED10', R['tmed10_high016']), R['tmed10_high016']),
+        make_analysis(['h16'], 'Welch two-sample t-test', t_summary(f'"'`feature_016 >= {q016:.3f}`'"', 'dependency_DHX9', R['dhx9_high016']), R['dhx9_high016']),
+        make_analysis(['h17'], 'Welch two-sample t-test', t_summary(f'"'`feature_016 >= {q016:.3f}`'"', 'dependency_POLR2A', R['polr2a_high016']), R['polr2a_high016']),
+        make_analysis(['h18'], 'Welch two-sample t-test', t_summary(f'"'`feature_016 >= {q016:.3f}`'"', 'dependency_RPL11', R['rpl11_high016']), R['rpl11_high016']),
+    ]
+})
+iterations.append({
+    'index': 6,
+    'proposed_hypotheses': [
+        {'id': 'h19', 'text': f'Cell lines with high "'`feature_003` (`feature_003 >= {q003:.3f}`) have more negative `dependency_RPL11` scores than other cell lines.'"', 'kind': 'refined'},
+        {'id': 'h20', 'text': 'Cell lines with "'`feature_018 == 1` have more negative `dependency_RPL11` scores than cell lines with `feature_018 == 0`.'"', 'kind': 'refined'},
+        {'id': 'h21', 'text': f'Cell lines with high "'`feature_023` (`feature_023 >= {q023:.3f}`) have more negative `dependency_DHX9` scores than other cell lines.'"', 'kind': 'refined'},
+        {'id': 'h22', 'text': 'In a multivariable main-effect model, "'`feature_003` remains a negative independent predictor of `dependency_RPL11`, whereas `feature_018` is not independently negative after adjustment.'"', 'kind': 'refined'},
+    ],
+    'analyses': [
+        make_analysis(['h19'], 'Welch two-sample t-test', t_summary(f'"'`feature_003 >= {q003:.3f}`'"', 'dependency_RPL11', R['rpl11_high003']), R['rpl11_high003']),
+        make_analysis(['h20'], 'Welch two-sample t-test', t_summary('"'`feature_018 == 1`'"', 'dependency_RPL11', R['rpl11_f018']), R['rpl11_f018']),
+        make_analysis(['h21'], 'Welch two-sample t-test', t_summary(f'"'`feature_023 >= {q023:.3f}`'"', 'dependency_DHX9', R['dhx9_high023']), R['dhx9_high023']),
+        make_analysis(['h22'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_003_z` coefficient'"', 'dependency_RPL11', R['rpl11_adj_f003']), R['rpl11_adj_f003']),
+        make_analysis(['h20', 'h22'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_018` coefficient'"', 'dependency_RPL11', R['rpl11_adj_f018']), R['rpl11_adj_f018']),
+    ]
+})
+iterations.append({
+    'index': 7,
+    'proposed_hypotheses': [
+        {'id': 'h23', 'text': f'An exhaustive one-to-three-predicate subgroup search for "'`dependency_BRAF` will find a more-negative subgroup containing `feature_009 == 1`; the top tested subgroup is `feature_009 == 1`, `feature_026 >= {q026:.3f}`, and `feature_033 >= {q033:.3f}`.'"', 'kind': 'refined'},
+        {'id': 'h24', 'text': f'An exhaustive one-to-three-predicate subgroup search for "'`dependency_EGFR` will find a more-negative subgroup containing `feature_022 == 1`; the top tested subgroup is `feature_004 == adherent`, `feature_016 >= {q016:.3f}`, and `feature_022 == 1`.'"', 'kind': 'refined'},
+        {'id': 'h25', 'text': f'An exhaustive one-to-three-predicate subgroup search for "'`dependency_ERBB2` will find a more-negative subgroup containing `feature_024 == 1`; the top tested subgroup is `feature_023 >= {q023:.3f}`, `feature_024 == 1`, and `feature_026 >= {q026:.3f}`.'"', 'kind': 'refined'},
+        {'id': 'h26', 'text': f'An exhaustive one-to-three-predicate subgroup search for "'`dependency_KRAS` will find a more-negative subgroup containing `feature_014 == 1`; the top tested subgroup is `feature_014 == 1`, `feature_016 >= {q016:.3f}`, and low `feature_028`.'"', 'kind': 'refined'},
+        {'id': 'h27', 'text': 'For "'`dependency_RIT1`, the subgroup `feature_011 == brain` and `feature_027 == 1` has more negative scores than other cell lines, and brain lineage negatively modifies the `feature_027` effect.'"', 'kind': 'refined'},
+    ],
+    'analyses': [
+        make_analysis(['h23'], 'Systematic subgroup search plus Welch t-test', t_summary('top BRAF search subgroup', 'dependency_BRAF', R['search_braf']), R['search_braf'], {'q_value': 6.4e-111, 'subgroups_tested': 6759}),
+        make_analysis(['h24'], 'Systematic subgroup search plus Welch t-test', t_summary('top EGFR search subgroup', 'dependency_EGFR', R['search_egfr']), R['search_egfr'], {'q_value': 2.2e-129, 'subgroups_tested': 6009}),
+        make_analysis(['h25'], 'Systematic subgroup search plus Welch t-test', t_summary('top ERBB2 search subgroup', 'dependency_ERBB2', R['search_erbb2']), R['search_erbb2'], {'q_value': 1.0e-65, 'subgroups_tested': 6485}),
+        make_analysis(['h26'], 'Systematic subgroup search plus Welch t-test', t_summary('top KRAS search subgroup', 'dependency_KRAS', R['search_kras']), R['search_kras'], {'q_value': 7.6e-84, 'subgroups_tested': 7308}),
+        make_analysis(['h27'], 'Systematic subgroup search plus Welch t-test', t_summary('top RIT1 search subgroup', 'dependency_RIT1', R['search_rit1']), R['search_rit1'], {'q_value': 8.0e-12, 'subgroups_tested': 6189}),
+        make_analysis(['h27'], 'OLS interaction model', ols_summary('"'`feature_027:brain` interaction'"', 'dependency_RIT1', R['rit1_brain_int']), R['rit1_brain_int']),
+    ]
+})
+iterations.append({
+    'index': 8,
+    'proposed_hypotheses': [
+        {'id': 'h28', 'text': f'For "'`dependency_KIF18A`, exhaustive subgroup search will nominate the complete subgroup `feature_011 == colorectal`, `feature_035 == 1`, and `feature_028 >= {q028:.3f}` as the most concentrated dependency subgroup.'"', 'kind': 'refined'},
+    ],
+    'analyses': [
+        make_analysis(['h28'], 'Systematic subgroup search plus Welch t-test', t_summary('top KIF18A search subgroup', 'dependency_KIF18A', R['kif_triple']), R['kif_triple'], {'q_value': 0.0, 'subgroups_tested': 8330}),
+        make_analysis(['h28'], 'OLS saturated three-way interaction model', ols_summary('top KIF18A three-way interaction', 'dependency_KIF18A', R['kif_3way']), R['kif_3way']),
+    ]
+})
+iterations.append({
+    'index': 9,
+    'proposed_hypotheses': [
+        {'id': 'h29', 'text': f'For "'`dependency_TMED10`, the subgroup `feature_016 >= {q016:.3f}`, `feature_027 == 1`, and `feature_017 <= {q017_low:.3f}` has more negative scores than other cell lines.'"', 'kind': 'refined'},
+        {'id': 'h30', 'text': f'For "'`dependency_DHX9`, the subgroup `feature_010 == squamous`, `feature_023 >= {q023:.3f}`, and `feature_029 == 0` has more negative scores than other cell lines.'"', 'kind': 'refined'},
+        {'id': 'h31', 'text': f'For "'`dependency_POLR2A`, the subgroup `feature_011 == skin`, `feature_016 >= {q016:.3f}`, and `feature_026 >= {q026:.3f}` has more negative scores than other cell lines.'"', 'kind': 'refined'},
+        {'id': 'h32', 'text': f'For "'`dependency_RPL11`, the subgroup `feature_018 == 1`, `feature_016 >= {q016:.3f}`, and `feature_031 >= {q031:.3f}` has more negative scores than other cell lines.'"', 'kind': 'refined'},
+    ],
+    'analyses': [
+        make_analysis(['h29'], 'Systematic subgroup search plus Welch t-test', t_summary('top TMED10 search subgroup', 'dependency_TMED10', R['search_tmed10']), R['search_tmed10'], {'q_value': 2.2e-6, 'subgroups_tested': 8579}),
+        make_analysis(['h29'], 'OLS saturated three-way interaction model', ols_summary('TMED10 three-way interaction', 'dependency_TMED10', R['tmed10_3way']), R['tmed10_3way']),
+        make_analysis(['h30'], 'Systematic subgroup search plus Welch t-test', t_summary('top DHX9 search subgroup', 'dependency_DHX9', R['search_dhx9']), R['search_dhx9'], {'q_value': 2.8e-6, 'subgroups_tested': 9485}),
+        make_analysis(['h30'], 'OLS interaction model', ols_summary('"'`feature_016 high:feature_023 high` interaction'"', 'dependency_DHX9', R['dhx9_int']), R['dhx9_int']),
+        make_analysis(['h31'], 'Systematic subgroup search plus Welch t-test', t_summary('top POLR2A search subgroup', 'dependency_POLR2A', R['search_polr2a']), R['search_polr2a'], {'q_value': 1.2e-9, 'subgroups_tested': 8281}),
+        make_analysis(['h31'], 'OLS saturated three-way interaction model', ols_summary('POLR2A three-way interaction', 'dependency_POLR2A', R['polr2a_3way']), R['polr2a_3way']),
+        make_analysis(['h32'], 'Systematic subgroup search plus Welch t-test', t_summary('top RPL11 search subgroup', 'dependency_RPL11', R['search_rpl11']), R['search_rpl11'], {'q_value': 8.7e-24, 'subgroups_tested': 8097}),
+        make_analysis(['h32'], 'OLS saturated three-way interaction model', ols_summary('RPL11 three-way interaction', 'dependency_RPL11', R['rpl11_3way']), R['rpl11_3way']),
+    ]
+})
+iterations.append({
+    'index': 10,
+    'proposed_hypotheses': [
+        {'id': 'h33', 'text': 'In a multivariable main-effect model, the driver-like flags "'`feature_009`, `feature_022`, `feature_024`, `feature_014`, and `feature_027` remain negative independent predictors of `dependency_BRAF`, `dependency_EGFR`, `dependency_ERBB2`, `dependency_KRAS`, and `dependency_RIT1`, respectively.'"', 'kind': 'refined'},
+        {'id': 'h34', 'text': 'In a multivariable main-effect model for "'`dependency_KIF18A`, colorectal lineage (`feature_011 == colorectal`), `feature_035`, and standardized `feature_028` each remain negative independent predictors.'"', 'kind': 'refined'},
+        {'id': 'h35', 'text': 'In multivariable main-effect models, standardized "'`feature_016` remains negatively associated with `dependency_TMED10`, `dependency_DHX9`, and `dependency_POLR2A`, while `dependency_RPL11` is independently associated with standardized `feature_003` rather than `feature_018`.'"', 'kind': 'refined'},
+    ],
+    'analyses': [
+        make_analysis(['h33'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_009` coefficient'"', 'dependency_BRAF', R['adj_braf']), R['adj_braf']),
+        make_analysis(['h33'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_022` coefficient'"', 'dependency_EGFR', R['adj_egfr']), R['adj_egfr']),
+        make_analysis(['h33'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_024` coefficient'"', 'dependency_ERBB2', R['adj_erbb2']), R['adj_erbb2']),
+        make_analysis(['h33'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_014` coefficient'"', 'dependency_KRAS', R['adj_kras']), R['adj_kras']),
+        make_analysis(['h33'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_027` coefficient'"', 'dependency_RIT1', R['adj_rit1']), R['adj_rit1']),
+        make_analysis(['h34'], 'Adjusted OLS main-effect model', ols_summary('adjusted colorectal coefficient', 'dependency_KIF18A', R['adj_kif_col']), R['adj_kif_col']),
+        make_analysis(['h34'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_035` coefficient'"', 'dependency_KIF18A', R['adj_kif_f035']), R['adj_kif_f035']),
+        make_analysis(['h34'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_028_z` coefficient'"', 'dependency_KIF18A', R['adj_kif_f028']), R['adj_kif_f028']),
+        make_analysis(['h35'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_016_z` coefficient'"', 'dependency_TMED10', R['adj_tmed10_f016']), R['adj_tmed10_f016']),
+        make_analysis(['h35'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_016_z` coefficient'"', 'dependency_DHX9', R['adj_dhx9_f016']), R['adj_dhx9_f016']),
+        make_analysis(['h35'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_023_z` coefficient'"', 'dependency_DHX9', R['adj_dhx9_f023']), R['adj_dhx9_f023']),
+        make_analysis(['h35'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_016_z` coefficient'"', 'dependency_POLR2A', R['adj_polr2a_f016']), R['adj_polr2a_f016']),
+        make_analysis(['h35'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_003_z` coefficient'"', 'dependency_RPL11', R['adj_rpl11_f003']), R['adj_rpl11_f003']),
+        make_analysis(['h35'], 'Adjusted OLS main-effect model', ols_summary('adjusted "'`feature_018` coefficient'"', 'dependency_RPL11', R['adj_rpl11_f018']), R['adj_rpl11_f018']),
+    ]
+})
+
+transcript = {
+    'dataset_id': 'ds001_depmap',
+    'model_id': 'gpt-5-codex',
+    'harness_id': 'codex-local-statistical-analysis@2026-05-05',
+    'max_iterations': 10,
+    'iterations': iterations,
+}
+(base / 'transcript.json').write_text(json.dumps(transcript, indent=2, sort_keys=False) + '\\n')
+
+summary = f'''CRISPR dependency map analysis summary for ds001_depmap
+
+I analyzed the 50,000-row local dataset using the supplied column description only. More negative dependency scores were interpreted as stronger knockout dependency. I used Welch two-sample tests for binary and subgroup contrasts, OLS terms for interaction and adjusted main-effect models, and an exhaustive one-to-three-predicate subgroup scan for each dependency outcome. Continuous high/low subgroup predicates used empirical quartiles.
+
+Iterations 1-2: driver-like main effects and lineage context
+The strongest main-effect findings were direct and highly significant. "'`feature_009 == 1` marked much stronger BRAF dependency: mean `dependency_BRAF` {R['"'braf_f009']['group_mean']:.3f} versus {R['braf_f009']['comparator_mean']:.3f}, effect {R['braf_f009']['effect']:.3f}, p={pformat(R['braf_f009']['p'])}. The parallel signals were "'`feature_022 == 1` for EGFR (effect {R['"'egfr_f022']['effect']:.3f}, p={pformat(R['egfr_f022']['p'])}), "'`feature_024 == 1` for ERBB2 (effect {R['"'erbb2_f024']['effect']:.3f}, p={pformat(R['erbb2_f024']['p'])}), and "'`feature_014 == 1` for KRAS (effect {R['"'kras_f014']['effect']:.3f}, p={pformat(R['kras_f014']['p'])}). Skin lineage also showed more negative BRAF scores (effect {R['braf_skin']['effect']:.3f}), but the more complete explanation remained "'`feature_009`. Pancreatic `feature_014 == 1` lines were KRAS-dependent versus all other lines, but the explicit `feature_014:pancreatic` interaction was not supported (beta {R['"'kras_pan_int']['effect']:.3f}, p={pformat(R['kras_pan_int']['p'])}).
+
+Iterations 3-4: RIT1 and KIF18A heterogeneity
+"'`feature_027 == 1` was associated with more negative RIT1 dependency (effect {R['"'rit1_f027']['effect']:.3f}, p={pformat(R['rit1_f027']['p'])}). KIF18A was the most heterogeneous outcome. Colorectal lineage alone had a large effect (effect {R['kif_col']['effect']:.3f}), as did "'`feature_035 == 1` (effect {R['"'kif_f035']['effect']:.3f}) and high "'`feature_028` (effect {R['"'kif_high028']['effect']:.3f}). The complete KIF18A subgroup was "'`feature_011 == colorectal`, `feature_035 == 1`, and `feature_028 >= {q028:.3f}`: mean {R['"'kif_triple']['group_mean']:.3f} versus {R['kif_triple']['comparator_mean']:.3f}, effect {R['kif_triple']['effect']:.3f}, p={pformat(R['kif_triple']['p'])}. Within colorectal lines, this same complete subgroup was far more dependent than other colorectal lines (effect {R['kif_triple_within_col']['effect']:.3f}), and the saturated three-way interaction was strongly negative (beta {R['kif_3way']['effect']:.3f}, p={pformat(R['kif_3way']['p'])}).
+
+Iterations 5-6: shared process-like dependency signals
+High "'`feature_016` (`>= {q016:.3f}`) was consistently associated with more negative scores for TMED10 (effect {R['"'tmed10_high016']['effect']:.3f}), DHX9 (effect {R['dhx9_high016']['effect']:.3f}), POLR2A (effect {R['polr2a_high016']['effect']:.3f}), and RPL11 (effect {R['rpl11_high016']['effect']:.3f}), with the largest of these for POLR2A. For DHX9, high "'`feature_023` also contributed (effect {R['"'dhx9_high023']['effect']:.3f}, p={pformat(R['dhx9_high023']['p'])}). RPL11 initially appeared associated with both "'`feature_018 == 1` and high `feature_003`, but in the adjusted model the independent negative predictor was standardized `feature_003` (beta {R['"'adj_rpl11_f003']['effect']:.3f}, p={pformat(R['adj_rpl11_f003']['p'])}); adjusted "'`feature_018` was not independently negative (beta {R['"'adj_rpl11_f018']['effect']:.3f}, p={pformat(R['adj_rpl11_f018']['p'])}).
+
+Iterations 7-9: systematic subgroup searches for all dependency outcomes
+The systematic search reinforced that BRAF, EGFR, ERBB2, and KRAS are dominated by their primary flags. Top searched subgroups all contained the corresponding driver flag: BRAF contained "'`feature_009 == 1` (top effect {R['"'search_braf']['effect']:.3f}), EGFR contained "'`feature_022 == 1` (effect {R['"'search_egfr']['effect']:.3f}), ERBB2 contained "'`feature_024 == 1` (effect {R['"'search_erbb2']['effect']:.3f}), and KRAS contained "'`feature_014 == 1` (effect {R['"'search_kras']['effect']:.3f}). These refinements changed subgroup means only modestly relative to the primary main effects. RIT1 was different: the top subgroup "'`feature_011 == brain` and `feature_027 == 1` had effect {R['"'search_rit1']['effect']:.3f}, and the "'`feature_027:brain` interaction was negative and significant (beta {R['"'rit1_brain_int']['effect']:.3f}, p={pformat(R['rit1_brain_int']['p'])}).
+
+For the remaining process-like outcomes, search-discovered subgroups were statistically significant but mostly weaker or less independently interactive. TMED10's best subgroup was high "'`feature_016`, `feature_027 == 1`, and low `feature_017`, with effect {R['"'search_tmed10']['effect']:.3f}; its three-way interaction was modest but significant (beta {R['tmed10_3way']['effect']:.3f}, p={pformat(R['tmed10_3way']['p'])}). DHX9's top subgroup was squamous, high "'`feature_023`, and `feature_029 == 0` (effect {R['"'search_dhx9']['effect']:.3f}), but the simpler high-"'`feature_016` by high-`feature_023` interaction was not significant. POLR2A'"'s top subgroup was skin with high "'`feature_016` and high `feature_026` (effect {R['"'search_polr2a']['effect']:.3f}), but the three-way interaction was not significant; the stable signal was high "'`feature_016`. RPL11'"'s top subgroup was "'`feature_018 == 1`, high `feature_016`, and high `feature_031` (effect {R['"'search_rpl11']['effect']:.3f}), but its three-way interaction was not significant and adjusted models favored "'`feature_003`.
+
+Final conclusions
+The clearest feature-outcome relationships are `feature_009` to BRAF, `feature_022` to EGFR, `feature_024` to ERBB2, `feature_014` to KRAS, and `feature_027` to RIT1. KIF18A has the strongest true subgroup dependency, concentrated in colorectal lines with `feature_035 == 1` and high `feature_028`. POLR2A, DHX9, TMED10, and RPL11 show broader process-like associations, especially with high `feature_016`; RPL11 is best explained by high `feature_003` after adjustment rather than by `feature_018` alone.
+'"'''
+(base / 'analysis_summary.txt').write_text(summary)
+print('wrote transcript.json and analysis_summary.txt')
+PY" in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+ succeeded in 16429ms:
+wrote transcript.json and analysis_summary.txt
+
+codex
+The two required files are written. I’m doing a quick local validation pass now: JSON parse/schema-required checks plus file presence and sizes.
+exec
+/bin/bash -lc "python - <<'PY'
+import json
+from pathlib import Path
+for name in ['transcript.json','analysis_summary.txt']:
+    p=Path(name)
+    print(name, 'exists=', p.exists(), 'bytes=', p.stat().st_size if p.exists() else None)
+with open('transcript.json') as f:
+    data=json.load(f)
+required=['dataset_id','model_id','harness_id','max_iterations','iterations']
+print('top_required_ok=', all(k in data for k in required))
+print('dataset_id=', data.get('dataset_id'))
+print('max_iterations=', data.get('max_iterations'))
+print('iterations=', len(data.get('iterations',[])))
+missing=[]
+for it in data.get('iterations',[]):
+    if 'index' not in it or 'proposed_hypotheses' not in it:
+        missing.append(('iteration', it.get('index')))
+    for a in it.get('analyses',[]):
+        if not a.get('hypothesis_ids') or 'result_summary' not in a:
+            missing.append(('analysis', it.get('index')))
+        if 'effect_estimate' not in a:
+            missing.append(('effect', it.get('index')))
+print('required_record_issues=', missing[:5], 'count=', len(missing))
+PY" in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+exec
+/bin/bash -lc 'python -m json.tool transcript.json >/dev/null && echo transcript_json_parse_ok' in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+exec
+/bin/bash -lc "sed -n '1,80p' analysis_summary.txt" in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+ succeeded in 255ms:
+CRISPR dependency map analysis summary for ds001_depmap
+
+I analyzed the 50,000-row local dataset using the supplied column description only. More negative dependency scores were interpreted as stronger knockout dependency. I used Welch two-sample tests for binary and subgroup contrasts, OLS terms for interaction and adjusted main-effect models, and an exhaustive one-to-three-predicate subgroup scan for each dependency outcome. Continuous high/low subgroup predicates used empirical quartiles.
+
+Iterations 1-2: driver-like main effects and lineage context
+The strongest main-effect findings were direct and highly significant. `feature_009 == 1` marked much stronger BRAF dependency: mean `dependency_BRAF` -0.805 versus -0.250, effect -0.555, p=<1e-300. The parallel signals were `feature_022 == 1` for EGFR (effect -0.349, p=<1e-300), `feature_024 == 1` for ERBB2 (effect -0.432, p=<1e-300), and `feature_014 == 1` for KRAS (effect -0.307, p=<1e-300). Skin lineage also showed more negative BRAF scores (effect -0.178), but the more complete explanation remained `feature_009`. Pancreatic `feature_014 == 1` lines were KRAS-dependent versus all other lines, but the explicit `feature_014:pancreatic` interaction was not supported (beta -0.003, p=0.795).
+
+Iterations 3-4: RIT1 and KIF18A heterogeneity
+`feature_027 == 1` was associated with more negative RIT1 dependency (effect -0.096, p=1.55e-68). KIF18A was the most heterogeneous outcome. Colorectal lineage alone had a large effect (effect -0.468), as did `feature_035 == 1` (effect -0.292) and high `feature_028` (effect -0.217). The complete KIF18A subgroup was `feature_011 == colorectal`, `feature_035 == 1`, and `feature_028 >= 0.819`: mean -1.112 versus -0.253, effect -0.859, p=<1e-300. Within colorectal lines, this same complete subgroup was far more dependent than other colorectal lines (effect -0.849), and the saturated three-way interaction was strongly negative (beta -0.818, p=5.37e-225).
+
+Iterations 5-6: shared process-like dependency signals
+High `feature_016` (`>= 0.964`) was consistently associated with more negative scores for TMED10 (effect -0.037), DHX9 (effect -0.037), POLR2A (effect -0.104), and RPL11 (effect -0.042), with the largest of these for POLR2A. For DHX9, high `feature_023` also contributed (effect -0.029, p=2.05e-15). RPL11 initially appeared associated with both `feature_018 == 1` and high `feature_003`, but in the adjusted model the independent negative predictor was standardized `feature_003` (beta -0.056, p=1.8e-120); adjusted `feature_018` was not independently negative (beta 0.009, p=0.177).
+
+Iterations 7-9: systematic subgroup searches for all dependency outcomes
+The systematic search reinforced that BRAF, EGFR, ERBB2, and KRAS are dominated by their primary flags. Top searched subgroups all contained the corresponding driver flag: BRAF contained `feature_009 == 1` (top effect -0.555), EGFR contained `feature_022 == 1` (effect -0.368), ERBB2 contained `feature_024 == 1` (effect -0.453), and KRAS contained `feature_014 == 1` (effect -0.309). These refinements changed subgroup means only modestly relative to the primary main effects. RIT1 was different: the top subgroup `feature_011 == brain` and `feature_027 == 1` had effect -0.140, and the `feature_027:brain` interaction was negative and significant (beta -0.058, p=0.00564).
+
+For the remaining process-like outcomes, search-discovered subgroups were statistically significant but mostly weaker or less independently interactive. TMED10's best subgroup was high `feature_016`, `feature_027 == 1`, and low `feature_017`, with effect -0.102; its three-way interaction was modest but significant (beta -0.071, p=0.0125). DHX9's top subgroup was squamous, high `feature_023`, and `feature_029 == 0` (effect -0.084), but the simpler high-`feature_016` by high-`feature_023` interaction was not significant. POLR2A's top subgroup was skin with high `feature_016` and high `feature_026` (effect -0.129), but the three-way interaction was not significant; the stable signal was high `feature_016`. RPL11's top subgroup was `feature_018 == 1`, high `feature_016`, and high `feature_031` (effect -0.151), but its three-way interaction was not significant and adjusted models favored `feature_003`.
+
+Final conclusions
+The clearest feature-outcome relationships are `feature_009` to BRAF, `feature_022` to EGFR, `feature_024` to ERBB2, `feature_014` to KRAS, and `feature_027` to RIT1. KIF18A has the strongest true subgroup dependency, concentrated in colorectal lines with `feature_035 == 1` and high `feature_028`. POLR2A, DHX9, TMED10, and RPL11 show broader process-like associations, especially with high `feature_016`; RPL11 is best explained by high `feature_003` after adjustment rather than by `feature_018` alone.
+
+ succeeded in 394ms:
+transcript.json exists= True bytes= 38964
+analysis_summary.txt exists= True bytes= 4791
+top_required_ok= True
+dataset_id= ds001_depmap
+max_iterations= 10
+iterations= 10
+required_record_issues= [] count= 0
+
+ succeeded in 385ms:
+transcript_json_parse_ok
+
+exec
+/bin/bash -lc "python - <<'PY'
+import json, math
+from pathlib import Path
+obj=json.loads(Path('transcript.json').read_text())
+bad=[]
+def walk(x,path=''):
+    if isinstance(x,float) and (math.isnan(x) or math.isinf(x)):
+        bad.append(path)
+    elif isinstance(x,dict):
+        for k,v in x.items(): walk(v,path+'.'+k)
+    elif isinstance(x,list):
+        for i,v in enumerate(x): walk(v,f'{path}[{i}]')
+walk(obj)
+print('nonfinite_count=',len(bad))
+try:
+    import jsonschema
+    schema=json.loads(Path('transcript_schema.json').read_text())
+    jsonschema.validate(obj,schema)
+    print('jsonschema_validate_ok')
+except Exception as e:
+    print('jsonschema_validate_skipped_or_failed:', type(e).__name__, str(e)[:200])
+PY" in /data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized
+ succeeded in 975ms:
+nonfinite_count= 0
+jsonschema_validate_ok
+
+codex
+Done. Wrote and validated:
+
+- [transcript.json](/data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized/transcript.json)
+- [analysis_summary.txt](/data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized/analysis_summary.txt)
+
+`transcript.json` parses cleanly and validates against the local `transcript_schema.json`.
+tokens used
+153,746
+Done. Wrote and validated:
+
+- [transcript.json](/data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized/transcript.json)
+- [analysis_summary.txt](/data1/ken/are_llms_biased/onc-co-scientist/example_data_depmap/tasks/depmap/anonymized/analysis_summary.txt)
+
+`transcript.json` parses cleanly and validates against the local `transcript_schema.json`.

@@ -10,13 +10,14 @@
 # always-overwriting synth + build-task steps.)
 #
 # Honors the same env-var contract as run_all.sh:
-#   OUT HARNESS JOBS REPLICATES PYTHON_ENV JUDGE JUDGE_CLI JUDGE_MODEL
+#   OUT SYNTH_ROOT HARNESS JOBS REPLICATES PYTHON_ENV JUDGE JUDGE_CLI JUDGE_MODEL
 
 set -euo pipefail
 
 trap 'status=$?; echo; echo "exited with status $status"; read -p "press enter to close..."' EXIT
 
 OUT="${OUT:-../data/ds001}"
+SYNTH_ROOT="${SYNTH_ROOT:-$OUT}"
 HARNESS="${HARNESS:-claude}"
 JOBS="${JOBS:-4}"
 REPLICATES="${REPLICATES:-20}"
@@ -31,6 +32,33 @@ SCORE_ROOT="$OUT/score"
 if [[ ! -d "$TASKS_ROOT" ]]; then
     echo "error: tasks root does not exist: $TASKS_ROOT" >&2
     echo "       run scripts/run_all.sh first to generate datasets and bundles." >&2
+    exit 2
+fi
+if [[ ! -d "$SYNTH_ROOT" ]]; then
+    echo "error: synth root does not exist: $SYNTH_ROOT" >&2
+    echo "       scoring needs the source bundles with manifest.json ground truth." >&2
+    exit 2
+fi
+
+has_source_bundle() {
+    local root="$1"
+    local manifest_path bundle_dir
+    while IFS= read -r -d '' manifest_path; do
+        bundle_dir="${manifest_path%/manifest.json}"
+        if [[ -f "$bundle_dir/public/dataset.parquet" ]]; then
+            return 0
+        fi
+    done < <(find "$root" -type f -name 'manifest.json' -print0)
+    return 1
+}
+
+if ! has_source_bundle "$SYNTH_ROOT"; then
+    echo "error: no source dataset bundles found under $SYNTH_ROOT" >&2
+    echo "       scoring cannot use task bundles alone because tasks omit manifest.json" >&2
+    echo "       to avoid leaking ground truth to the agent." >&2
+    echo "       expected e.g. $SYNTH_ROOT/<cancer_type>/<variant>/manifest.json" >&2
+    echo "       and $SYNTH_ROOT/<cancer_type>/<variant>/public/dataset.parquet." >&2
+    echo "       If source bundles live separately, set SYNTH_ROOT=/path/to/synth-root." >&2
     exit 2
 fi
 
@@ -67,7 +95,7 @@ echo "[3/3] Scoring (judge=$JUDGE) → $SCORE_ROOT" >&2
 score_args=(
     score
     batch
-    --synth-root "$OUT"
+    --synth-root "$SYNTH_ROOT"
     --tasks-root "$TASKS_ROOT"
     --out "$SCORE_ROOT"
     --judge "$JUDGE"

@@ -226,6 +226,36 @@ def test_score_batch_errors_when_no_transcripts(tmp_path: Path) -> None:
     assert "No replicate transcripts" in combined
 
 
+def test_score_batch_explains_task_only_synth_root(tmp_path: Path) -> None:
+    synth_root, _tasks_root = _build_synth_and_tasks(tmp_path)
+    task_only_root = tmp_path / "task_only"
+    tasks_root = task_only_root / "tasks"
+    build_tasks(synth_root, tasks_root, max_iterations=2)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "score",
+            "batch",
+            "--synth-root",
+            str(task_only_root),
+            "--tasks-root",
+            str(tasks_root),
+            "--out",
+            str(tmp_path / "score"),
+            "--judge",
+            "stub",
+            "--no-judge-cache",
+        ],
+    )
+    assert result.exit_code != 0
+    combined = result.output + str(result.exception or "")
+    assert "No source dataset bundles" in combined
+    assert "task bundles intentionally omit manifest.json" in combined
+    assert "SYNTH_ROOT" in combined
+
+
 def test_score_run_writes_single_replicate_report(tmp_path: Path) -> None:
     synth_root, tasks_root = _build_synth_and_tasks(tmp_path)
     bundle = synth_root / "crc" / "named"
