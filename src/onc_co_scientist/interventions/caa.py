@@ -263,14 +263,106 @@ def generate_with_vector(
 ) -> str:
     """Generate text while applying additive steering or runtime ablation."""
 
-    selected_layers = layers if layers is not None else vector_bundle.layers_for(concept)
-    if not selected_layers:
-        raise ValueError(f"No layers available for concept {concept!r}.")
-
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
+    return generate_messages_with_vector(
+        messages=messages,
+        vector_bundle=vector_bundle,
+        concept=concept,
+        layers=layers,
+        processor=processor,
+        model=model,
+        mode=mode,
+        scale=scale,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        enable_thinking=enable_thinking,
+    )
+
+
+def generate_messages_unsteered(
+    *,
+    messages: list[dict[str, str]],
+    processor,
+    model,
+    max_new_tokens: int = 512,
+    temperature: float = 1.0,
+    top_p: float = 0.95,
+    top_k: int = 64,
+    enable_thinking: bool = False,
+) -> str:
+    """Generate text from already-rendered chat messages without steering."""
+
+    return _generate_messages(
+        messages=messages,
+        processor=processor,
+        model=model,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        enable_thinking=enable_thinking,
+    )
+
+
+def generate_messages_with_vector(
+    *,
+    messages: list[dict[str, str]],
+    vector_bundle: VectorBundle,
+    concept: str,
+    layers: list[int] | None,
+    processor,
+    model,
+    mode: SteeringMode = "add",
+    scale: float = -1.0,
+    max_new_tokens: int = 512,
+    temperature: float = 1.0,
+    top_p: float = 0.95,
+    top_k: int = 64,
+    enable_thinking: bool = False,
+) -> str:
+    """Generate text from chat messages while applying CAA steering."""
+
+    selected_layers = layers if layers is not None else vector_bundle.layers_for(concept)
+    if not selected_layers:
+        raise ValueError(f"No layers available for concept {concept!r}.")
+
+    with SteeringHooks(
+        model=model,
+        vector_bundle=vector_bundle,
+        concept=concept,
+        layers=selected_layers,
+        mode=mode,
+        scale=scale,
+    ):
+        return _generate_messages(
+            messages=messages,
+            processor=processor,
+            model=model,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            top_k=top_k,
+            enable_thinking=enable_thinking,
+        )
+
+
+def _generate_messages(
+    *,
+    messages: list[dict[str, str]],
+    processor,
+    model,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    top_k: int,
+    enable_thinking: bool,
+) -> str:
+    """Shared Transformers generation path for CAA server and CLI helpers."""
 
     text = render_messages(
         processor,
@@ -294,15 +386,7 @@ def generate_with_vector(
     if eos_token_id is not None:
         kwargs["eos_token_id"] = eos_token_id
 
-    with SteeringHooks(
-        model=model,
-        vector_bundle=vector_bundle,
-        concept=concept,
-        layers=selected_layers,
-        mode=mode,
-        scale=scale,
-    ):
-        outputs = model.generate(**inputs, **kwargs)
+    outputs = model.generate(**inputs, **kwargs)
 
     generated = outputs[0][input_len:]
     decoded = decode_tokens(processor, generated)

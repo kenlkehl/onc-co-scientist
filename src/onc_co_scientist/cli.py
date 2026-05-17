@@ -867,6 +867,204 @@ def caa_describe(
     console.print_json(json.dumps(payload))
 
 
+@caa_app.command("serve")
+def caa_serve(
+    vector_file: Annotated[
+        Path,
+        typer.Option(
+            "--vector-file",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="CAA vector artifact to load once at server startup.",
+        ),
+    ] = Path("data/caa/gemma4_31b_clinical_pubmed_layers20_30_40.npz"),
+    model_path: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            help="Transformers model ID or local Gemma snapshot path.",
+        ),
+    ] = (
+        "/data1/ken/models/models--google--gemma-4-31b-it/"
+        "snapshots/145dc2508c480a64b47242f160d286cff94a2343"
+    ),
+    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", min=1, max=65535)] = 8765,
+    dtype: Annotated[str, typer.Option("--dtype")] = "bfloat16",
+    device_map: Annotated[str, typer.Option("--device-map")] = "auto",
+    local_files_only: Annotated[
+        bool,
+        typer.Option("--local-files-only/--allow-download"),
+    ] = True,
+    trust_remote_code: Annotated[bool, typer.Option("--trust-remote-code")] = False,
+    default_max_new_tokens: Annotated[
+        int,
+        typer.Option("--default-max-new-tokens", min=1),
+    ] = 4096,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option("--cache-dir", help="Optional Hugging Face cache directory."),
+    ] = None,
+    enable_thinking: Annotated[
+        bool,
+        typer.Option("--enable-thinking/--disable-thinking"),
+    ] = False,
+) -> None:
+    """Serve Gemma 31B CAA arms via OpenAI-compatible local endpoints."""
+
+    from .caa_server import serve
+
+    serve(
+        model_path=model_path,
+        vector_file=vector_file,
+        host=host,
+        port=port,
+        dtype=dtype,
+        device_map=device_map,
+        local_files_only=local_files_only,
+        trust_remote_code=trust_remote_code,
+        default_max_new_tokens=default_max_new_tokens,
+        cache_dir=cache_dir.expanduser() if cache_dir is not None else None,
+        enable_thinking=enable_thinking,
+    )
+
+
+@caa_app.command("run-ab")
+def caa_run_ab(
+    root: Annotated[
+        Path,
+        typer.Option("--root", help="AB output root."),
+    ] = Path("data/caa_ab/gemma31b"),
+    synth_root: Annotated[
+        Path,
+        typer.Option(
+            "--synth-root",
+            exists=True,
+            file_okay=False,
+            help="Clinical synth root used to build fresh task bundles.",
+        ),
+    ] = Path("example_data_clinical_all_claude/ds001"),
+    stage: Annotated[
+        str,
+        typer.Option(
+            "--stage",
+            help="Stage subdirectory. Use pilot/full to keep runs isolated; pass '' for flat arms.",
+        ),
+    ] = "pilot",
+    arms: Annotated[
+        str,
+        typer.Option("--arms", help="Comma-separated arms: control,neg002,neg005,neg010."),
+    ] = "control,neg002,neg005,neg010",
+    replicates: Annotated[
+        int | None,
+        typer.Option(
+            "--replicates",
+            min=1,
+            help="Target completed replicates per bundle. Defaults to 1 for pilot, 5 otherwise.",
+        ),
+    ] = None,
+    max_iterations: Annotated[
+        int | None,
+        typer.Option(
+            "--max-iterations",
+            min=1,
+            help="Task iteration cap. Defaults to 10 for pilot, 25 otherwise.",
+        ),
+    ] = None,
+    jobs: Annotated[int, typer.Option("--jobs", min=1)] = 1,
+    harness_spec: Annotated[str, typer.Option("--harness-spec")] = "codex",
+    harness_profile: Annotated[str, typer.Option("--harness-profile")] = "codex",
+    python_env: Annotated[
+        Path | None,
+        typer.Option("--python-env", exists=True, file_okay=False, dir_okay=True),
+    ] = None,
+    judge_backend: JudgeOption = JudgeBackend.claude_cli,
+    judge_cli: JudgeCliOption = "auto",
+    judge_model: JudgeModelOption = None,
+    judge_batch_size: JudgeBatchSizeOption = 10,
+    cache_dir: CacheDirOption = None,
+    no_judge_cache: NoJudgeCacheOption = False,
+    build_only: Annotated[bool, typer.Option("--build-only")] = False,
+    skip_build: Annotated[bool, typer.Option("--skip-build")] = False,
+    skip_harness: Annotated[bool, typer.Option("--skip-harness")] = False,
+    skip_score: Annotated[bool, typer.Option("--skip-score")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Build isolated arm task roots, run Codex harness, and score each arm."""
+
+    from .caa_ab import parse_arm_names, run_ab_benchmark
+
+    stage_value = stage.strip() or None
+    effective_replicates = replicates
+    if effective_replicates is None:
+        effective_replicates = 1 if stage_value == "pilot" else 5
+    effective_max_iterations = max_iterations
+    if effective_max_iterations is None:
+        effective_max_iterations = 10 if stage_value == "pilot" else 25
+    arm_names = parse_arm_names(arms)
+    commands = run_ab_benchmark(
+        root=root,
+        synth_root=synth_root,
+        stage=stage_value,
+        arms=arm_names,
+        replicates=effective_replicates,
+        max_iterations=effective_max_iterations,
+        jobs=jobs,
+        harness_spec=harness_spec,
+        harness_profile=harness_profile,
+        python_env=python_env,
+        judge=judge_backend.value,
+        judge_cli=judge_cli,
+        judge_model=judge_model,
+        judge_batch_size=judge_batch_size,
+        cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
+        no_judge_cache=no_judge_cache,
+        build_only=build_only,
+        skip_build=skip_build,
+        skip_harness=skip_harness,
+        skip_score=skip_score,
+        dry_run=dry_run,
+    )
+    if dry_run:
+        import shlex
+
+        for cmd in commands:
+            console.print(shlex.join(cmd))
+    console.print(
+        f"[green]AB stage prepared[/green] root={root} stage={stage_value or 'flat'} "
+        f"arms={','.join(arm_names)} replicates={effective_replicates} "
+        f"max_iterations={effective_max_iterations}"
+    )
+
+
+@caa_app.command("summarize-ab")
+def caa_summarize_ab(
+    root: Annotated[
+        Path,
+        typer.Option("--root", exists=True, file_okay=False, help="AB result root."),
+    ] = Path("data/caa_ab/gemma31b"),
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Directory for ab_summary.md/csv and per_bundle.csv."),
+    ] = Path("data/caa_ab/gemma31b/summary"),
+    stage: Annotated[
+        str | None,
+        typer.Option("--stage", help="Optional stage subdirectory to summarize."),
+    ] = None,
+) -> None:
+    """Synthesize arm-level AB metrics from score/batch_score.json files."""
+
+    from .caa_ab import summarize_ab
+
+    result = summarize_ab(root, out, stage=stage.strip() if stage else None)
+    console.print(
+        f"[green]Wrote[/green] AB summary to {out} "
+        f"({len(result['summary_rows'])} arm row(s), "
+        f"{len(result['per_bundle_rows'])} per-bundle row(s))"
+    )
+
+
 @caa_app.command("generate")
 def caa_generate(
     vector_file: Annotated[
