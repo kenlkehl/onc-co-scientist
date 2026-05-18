@@ -34,6 +34,7 @@ MAX_SYSTEM_CONTEXT_CHARS = 4000
 MAX_TOOL_PROMPT_CHARS = 6000
 MAX_TOOL_DESCRIPTION_CHARS = 220
 MAX_TOOL_ARGUMENTS = 12
+MAX_TOOL_OUTPUT_CHARS = 1800
 MIN_EXEC_YIELD_TIME_MS = 30_000
 
 
@@ -250,6 +251,13 @@ def compact_context_text(text: str, *, role: str) -> str:
     stripped = text.strip()
     if not stripped:
         return ""
+    if role == "tool" and len(stripped) > MAX_TOOL_OUTPUT_CHARS:
+        half = (MAX_TOOL_OUTPUT_CHARS - 33) // 2
+        return (
+            stripped[:half].rstrip()
+            + "\n[tool output truncated]\n"
+            + stripped[-half:].lstrip()
+        )
     if role in {"system", "developer"} and len(stripped) > MAX_SYSTEM_CONTEXT_CHARS:
         return stripped[: MAX_SYSTEM_CONTEXT_CHARS - 32].rstrip() + "\n[context truncated]"
     return stripped
@@ -636,7 +644,7 @@ def parse_tool_calls(text: str) -> list[dict[str, str]]:
 
     parsed = _parse_json_candidate(text)
     if parsed is None:
-        return _parse_text_tool_calls(text)
+        return _parse_gemma_tool_calls(text) or _parse_text_tool_calls(text)
     raw_calls: Any
     if isinstance(parsed, list):
         raw_calls = parsed
@@ -650,9 +658,9 @@ def parse_tool_calls(text: str) -> list[dict[str, str]]:
         elif parsed.get("type") in {"function_call", "tool_call"} or "name" in parsed:
             raw_calls = [parsed]
         else:
-            return _parse_text_tool_calls(text)
+            return _parse_gemma_tool_calls(text) or _parse_text_tool_calls(text)
     else:
-        return _parse_text_tool_calls(text)
+        return _parse_gemma_tool_calls(text) or _parse_text_tool_calls(text)
 
     calls: list[dict[str, str]] = []
     for raw in raw_calls:
@@ -679,7 +687,83 @@ def parse_tool_calls(text: str) -> list[dict[str, str]]:
                 "arguments": arguments_text,
             }
         )
-    return calls or _parse_text_tool_calls(text)
+    return (
+        _dedupe_tool_calls(calls)
+        or _parse_gemma_tool_calls(text)
+        or _parse_text_tool_calls(text)
+    )
+
+
+def _dedupe_tool_calls(calls: list[dict[str, str]]) -> list[dict[str, str]]:
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for call in calls:
+        arguments = call["arguments"]
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments, separators=(",", ":"), sort_keys=True)
+            call = {**call, "arguments": arguments}
+        key = (call["name"], arguments)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(call)
+    return deduped
+
+
+def _parse_gemma_tool_calls(text: str) -> list[dict[str, str]]:
+    calls: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    pattern = re.compile(r"<\|tool_call\>(.*?)<tool_call\|>", flags=re.DOTALL)
+    for match in pattern.finditer(text):
+        body = match.group(1).strip()
+        call_match = re.match(
+            r"(?:call:)?([A-Za-z_][\w.-]*)\s*(\{.*\})\s*$",
+            body,
+            flags=re.DOTALL,
+        )
+        if not call_match:
+            continue
+        name = call_match.group(1)
+        arguments = _parse_gemma_tool_arguments(call_match.group(2))
+        if isinstance(arguments, str):
+            arguments_text = arguments
+        else:
+            arguments = _normalize_tool_arguments(name, arguments)
+            arguments_text = json.dumps(arguments, separators=(",", ":"), sort_keys=True)
+        key = (name, arguments_text)
+        if key in seen:
+            continue
+        seen.add(key)
+        calls.append({"call_id": _id("call"), "name": name, "arguments": arguments_text})
+    return calls
+
+
+def _parse_gemma_tool_arguments(raw: str) -> Any:
+    transformed = re.sub(
+        r'<\|"\|>(.*?)<\|"\|>',
+        lambda match: json.dumps(match.group(1)),
+        raw.strip(),
+        flags=re.DOTALL,
+    )
+    transformed = re.sub(
+        r"([{,]\s*)([A-Za-z_][\w.-]*)(\s*:)",
+        r'\1"\2"\3',
+        transformed,
+    )
+    candidates = [transformed, raw]
+    for candidate in (transformed, raw):
+        stripped = candidate.strip()
+        if stripped.startswith("{{") and stripped.endswith("}}"):
+            candidates.append(stripped[1:-1])
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            try:
+                return ast.literal_eval(candidate)
+            except (SyntaxError, TypeError, ValueError):
+                pass
+    return raw
 
 
 def _parse_text_tool_calls(text: str) -> list[dict[str, str]]:
@@ -1078,6 +1162,8 @@ def _messages_from_input_list(
         if item_type == "function_call_output":
             call_id = _as_text(item.get("call_id"))
             output = _as_text(item.get("output"))
+            if compact_agent_context:
+                output = compact_context_text(output, role="tool")
             messages.append(
                 {
                     "role": "tool",
@@ -1096,6 +1182,8 @@ def _messages_from_input_list(
             continue
         if item.get("role") == "tool":
             content = _content_to_text(item.get("content", item.get("text", "")))
+            if compact_agent_context:
+                content = compact_context_text(content, role="tool")
             messages.append(
                 {
                     "role": "tool",

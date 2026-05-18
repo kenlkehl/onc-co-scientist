@@ -139,6 +139,29 @@ def test_parse_tool_calls_accepts_textual_local_model_fallback() -> None:
     assert arguments["yield_time_ms"] == 30000
 
 
+def test_parse_tool_calls_accepts_gemma_native_tool_marker() -> None:
+    calls = parse_tool_calls(
+        'I will run `pwd`.\n\n'
+        '<|tool_call>call:exec_command{cmd:<|"|>pwd<|"|>}<tool_call|>'
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["name"] == "exec_command"
+    assert json.loads(calls[0]["arguments"]) == {"cmd": "pwd", "yield_time_ms": 30000}
+
+
+def test_parse_tool_calls_accepts_gemma_doubled_brace_arguments() -> None:
+    calls = parse_tool_calls(
+        '<|tool_call>call:exec_command{{"cmd":"cat dataset.parquet"}}<tool_call|>'
+    )
+
+    assert len(calls) == 1
+    assert json.loads(calls[0]["arguments"]) == {
+        "cmd": "cat dataset.parquet",
+        "yield_time_ms": 30000,
+    }
+
+
 def test_parse_tool_calls_accepts_hf_parsed_tool_response() -> None:
     calls = parse_tool_calls(
         json.dumps(
@@ -160,6 +183,25 @@ def test_parse_tool_calls_accepts_hf_parsed_tool_response() -> None:
     assert len(calls) == 1
     assert calls[0]["name"] == "exec_command"
     assert json.loads(calls[0]["arguments"])["cmd"] == "pwd"
+
+
+def test_parse_tool_calls_dedupes_hf_parsed_tool_response() -> None:
+    calls = parse_tool_calls(
+        json.dumps(
+            {
+                "tool_calls": [
+                    {"name": "exec_command", "arguments": {"cmd": "cat agent_instructions.md"}},
+                    {"name": "exec_command", "arguments": {"cmd": "cat agent_instructions.md"}},
+                ]
+            }
+        )
+    )
+
+    assert len(calls) == 1
+    assert json.loads(calls[0]["arguments"]) == {
+        "cmd": "cat agent_instructions.md",
+        "yield_time_ms": 30000,
+    }
 
 
 def test_openai_tools_are_normalized_for_hf_chat_templates() -> None:
@@ -418,7 +460,14 @@ def test_agent_context_compaction_is_opt_in() -> None:
     compact_messages = build_generation_messages(
         {
             "instructions": long_instructions,
-            "input": "Reply exactly OK.",
+            "input": [
+                "Reply exactly OK.",
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_big",
+                    "output": "large tool output. " * 400,
+                },
+            ],
             "tools": tools,
         },
         compact_agent_context=True,
@@ -429,6 +478,8 @@ def test_agent_context_compaction_is_opt_in() -> None:
     assert "[context truncated]" in compact_messages[0]["content"]
     assert len(compact_messages[0]["content"]) < len(default_messages[0]["content"])
     assert "exec_command(cmd*: string, workdir: string)" in compact_messages[0]["content"]
+    assert compact_messages[2]["role"] == "tool"
+    assert "[tool output truncated]" in compact_messages[2]["content"]
 
 
 def test_tool_instruction_rendering_preserves_full_schema_by_default() -> None:
