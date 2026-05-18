@@ -1,4 +1,4 @@
-"""AB orchestration and synthesis helpers for the Gemma 31B CAA benchmark."""
+"""AB orchestration and synthesis helpers for CAA-steered local-model benchmarks."""
 
 from __future__ import annotations
 
@@ -22,32 +22,46 @@ class ABArm:
     scale: float
 
 
-AB_ARMS: dict[str, ABArm] = {
-    "control": ABArm(
-        name="control",
-        codex_profile="gemma-caa-control",
-        model_alias="gemma4-31b-control",
-        scale=0.0,
-    ),
-    "neg002": ABArm(
-        name="neg002",
-        codex_profile="gemma-caa-neg002",
-        model_alias="gemma4-31b-caa-l40-neg002",
-        scale=-0.02,
-    ),
-    "neg005": ABArm(
-        name="neg005",
-        codex_profile="gemma-caa-neg005",
-        model_alias="gemma4-31b-caa-l40-neg005",
-        scale=-0.05,
-    ),
-    "neg010": ABArm(
-        name="neg010",
-        codex_profile="gemma-caa-neg010",
-        model_alias="gemma4-31b-caa-l40-neg010",
-        scale=-0.10,
-    ),
+ARM_SCALES = {
+    "control": 0.0,
+    "neg002": -0.02,
+    "neg005": -0.05,
+    "neg010": -0.10,
 }
+
+
+def make_ab_arms(
+    *,
+    profile_prefix: str = "gemma-caa",
+    model_alias_prefix: str = "gemma4-31b",
+    steering_layer: int = 40,
+) -> dict[str, ABArm]:
+    """Build arm metadata for one Codex profile/model-alias family."""
+
+    profile_prefix = profile_prefix.strip().rstrip("-")
+    model_alias_prefix = model_alias_prefix.strip().rstrip("-")
+    if not profile_prefix:
+        raise ValueError("profile_prefix must not be empty.")
+    if not model_alias_prefix:
+        raise ValueError("model_alias_prefix must not be empty.")
+    arms = {}
+    for name, scale in ARM_SCALES.items():
+        profile = f"{profile_prefix}-{name}"
+        alias = (
+            f"{model_alias_prefix}-control"
+            if name == "control"
+            else f"{model_alias_prefix}-caa-l{steering_layer}-{name}"
+        )
+        arms[name] = ABArm(
+            name=name,
+            codex_profile=profile,
+            model_alias=alias,
+            scale=scale,
+        )
+    return arms
+
+
+AB_ARMS: dict[str, ABArm] = make_ab_arms()
 
 SUMMARY_METRICS = [
     "frac_novel",
@@ -88,6 +102,10 @@ def run_ab_benchmark(
     jobs: int = 1,
     harness_spec: str = "codex",
     harness_profile: str = "codex",
+    codex_profile_prefix: str = "gemma-caa",
+    codex_extra_args: str = "",
+    model_alias_prefix: str = "gemma4-31b",
+    steering_layer: int = 40,
     python_env: Path | None = None,
     judge: str = "anthropic-vertex",
     judge_cli: str = "auto",
@@ -117,8 +135,13 @@ def run_ab_benchmark(
         raise FileNotFoundError(f"Cannot find harness runner at {run_harness}.")
 
     commands: list[list[str]] = []
+    ab_arms = make_ab_arms(
+        profile_prefix=codex_profile_prefix,
+        model_alias_prefix=model_alias_prefix,
+        steering_layer=steering_layer,
+    )
     for arm_name in arms:
-        arm = AB_ARMS[arm_name]
+        arm = ab_arms[arm_name]
         base = arm_root(root, arm_name, stage=stage)
         tasks_root = base / "tasks"
         score_root = base / "score"
@@ -139,7 +162,7 @@ def run_ab_benchmark(
             "--profile",
             harness_profile,
             "--extra-args",
-            f"--profile {arm.codex_profile}",
+            " ".join(part for part in [f"--profile {arm.codex_profile}", codex_extra_args] if part),
             "--jobs",
             str(jobs),
             "--replicates",
@@ -254,7 +277,7 @@ def discover_score_files(root: Path, *, stage: str | None = None) -> list[Path]:
 
 
 def render_ab_markdown(rows: list[dict[str, Any]]) -> str:
-    lines = ["# CAA Gemma 31B AB Summary", ""]
+    lines = ["# CAA AB Summary", ""]
     for stage in _ordered_stages(rows):
         stage_rows = [row for row in rows if row["stage"] == stage]
         heading = stage or "flat"

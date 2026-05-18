@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from onc_co_scientist.caa_ab import summarize_ab
+from onc_co_scientist.caa_ab import make_ab_arms, summarize_ab
 
 
 def _write_score(root: Path, stage: str, arm: str, *, frac_novel: float, uncovered: float) -> None:
@@ -92,3 +92,16 @@ def test_summarize_ab_writes_deltas_and_per_bundle_csv(tmp_path: Path) -> None:
     per_bundle_rows = list(csv.DictReader((out / "per_bundle.csv").open(encoding="utf-8")))
     assert len(per_bundle_rows) == 4
     assert {"named", "anonymized"} == {row["variant"] for row in per_bundle_rows}
+
+
+def test_make_ab_arms_supports_alternate_model_family() -> None:
+    arms = make_ab_arms(
+        profile_prefix="gemma-e4b-caa",
+        model_alias_prefix="gemma4-e4b",
+        steering_layer=29,
+    )
+    assert arms["control"].codex_profile == "gemma-e4b-caa-control"
+    assert arms["control"].model_alias == "gemma4-e4b-control"
+    assert arms["neg005"].codex_profile == "gemma-e4b-caa-neg005"
+    assert arms["neg005"].model_alias == "gemma4-e4b-caa-l29-neg005"
+    assert arms["neg005"].scale == pytest.approx(-0.05)

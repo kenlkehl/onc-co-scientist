@@ -910,6 +910,31 @@ def caa_serve(
         bool,
         typer.Option("--enable-thinking/--disable-thinking"),
     ] = False,
+    compact_agent_context: Annotated[
+        bool,
+        typer.Option(
+            "--compact-agent-context",
+            help=(
+                "Opt-in adapter mode that truncates overlong agent context and tool schemas before "
+                "model generation. Default preserves the full request context."
+            ),
+        ),
+    ] = False,
+    alias_prefix: Annotated[
+        str,
+        typer.Option(
+            "--alias-prefix",
+            help="Model alias prefix exposed through /v1/models, e.g. gemma4-e4b.",
+        ),
+    ] = "gemma4-31b",
+    steering_layer: Annotated[
+        int,
+        typer.Option("--steering-layer", min=0, help="CAA layer used by steered aliases."),
+    ] = 40,
+    concept: Annotated[
+        str,
+        typer.Option("--concept", help="Vector concept used by steered aliases."),
+    ] = "paradigm_orthogonalized",
 ) -> None:
     """Serve Gemma 31B CAA arms via OpenAI-compatible local endpoints."""
 
@@ -927,6 +952,10 @@ def caa_serve(
         default_max_new_tokens=default_max_new_tokens,
         cache_dir=cache_dir.expanduser() if cache_dir is not None else None,
         enable_thinking=enable_thinking,
+        compact_agent_context=compact_agent_context,
+        alias_prefix=alias_prefix,
+        steering_layer=steering_layer,
+        concept=concept,
     )
 
 
@@ -975,6 +1004,31 @@ def caa_run_ab(
     jobs: Annotated[int, typer.Option("--jobs", min=1)] = 1,
     harness_spec: Annotated[str, typer.Option("--harness-spec")] = "codex",
     harness_profile: Annotated[str, typer.Option("--harness-profile")] = "codex",
+    codex_profile_prefix: Annotated[
+        str,
+        typer.Option(
+            "--codex-profile-prefix",
+            help="Prefix for local-model Codex profiles, e.g. gemma-e4b-caa.",
+        ),
+    ] = "gemma-caa",
+    codex_extra_args: Annotated[
+        str,
+        typer.Option(
+            "--codex-extra-args",
+            help="Additional args appended after the arm-specific Codex profile.",
+        ),
+    ] = "",
+    model_alias_prefix: Annotated[
+        str,
+        typer.Option(
+            "--model-alias-prefix",
+            help="Prefix for served CAA model aliases, e.g. gemma4-e4b.",
+        ),
+    ] = "gemma4-31b",
+    steering_layer: Annotated[
+        int,
+        typer.Option("--steering-layer", min=0, help="CAA layer used by steered aliases."),
+    ] = 40,
     python_env: Annotated[
         Path | None,
         typer.Option("--python-env", exists=True, file_okay=False, dir_okay=True),
@@ -1013,6 +1067,10 @@ def caa_run_ab(
         jobs=jobs,
         harness_spec=harness_spec,
         harness_profile=harness_profile,
+        codex_profile_prefix=codex_profile_prefix,
+        codex_extra_args=codex_extra_args,
+        model_alias_prefix=model_alias_prefix,
+        steering_layer=steering_layer,
         python_env=python_env,
         judge=judge_backend.value,
         judge_cli=judge_cli,

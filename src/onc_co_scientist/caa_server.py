@@ -7,6 +7,7 @@ are intentionally importable in the normal test environment, while
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import threading
@@ -26,6 +27,12 @@ DEFAULT_GEMMA31B_MODEL_PATH = (
 DEFAULT_GEMMA31B_VECTOR_PATH = "data/caa/gemma4_31b_clinical_pubmed_layers20_30_40.npz"
 DEFAULT_CAA_CONCEPT = "paradigm_orthogonalized"
 DEFAULT_CAA_LAYER = 40
+DEFAULT_ALIAS_PREFIX = "gemma4-31b"
+MAX_SYSTEM_CONTEXT_CHARS = 4000
+MAX_TOOL_PROMPT_CHARS = 6000
+MAX_TOOL_DESCRIPTION_CHARS = 220
+MAX_TOOL_ARGUMENTS = 12
+MIN_EXEC_YIELD_TIME_MS = 30_000
 
 
 @dataclass(frozen=True)
@@ -44,50 +51,66 @@ class CaaModelAlias:
         return self.scale is None
 
 
-CAA_MODEL_ALIASES: dict[str, CaaModelAlias] = {
-    "gemma4-31b-control": CaaModelAlias(
-        model_id="gemma4-31b-control",
-        arm="control",
-        scale=None,
-    ),
-    "gemma4-31b-caa-l40-neg002": CaaModelAlias(
-        model_id="gemma4-31b-caa-l40-neg002",
-        arm="neg002",
-        scale=-0.02,
-    ),
-    "gemma4-31b-caa-l40-neg005": CaaModelAlias(
-        model_id="gemma4-31b-caa-l40-neg005",
-        arm="neg005",
-        scale=-0.05,
-    ),
-    "gemma4-31b-caa-l40-neg010": CaaModelAlias(
-        model_id="gemma4-31b-caa-l40-neg010",
-        arm="neg010",
-        scale=-0.10,
-    ),
+ARM_SCALES: dict[str, float | None] = {
+    "control": None,
+    "neg002": -0.02,
+    "neg005": -0.05,
+    "neg010": -0.10,
 }
+
+
+def make_caa_model_aliases(
+    *,
+    alias_prefix: str = DEFAULT_ALIAS_PREFIX,
+    layer: int = DEFAULT_CAA_LAYER,
+    concept: str = DEFAULT_CAA_CONCEPT,
+) -> dict[str, CaaModelAlias]:
+    """Build the fixed four-arm alias map for one served model family."""
+
+    prefix = alias_prefix.strip().rstrip("-")
+    if not prefix:
+        raise ValueError("alias_prefix must not be empty.")
+    aliases: dict[str, CaaModelAlias] = {}
+    for arm, scale in ARM_SCALES.items():
+        model_id = f"{prefix}-control" if arm == "control" else f"{prefix}-caa-l{layer}-{arm}"
+        aliases[model_id] = CaaModelAlias(
+            model_id=model_id,
+            arm=arm,
+            concept=concept,
+            layer=layer,
+            scale=scale,
+        )
+    return aliases
+
+
+CAA_MODEL_ALIASES: dict[str, CaaModelAlias] = make_caa_model_aliases()
 
 
 class UnknownModelError(ValueError):
     """Raised when a request references a model alias the server does not expose."""
 
 
-def resolve_model_alias(model: str | None) -> CaaModelAlias:
+def resolve_model_alias(
+    model: str | None,
+    aliases: dict[str, CaaModelAlias] | None = None,
+) -> CaaModelAlias:
     """Return the steering configuration for an exposed model alias."""
 
     if not model:
         raise UnknownModelError("Request is missing required field 'model'.")
+    alias_map = aliases or CAA_MODEL_ALIASES
     try:
-        return CAA_MODEL_ALIASES[model]
+        return alias_map[model]
     except KeyError as exc:
-        valid = ", ".join(sorted(CAA_MODEL_ALIASES))
+        valid = ", ".join(sorted(alias_map))
         raise UnknownModelError(f"Unknown model alias {model!r}. Valid aliases: {valid}.") from exc
 
 
-def models_payload() -> dict[str, Any]:
+def models_payload(aliases: dict[str, CaaModelAlias] | None = None) -> dict[str, Any]:
     """OpenAI-compatible ``/v1/models`` payload."""
 
     now = int(time.time())
+    alias_map = aliases or CAA_MODEL_ALIASES
     return {
         "object": "list",
         "data": [
@@ -97,7 +120,7 @@ def models_payload() -> dict[str, Any]:
                 "created": now,
                 "owned_by": "onc-co-scientist",
             }
-            for alias in CAA_MODEL_ALIASES.values()
+            for alias in alias_map.values()
         ],
     }
 
@@ -117,11 +140,14 @@ def build_generation_messages(
     payload: dict[str, Any],
     *,
     chat_messages: bool = False,
+    compact_agent_context: bool = False,
 ) -> list[dict[str, str]]:
     """Normalize Responses or Chat Completions payloads into chat messages."""
 
     messages: list[dict[str, str]] = []
     instructions = _as_text(payload.get("instructions"))
+    if compact_agent_context:
+        instructions = compact_context_text(instructions, role="system")
     if instructions:
         messages.append({"role": "system", "content": instructions})
 
@@ -133,13 +159,18 @@ def build_generation_messages(
         if raw_messages:
             messages.append({"role": "user", "content": raw_messages})
     elif isinstance(raw_messages, list):
-        messages.extend(_messages_from_input_list(raw_messages))
+        messages.extend(
+            _messages_from_input_list(
+                raw_messages,
+                compact_agent_context=compact_agent_context,
+            )
+        )
     else:
         messages.append({"role": "user", "content": _as_text(raw_messages)})
 
     tools = payload.get("tools")
     if tools:
-        tool_instructions = render_tool_instructions(tools)
+        tool_instructions = render_tool_instructions(tools, compact=compact_agent_context)
         if messages and messages[0]["role"] == "system":
             messages[0]["content"] = messages[0]["content"].rstrip() + "\n\n" + tool_instructions
         else:
@@ -147,15 +178,112 @@ def build_generation_messages(
     return messages
 
 
-def render_tool_instructions(tools: Any) -> str:
+def render_tool_instructions(tools: Any, *, compact: bool = False) -> str:
     """Render a compact tool schema block for a model without native tool support."""
+
+    if compact:
+        tool_lines = _compact_tool_lines(tools)
+        body = "\n".join(tool_lines) if tool_lines else "- No named tools were provided."
+        rendered = (
+            "Tool use is available. If a tool is needed, respond with only JSON in this shape:\n"
+            '{"tool_calls":[{"name":"tool_name","arguments":{}}]}\n'
+            "Do not wrap tool-call JSON in markdown. Required arguments are marked with *.\n"
+            "If a tool result says a session is still running, poll that session with the "
+            "available polling tool before treating the command as complete.\n"
+            "Do not stop with a plan or future-tense status update; if more work remains, "
+            "make the next tool call instead.\n"
+            "Available tools:\n"
+            + body
+        )
+        if len(rendered) > MAX_TOOL_PROMPT_CHARS:
+            rendered = (
+                rendered[: MAX_TOOL_PROMPT_CHARS - 46].rstrip()
+                + "\n- Additional tool details omitted."
+            )
+        return rendered
 
     return (
         "Tool use is available. If a tool is needed, respond with only JSON in this shape:\n"
         '{"tool_calls":[{"name":"tool_name","arguments":{}}]}\n'
-        "Do not wrap tool-call JSON in markdown. Available tools:\n"
+        "Do not wrap tool-call JSON in markdown. If a tool result says a session is still "
+        "running, poll that session with the available polling tool before treating the "
+        "command as complete. Do not stop with a plan or future-tense status update; if "
+        "more work remains, make the next tool call instead. Available tools:\n"
         + json.dumps(tools, indent=2, sort_keys=True)
     )
+
+
+def compact_context_text(text: str, *, role: str) -> str:
+    """Optionally trim overlong agent context before handing it to a local model."""
+
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    if role in {"system", "developer"} and len(stripped) > MAX_SYSTEM_CONTEXT_CHARS:
+        return stripped[: MAX_SYSTEM_CONTEXT_CHARS - 32].rstrip() + "\n[context truncated]"
+    return stripped
+
+
+def _compact_tool_lines(tools: Any) -> list[str]:
+    if not isinstance(tools, list):
+        text = _as_text(tools)
+        return [f"- {text[:MAX_TOOL_DESCRIPTION_CHARS]}"] if text else []
+
+    lines: list[str] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            text = _as_text(tool)
+            if text:
+                lines.append(f"- {text[:MAX_TOOL_DESCRIPTION_CHARS]}")
+            continue
+        function = tool.get("function") if isinstance(tool.get("function"), dict) else {}
+        name = _as_text(tool.get("name") or function.get("name") or tool.get("type"))
+        if not name:
+            continue
+        description = _as_text(tool.get("description") or function.get("description"))
+        if len(description) > MAX_TOOL_DESCRIPTION_CHARS:
+            description = description[: MAX_TOOL_DESCRIPTION_CHARS - 3].rstrip() + "..."
+        parameters = tool.get("parameters") or function.get("parameters") or {}
+        args = _compact_tool_arguments(parameters)
+        signature = f"{name}({', '.join(args)})" if args else name
+        line = f"- {signature}"
+        if description:
+            line += f": {description}"
+        lines.append(line)
+    return lines
+
+
+def _compact_tool_arguments(parameters: Any) -> list[str]:
+    if not isinstance(parameters, dict):
+        return []
+    properties = parameters.get("properties")
+    if not isinstance(properties, dict):
+        return []
+    required = set(parameters.get("required") or [])
+    args = []
+    for idx, (name, schema) in enumerate(properties.items()):
+        if idx >= MAX_TOOL_ARGUMENTS:
+            args.append("...")
+            break
+        type_name = _json_schema_type(schema)
+        marker = "*" if name in required else ""
+        args.append(f"{name}{marker}: {type_name}")
+    return args
+
+
+def _json_schema_type(schema: Any) -> str:
+    if not isinstance(schema, dict):
+        return "any"
+    raw_type = schema.get("type")
+    if isinstance(raw_type, list):
+        raw_type = "|".join(_as_text(item) for item in raw_type)
+    if raw_type:
+        return _as_text(raw_type)
+    if "enum" in schema:
+        return "enum"
+    if "anyOf" in schema or "oneOf" in schema:
+        return "union"
+    return "any"
 
 
 def build_responses_payload(
@@ -224,6 +352,53 @@ def build_responses_payload(
         "truncation": request_payload.get("truncation", "disabled"),
         "usage": None,
     }
+
+
+def combine_previous_response_messages(
+    previous_messages: list[dict[str, str]],
+    current_messages: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Combine stored Responses state with the current turn.
+
+    Responses clients commonly send a follow-up request with only
+    ``previous_response_id`` plus new input items such as function-call output.
+    The local server has to reconstruct the prior conversational context before
+    handing the turn to a stateless Transformers model.
+    """
+
+    if not previous_messages:
+        return current_messages
+    current_system = [message for message in current_messages if message.get("role") == "system"]
+    current_rest = [message for message in current_messages if message.get("role") != "system"]
+    if current_system:
+        previous_rest = [
+            message for message in previous_messages if message.get("role") != "system"
+        ]
+        return current_system + previous_rest + current_rest
+    return previous_messages + current_rest
+
+
+def messages_from_response_output(output: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Render Responses output items back into chat messages for local state."""
+
+    messages: list[dict[str, str]] = []
+    for item in output:
+        item_type = item.get("type")
+        if item_type == "function_call":
+            name = _as_text(item.get("name"))
+            arguments = _as_text(item.get("arguments"))
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": f"Tool call requested: {name}({arguments})",
+                }
+            )
+        elif item_type == "message":
+            role = _as_text(item.get("role")) or "assistant"
+            content = _content_to_text(item.get("content", ""))
+            if content:
+                messages.append({"role": role, "content": content})
+    return messages
 
 
 def responses_sse_events(response_payload: dict[str, Any]) -> Iterable[str]:
@@ -454,6 +629,7 @@ def parse_tool_calls(text: str) -> list[dict[str, str]]:
         if isinstance(arguments, str):
             arguments_text = arguments
         else:
+            arguments = _normalize_tool_arguments(name, arguments)
             arguments_text = json.dumps(arguments, separators=(",", ":"), sort_keys=True)
         calls.append(
             {
@@ -463,6 +639,25 @@ def parse_tool_calls(text: str) -> list[dict[str, str]]:
             }
         )
     return calls
+
+
+def _normalize_tool_arguments(name: str, arguments: Any) -> Any:
+    if not isinstance(arguments, dict):
+        return arguments
+    normalized = dict(arguments)
+    if name == "exec_command":
+        sandbox_permissions = normalized.get("sandbox_permissions")
+        if sandbox_permissions not in {
+            None,
+            "use_default",
+            "require_escalated",
+            "with_additional_permissions",
+        }:
+            normalized.pop("sandbox_permissions", None)
+        yield_time_ms = _int_or_none(normalized.get("yield_time_ms"))
+        if yield_time_ms is None or yield_time_ms < MIN_EXEC_YIELD_TIME_MS:
+            normalized["yield_time_ms"] = MIN_EXEC_YIELD_TIME_MS
+    return normalized
 
 
 class CAAInferenceEngine:
@@ -480,6 +675,8 @@ class CAAInferenceEngine:
         default_max_new_tokens: int = 4096,
         enable_thinking: bool = False,
         cache_dir: Path | None = None,
+        compact_agent_context: bool = False,
+        aliases: dict[str, CaaModelAlias] | None = None,
     ) -> None:
         self.model_path = model_path
         self.vector_file = vector_file
@@ -490,11 +687,15 @@ class CAAInferenceEngine:
         self.default_max_new_tokens = default_max_new_tokens
         self.enable_thinking = enable_thinking
         self.cache_dir = cache_dir
+        self.compact_agent_context = compact_agent_context
+        self.aliases = aliases or CAA_MODEL_ALIASES
         self.processor = None
         self.model = None
         self.vector_bundle: VectorBundle | None = None
         self._load_lock = threading.Lock()
         self._generate_lock = threading.Lock()
+        self._history_lock = threading.Lock()
+        self._response_histories: dict[str, list[dict[str, str]]] = {}
 
     @property
     def loaded(self) -> bool:
@@ -521,10 +722,19 @@ class CAAInferenceEngine:
         payload: dict[str, Any],
         *,
         chat_messages: bool = False,
-    ) -> tuple[str, CaaModelAlias]:
+    ) -> tuple[str, CaaModelAlias, list[dict[str, str]]]:
         self.load()
-        alias = resolve_model_alias(_as_text(payload.get("model")))
-        messages = build_generation_messages(payload, chat_messages=chat_messages)
+        alias = resolve_model_alias(_as_text(payload.get("model")), self.aliases)
+        messages = build_generation_messages(
+            payload,
+            chat_messages=chat_messages,
+            compact_agent_context=self.compact_agent_context,
+        )
+        previous_response_id = _as_text(payload.get("previous_response_id"))
+        if previous_response_id:
+            with self._history_lock:
+                previous_messages = list(self._response_histories.get(previous_response_id, []))
+            messages = combine_previous_response_messages(previous_messages, messages)
         max_new_tokens = (
             _int_or_none(payload.get("max_output_tokens") or payload.get("max_tokens"))
             or self.default_max_new_tokens
@@ -567,7 +777,17 @@ class CAAInferenceEngine:
                     top_k=top_k,
                     enable_thinking=self.enable_thinking,
                 )
-        return text, alias
+        return text, alias, messages
+
+    def remember_response(
+        self,
+        response_id: str,
+        generation_messages: list[dict[str, str]],
+        response_payload: dict[str, Any],
+    ) -> None:
+        output_messages = messages_from_response_output(response_payload.get("output") or [])
+        with self._history_lock:
+            self._response_histories[response_id] = generation_messages + output_messages
 
 
 def create_app(engine: CAAInferenceEngine, *, load_on_startup: bool = True):
@@ -595,23 +815,26 @@ def create_app(engine: CAAInferenceEngine, *, load_on_startup: bool = True):
         return {
             "status": "ok",
             "model_loaded": engine.loaded,
-            "models": list(CAA_MODEL_ALIASES),
+            "models": list(engine.aliases),
         }
 
     @app.get("/v1/models")
     def models():
-        return models_payload()
+        return models_payload(engine.aliases)
 
-    @app.post("/v1/responses")
-    async def responses(request: Request):
+    async def responses(request):
         payload = await request.json()
         try:
-            text, alias = engine.generate_for_request(payload, chat_messages=False)
+            text, alias, generation_messages = engine.generate_for_request(
+                payload,
+                chat_messages=False,
+            )
             response_payload = build_responses_payload(
                 request_payload=payload,
                 generated_text=text,
                 model_alias=alias,
             )
+            engine.remember_response(response_payload["id"], generation_messages, response_payload)
         except UnknownModelError as exc:
             return JSONResponse(response_error(str(exc), status=404), status_code=404)
         except Exception as exc:
@@ -626,11 +849,16 @@ def create_app(engine: CAAInferenceEngine, *, load_on_startup: bool = True):
             )
         return response_payload
 
-    @app.post("/v1/chat/completions")
-    async def chat_completions(request: Request):
+    responses.__annotations__["request"] = Request
+    app.post("/v1/responses")(responses)
+
+    async def chat_completions(request):
         payload = await request.json()
         try:
-            text, alias = engine.generate_for_request(payload, chat_messages=True)
+            text, alias, _generation_messages = engine.generate_for_request(
+                payload,
+                chat_messages=True,
+            )
             chat_payload = build_chat_completion_payload(
                 request_payload=payload,
                 generated_text=text,
@@ -650,6 +878,9 @@ def create_app(engine: CAAInferenceEngine, *, load_on_startup: bool = True):
             )
         return chat_payload
 
+    chat_completions.__annotations__["request"] = Request
+    app.post("/v1/chat/completions")(chat_completions)
+
     return app
 
 
@@ -666,6 +897,10 @@ def serve(
     default_max_new_tokens: int = 4096,
     enable_thinking: bool = False,
     cache_dir: Path | None = None,
+    compact_agent_context: bool = False,
+    alias_prefix: str = DEFAULT_ALIAS_PREFIX,
+    steering_layer: int = DEFAULT_CAA_LAYER,
+    concept: str = DEFAULT_CAA_CONCEPT,
 ) -> None:
     """Run the local CAA OpenAI-compatible server."""
 
@@ -687,12 +922,22 @@ def serve(
         default_max_new_tokens=default_max_new_tokens,
         enable_thinking=enable_thinking,
         cache_dir=cache_dir,
+        compact_agent_context=compact_agent_context,
+        aliases=make_caa_model_aliases(
+            alias_prefix=alias_prefix,
+            layer=steering_layer,
+            concept=concept,
+        ),
     )
     app = create_app(engine)
     uvicorn.run(app, host=host, port=port)
 
 
-def _messages_from_input_list(items: list[Any]) -> list[dict[str, str]]:
+def _messages_from_input_list(
+    items: list[Any],
+    *,
+    compact_agent_context: bool = False,
+) -> list[dict[str, str]]:
     messages: list[dict[str, str]] = []
     for item in items:
         if isinstance(item, str):
@@ -717,14 +962,16 @@ def _messages_from_input_list(items: list[Any]) -> list[dict[str, str]]:
             output = _as_text(item.get("output"))
             messages.append(
                 {
-                    "role": "tool",
+                    "role": "user",
                     "content": f"Tool result for {call_id}: {output}",
                 }
             )
             continue
         role = _as_text(item.get("role") or ("assistant" if item_type == "message" else "user"))
-        content = item.get("content", item.get("text", ""))
-        messages.append({"role": role or "user", "content": _content_to_text(content)})
+        content = _content_to_text(item.get("content", item.get("text", "")))
+        if compact_agent_context:
+            content = compact_context_text(content, role=role)
+        messages.append({"role": role or "user", "content": content})
     return messages
 
 
@@ -766,6 +1013,12 @@ def _parse_json_candidate(text: str) -> Any | None:
             return json.loads(candidate)
         except json.JSONDecodeError:
             pass
+        try:
+            parsed = ast.literal_eval(candidate)
+            if isinstance(parsed, (dict, list)):
+                return parsed
+        except (SyntaxError, ValueError):
+            pass
         for idx, char in enumerate(candidate):
             if char not in "[{":
                 continue
@@ -773,7 +1026,12 @@ def _parse_json_candidate(text: str) -> Any | None:
                 parsed, _end = decoder.raw_decode(candidate[idx:])
                 return parsed
             except json.JSONDecodeError:
-                continue
+                try:
+                    parsed = ast.literal_eval(candidate[idx:])
+                    if isinstance(parsed, (dict, list)):
+                        return parsed
+                except (SyntaxError, ValueError):
+                    continue
     return None
 
 
