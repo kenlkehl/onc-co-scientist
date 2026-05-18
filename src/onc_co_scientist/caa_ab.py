@@ -91,6 +91,26 @@ def arm_root(root: Path, arm_name: str, *, stage: str | None = None) -> Path:
     return root / stage / arm_name if stage else root / arm_name
 
 
+def arm_harness_extra_args(
+    arm: ABArm,
+    *,
+    harness_profile: str,
+    codex_extra_args: str = "",
+) -> str:
+    """Return per-arm extra args for the selected harness profile."""
+
+    extra = codex_extra_args.strip()
+    if harness_profile == "opencode":
+        parts = [
+            f"--model caa-local/{arm.model_alias}",
+            "--dangerously-skip-permissions",
+            extra,
+        ]
+    else:
+        parts = [f"--profile {arm.codex_profile}", extra]
+    return " ".join(part for part in parts if part)
+
+
 def run_ab_benchmark(
     *,
     root: Path,
@@ -162,7 +182,11 @@ def run_ab_benchmark(
             "--profile",
             harness_profile,
             "--extra-args",
-            " ".join(part for part in [f"--profile {arm.codex_profile}", codex_extra_args] if part),
+            arm_harness_extra_args(
+                arm,
+                harness_profile=harness_profile,
+                codex_extra_args=codex_extra_args,
+            ),
             "--jobs",
             str(jobs),
             "--replicates",

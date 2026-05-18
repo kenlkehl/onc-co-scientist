@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from onc_co_scientist.caa_ab import make_ab_arms, summarize_ab
+from onc_co_scientist.caa_ab import arm_harness_extra_args, make_ab_arms, summarize_ab
 
 
 def _write_score(root: Path, stage: str, arm: str, *, frac_novel: float, uncovered: float) -> None:
@@ -105,3 +105,21 @@ def test_make_ab_arms_supports_alternate_model_family() -> None:
     assert arms["neg005"].codex_profile == "gemma-e4b-caa-neg005"
     assert arms["neg005"].model_alias == "gemma4-e4b-caa-l29-neg005"
     assert arms["neg005"].scale == pytest.approx(-0.05)
+
+
+def test_arm_harness_extra_args_supports_codex_and_opencode() -> None:
+    arm = make_ab_arms(
+        profile_prefix="gemma-caa",
+        model_alias_prefix="gemma4-31b",
+        steering_layer=40,
+    )["neg005"]
+
+    assert (
+        arm_harness_extra_args(arm, harness_profile="codex", codex_extra_args="--foo bar")
+        == "--profile gemma-caa-neg005 --foo bar"
+    )
+    assert (
+        arm_harness_extra_args(arm, harness_profile="opencode", codex_extra_args="--max-turns 30")
+        == "--model caa-local/gemma4-31b-caa-l40-neg005 "
+        "--dangerously-skip-permissions --max-turns 30"
+    )
