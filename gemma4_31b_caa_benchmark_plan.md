@@ -1,10 +1,15 @@
-# Gemma 4 31B CAA OpenCode AB Benchmark Plan
+# Gemma 4 31B BF16 CAA Codex AB Benchmark Plan
 
-This runbook is for moving the CAA/OpenCode AB benchmark to a larger GPU machine and rerunning the Gemma 4 31B experiment. It avoids machine-specific paths and Python environment names. It also includes an experimental path for `nvidia/Gemma-4-31B-IT-NVFP4` on Blackwell GPUs.
+This runbook is for moving the CAA/Codex AB benchmark to a larger GPU machine
+and rerunning the Gemma 4 31B BF16 experiment. It avoids machine-specific paths
+and Python environment names.
 
 ## Key Constraint
 
-The current CAA implementation derives vectors and applies steering with Transformers-level hidden states and decoder-layer hooks. The NVIDIA NVFP4 checkpoint is intended for vLLM/modelopt inference on Blackwell. Before using NVFP4 for this benchmark, verify that it can load through the repo's Transformers-based CAA path. If it only works through vLLM, the current server cannot apply CAA hooks to it without additional adapter work.
+The current CAA implementation derives vectors and applies steering with
+Transformers-level hidden states and decoder-layer hooks. Use the BF16
+Transformers checkpoint for this benchmark; quantized inference-only
+checkpoints are outside this benchmark path.
 
 ## Fixed Experiment
 
@@ -16,7 +21,7 @@ The current CAA implementation derives vectors and applies steering with Transfo
 - Scales: `0`, `-0.02`, `-0.05`, `-0.10`
 - Pilot: 10 clinical bundles, 1 replicate per arm, `max_iterations=10`
 - Full: same bundles, 5 replicates per arm, `max_iterations=25`
-- Harness: OpenCode CLI through the CAA server's OpenAI-compatible Chat Completions API
+- Harness: Codex CLI through CAA model profiles
 - Judge: existing default scoring backend for comparability
 
 ## 1. Repo And Environment Setup
@@ -34,10 +39,6 @@ uv sync
 export PYTHON="$PWD/.venv/bin/python"
 ```
 
-Keep vLLM experiments in a separate environment unless you are explicitly
-testing vLLM. Installing vLLM into the benchmark environment can change Torch,
-Triton, and CUDA package versions.
-
 If you use another environment, set `PYTHON` to that interpreter instead:
 
 ```bash
@@ -50,21 +51,9 @@ Set common paths and model choice:
 export HF_CACHE=/path/to/huggingface-cache
 export PAIRS=data/caa/clinical_all_claude_pubmed_realistic_pairs.jsonl
 export VECTOR_DIR=data/caa
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-```
-
-Preferred experimental Blackwell target:
-
-```bash
-export MODEL_ID_OR_PATH=nvidia/Gemma-4-31B-IT-NVFP4
-export MODEL_TAG=gemma4_31b_nvfp4
-```
-
-BF16 fallback target:
-
-```bash
 export MODEL_ID_OR_PATH=google/gemma-4-31B-it
 export MODEL_TAG=gemma4_31b_bf16
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ```
 
 If you download the model to a local snapshot, set `MODEL_ID_OR_PATH` to that local directory instead.
@@ -97,14 +86,15 @@ If access requires authentication:
 huggingface-cli login
 ```
 
-## 3. NVFP4 Compatibility Gate
+## 3. BF16 Transformers Gate
 
-Run this before deriving vectors with `nvidia/Gemma-4-31B-IT-NVFP4`.
+Confirm the BF16 checkpoint resolves locally through Transformers before
+deriving vectors or starting the server.
 
 ```bash
 "$PYTHON" - <<'PY'
 import os
-from transformers import AutoProcessor, AutoModelForCausalLM
+from transformers import AutoConfig, AutoProcessor
 
 model_id = os.environ["MODEL_ID_OR_PATH"]
 cache_dir = os.environ.get("HF_CACHE")
@@ -112,38 +102,28 @@ cache_dir = os.environ.get("HF_CACHE")
 processor = AutoProcessor.from_pretrained(
     model_id,
     cache_dir=cache_dir,
+    local_files_only=True,
     trust_remote_code=True,
 )
-model = AutoModelForCausalLM.from_pretrained(
+config = AutoConfig.from_pretrained(
     model_id,
     cache_dir=cache_dir,
-    device_map="auto",
-    dtype="auto",
+    local_files_only=True,
     trust_remote_code=True,
 )
 print(type(processor))
-print(type(model))
-print(getattr(model.config, "model_type", None))
-print(getattr(model.config, "num_hidden_layers", None))
+print(getattr(config, "model_type", None))
+print(getattr(config, "num_hidden_layers", None))
+print(getattr(getattr(config, "text_config", None), "num_hidden_layers", None))
 PY
 ```
 
-Decision:
-
-- If this succeeds, continue with the NVFP4 model through the current CAA path.
-- If this fails because the checkpoint requires vLLM/modelopt-only loading, use the BF16 fallback for the current benchmark or pause to implement a vLLM-compatible CAA steering server.
-
-Optional vLLM-only smoke test for the NVFP4 checkpoint:
-
-```bash
-vllm serve "$MODEL_ID_OR_PATH" --quantization modelopt
-```
-
-This confirms the checkpoint can run, but it does not by itself make it compatible with the current CAA server.
+If the model is not already cached, download it first or remove
+`local_files_only=True` for this gate.
 
 ## 4. Generate Steering Vectors
 
-Derive vectors for whichever model is set in `MODEL_ID_OR_PATH`.
+Derive vectors for the BF16 model set in `MODEL_ID_OR_PATH`.
 
 ```bash
 PYTHONPATH=src "$PYTHON" -m onc_co_scientist.cli caa derive \
@@ -179,61 +159,52 @@ Expected layers:
 - `30`
 - `40`
 
-## 5. Configure OpenCode Provider
+## 5. Configure Codex Profiles
 
-Install OpenCode if it is not already available:
+Configure Codex profiles that point each AB arm at the CAA server's
+OpenAI-compatible local API. Add the profiles to the Codex config used by the
+benchmark host, usually `$CODEX_HOME/config.toml` or `~/.codex/config.toml`.
 
-```bash
-npm install -g opencode-ai
-opencode --version
+Example profile shape:
+
+```toml
+[model_providers.caa_local]
+name = "CAA Local"
+base_url = "http://127.0.0.1:8765/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+
+[profiles.gemma-caa-control]
+model_provider = "caa_local"
+model = "gemma4-31b-control"
+
+[profiles.gemma-caa-neg002]
+model_provider = "caa_local"
+model = "gemma4-31b-caa-l40-neg002"
+
+[profiles.gemma-caa-neg005]
+model_provider = "caa_local"
+model = "gemma4-31b-caa-l40-neg005"
+
+[profiles.gemma-caa-neg010]
+model_provider = "caa_local"
+model = "gemma4-31b-caa-l40-neg010"
 ```
 
-Use an inline OpenCode config for the benchmark run instead of writing a
-permanent global provider file:
+Set the local API key placeholder in any shell that launches manual Codex
+smokes:
 
 ```bash
-export OPENCODE_CONFIG_CONTENT='{
-  "$schema": "https://opencode.ai/config.json",
-  "enabled_providers": ["caa-local"],
-  "model": "caa-local/gemma4-31b-control",
-  "small_model": "caa-local/gemma4-31b-control",
-  "provider": {
-    "caa-local": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "CAA Local",
-      "options": {
-        "baseURL": "http://127.0.0.1:8765/v1",
-        "apiKey": "EMPTY",
-        "timeout": 600000
-      },
-      "models": {
-        "gemma4-31b-control": {"name": "Gemma 4 31B CAA control"},
-        "gemma4-31b-caa-l40-neg002": {"name": "Gemma 4 31B CAA neg002"},
-        "gemma4-31b-caa-l40-neg005": {"name": "Gemma 4 31B CAA neg005"},
-        "gemma4-31b-caa-l40-neg010": {"name": "Gemma 4 31B CAA neg010"}
-      }
-    }
-  },
-  "permission": "allow"
-}'
-export OPENCODE_DISABLE_AUTOUPDATE=1
-export OPENCODE_DISABLE_MODELS_FETCH=1
+export OPENAI_API_KEY=EMPTY
 ```
 
-Confirm OpenCode sees the CAA aliases:
-
-```bash
-opencode models caa-local
-```
-
-The model aliases stay stable even if the underlying model is NVFP4. Record the
-actual `MODEL_ID_OR_PATH` and `MODEL_TAG` in the final report.
+The smoke tests below confirm that the profiles can reach the running CAA
+server.
 
 This runbook assumes the CAA server includes the structured tool-turn fix that
 preserves assistant `tool_calls` and `role: tool` results. Without that fix,
 Gemma 4 can call tools but may repeat the same tool call after receiving the
-tool result. A plain vLLM comparison with `--tool-call-parser gemma4` should
-not loop on the `pwd` smoke test below.
+tool result.
 
 ## 6. Start CAA Server
 
@@ -249,6 +220,7 @@ PYTHONPATH=src "$PYTHON" -m onc_co_scientist.cli caa serve \
   --device-map auto \
   --local-files-only \
   --trust-remote-code \
+  --cache-implementation none \
   --default-max-new-tokens 4096 \
   --alias-prefix gemma4-31b \
   --steering-layer 40 \
@@ -259,7 +231,7 @@ Keep this server running across all arms so the model loads once.
 
 If using a remote model ID and it is not already cached, replace `--local-files-only` with `--allow-download`.
 
-If full OpenCode context still causes OOM, restart with the opt-in compact adapter:
+If full Codex context still causes OOM, restart with the opt-in compact adapter:
 
 ```bash
 PYTHONPATH=src "$PYTHON" -m onc_co_scientist.cli caa serve \
@@ -271,6 +243,7 @@ PYTHONPATH=src "$PYTHON" -m onc_co_scientist.cli caa serve \
   --device-map auto \
   --local-files-only \
   --trust-remote-code \
+  --cache-implementation none \
   --default-max-new-tokens 4096 \
   --alias-prefix gemma4-31b \
   --steering-layer 40 \
@@ -280,7 +253,7 @@ PYTHONPATH=src "$PYTHON" -m onc_co_scientist.cli caa serve \
 
 If using `--compact-agent-context`, report the benchmark as a compact-adapter run. Do not silently mix compact and non-compact results.
 
-## 7. Server And OpenCode Smoke Tests
+## 7. Server And Codex Smoke Tests
 
 Health and model list:
 
@@ -297,28 +270,22 @@ curl -sS http://127.0.0.1:8765/v1/chat/completions \
   -d '{"model":"gemma4-31b-control","messages":[{"role":"user","content":"Reply exactly READY."}],"max_tokens":16}'
 ```
 
-OpenCode text smoke test:
+Codex text smoke test:
 
 ```bash
-opencode run \
-  --format json \
-  --model caa-local/gemma4-31b-control \
-  --dangerously-skip-permissions \
+codex exec --json --profile gemma-caa-control --sandbox workspace-write --skip-git-repo-check \
   'Reply exactly SMOKE_OK.'
 ```
 
-OpenCode tool smoke test:
+Codex tool smoke test:
 
 ```bash
-opencode run \
-  --format json \
-  --model caa-local/gemma4-31b-control \
-  --dangerously-skip-permissions \
+codex exec --json --profile gemma-caa-control --sandbox workspace-write --skip-git-repo-check \
   'Use bash to run pwd exactly once. After the bash result is returned, do not call any tool again. Reply exactly TOOL_OK.'
 ```
 
-Gate condition: do not start the benchmark until the OpenCode text smoke returns
-`SMOKE_OK`, the tool smoke shows exactly one real `bash` command execution, and
+Gate condition: do not start the benchmark until the Codex text smoke returns
+`SMOKE_OK`, the tool smoke shows exactly one real shell command execution, and
 the final assistant text is `TOOL_OK`. If the model repeats `pwd`, stop and
 verify the structured tool-turn fix is present in the CAA server.
 
@@ -336,8 +303,9 @@ uv run ocs caa run-ab \
   --replicates 1 \
   --max-iterations 10 \
   --jobs 1 \
-  --harness-spec opencode \
-  --harness-profile opencode \
+  --harness-spec codex \
+  --harness-profile codex \
+  --codex-profile-prefix gemma-caa \
   --model-alias-prefix gemma4-31b \
   --steering-layer 40 \
   --python-env .venv \
@@ -349,10 +317,7 @@ Run one bundle manually. Adjust the bundle path if the task set differs:
 ```bash
 cd "data/caa_ab/${MODEL_TAG}_gate/pilot/control/tasks/aml/anonymized"
 
-opencode run \
-  --format json \
-  --model caa-local/gemma4-31b-control \
-  --dangerously-skip-permissions \
+codex exec --profile gemma-caa-control --sandbox workspace-write --skip-git-repo-check \
   'Read agent_instructions.md in the current working directory and follow its instructions exactly. Use python3 for statistical analysis. Emit transcript.json and analysis_summary.txt in this directory when done. Do not access any files outside this directory.'
 ```
 
@@ -378,8 +343,9 @@ uv run ocs caa run-ab \
   --replicates 1 \
   --max-iterations 10 \
   --jobs 1 \
-  --harness-spec opencode \
-  --harness-profile opencode \
+  --harness-spec codex \
+  --harness-profile codex \
+  --codex-profile-prefix gemma-caa \
   --model-alias-prefix gemma4-31b \
   --steering-layer 40 \
   --python-env .venv
@@ -416,8 +382,9 @@ uv run ocs caa run-ab \
   --replicates 5 \
   --max-iterations 25 \
   --jobs 1 \
-  --harness-spec opencode \
-  --harness-profile opencode \
+  --harness-spec codex \
+  --harness-profile codex \
+  --codex-profile-prefix gemma-caa \
   --model-alias-prefix gemma4-31b \
   --steering-layer 40 \
   --python-env .venv
@@ -438,20 +405,10 @@ Expected outputs:
 - `data/caa_ab/${MODEL_TAG}/summary/full/ab_summary.csv`
 - `data/caa_ab/${MODEL_TAG}/summary/full/per_bundle.csv`
 
-## 11. Optional Output Cap Or Compact Context
+## 11. Optional Compact Context
 
 Use these only for smoke tests or troubleshooting. Do not silently mix them into
 benchmark results without reporting the change.
-
-For short tool smokes, OpenCode can cap output tokens:
-
-```bash
-OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX=64 opencode run \
-  --format json \
-  --model caa-local/gemma4-31b-control \
-  --dangerously-skip-permissions \
-  'Reply exactly SMOKE_OK.'
-```
 
 If full agent context causes CAA server OOMs, use `--compact-agent-context` on
 the server and report the benchmark as a compact-adapter run. Prefer the
@@ -459,24 +416,22 @@ non-compact path for final results now that structured tool turns are preserved.
 
 ## 12. Troubleshooting
 
-If the NVFP4 checkpoint loads in vLLM but not through Transformers:
-
-- The current CAA server cannot apply steering to that vLLM model.
-- Use BF16 through Transformers for the benchmark, or pause to implement a vLLM/modelopt steering path.
-
 If the server OOMs during model load:
 
 - Confirm GPU memory with `nvidia-smi`.
 - Keep `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
 - Try `--device-map balanced_low_0`.
 - Confirm no old server process is holding GPU memory.
+- Keep `--cache-implementation none`; this avoids static-cache generation
+  failures observed with this Gemma 4 31B Transformers path.
 
-If OpenCode does not list the CAA models:
+If Codex does not reach the CAA server:
 
-- Confirm `OPENCODE_CONFIG_CONTENT` is exported in the shell that launches OpenCode.
+- Confirm the Codex `gemma-caa-*` profiles point at
+  `http://127.0.0.1:8765/v1`.
 - Confirm the CAA server is listening on `http://127.0.0.1:8765/v1`.
 
-If OpenCode calls a tool but repeats the same tool after receiving its result:
+If Codex calls a tool but repeats the same tool after receiving its result:
 
 - Stop before launching the pilot.
 - Confirm the CAA server preserves structured assistant `tool_calls` and `role: tool` messages.
@@ -488,7 +443,7 @@ If transcripts are missing:
 find "data/caa_ab/${MODEL_TAG}" -path '*/runs/run_*/harness.log' | head
 ```
 
-Inspect the relevant `harness.log` and OpenCode session export before retrying.
+Inspect the relevant `harness.log` before retrying.
 
 If scoring fails:
 
@@ -517,7 +472,3 @@ Flag degradation if steered arms show:
 - lower uncovered fraction
 - more malformed analyses
 - simulated or non-tool-backed statistical results
-
-## References
-
-- NVIDIA `nvidia/Gemma-4-31B-IT-NVFP4` model card: https://huggingface.co/nvidia/Gemma-4-31B-IT-NVFP4
