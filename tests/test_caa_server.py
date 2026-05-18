@@ -198,8 +198,65 @@ def test_responses_input_normalization_accepts_string_arrays_and_instructions() 
         }
     )
     assert messages[0] == {"role": "user", "content": "First"}
-    assert messages[1]["role"] == "user"
-    assert "tool result" in messages[1]["content"]
+    assert messages[1] == {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": "tool result",
+    }
+
+
+def test_chat_tool_turns_are_preserved_for_native_templates() -> None:
+    messages = build_generation_messages(
+        {
+            "messages": [
+                {"role": "user", "content": "Run pwd."},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_pwd",
+                            "type": "function",
+                            "function": {
+                                "name": "bash",
+                                "arguments": '{"command":"pwd"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_pwd",
+                    "content": "/tmp/project\n",
+                },
+            ]
+        },
+        chat_messages=True,
+        include_tool_instructions=False,
+    )
+
+    assert messages == [
+        {"role": "user", "content": "Run pwd."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_pwd",
+                    "type": "function",
+                    "function": {
+                        "name": "bash",
+                        "arguments": '{"command":"pwd"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_pwd",
+            "content": "/tmp/project\n",
+        },
+    ]
 
 
 def test_previous_response_messages_are_preserved_for_tool_followups() -> None:
@@ -239,11 +296,19 @@ def test_previous_response_messages_are_preserved_for_tool_followups() -> None:
     assert combined[0]["role"] == "system"
     assert "Current system instructions" in combined[0]["content"]
     assert {"role": "user", "content": "Read the task brief."} in combined
+    assistant_tool_messages = [
+        message
+        for message in combined
+        if message["role"] == "assistant" and message.get("tool_calls")
+    ]
+    assert assistant_tool_messages
+    assert assistant_tool_messages[0]["tool_calls"][0]["function"]["name"] == "exec_command"
     assert any(
-        message["role"] == "assistant" and '"name":"exec_command"' in message["content"]
+        message["role"] == "tool"
+        and message["tool_call_id"] == first_response["output"][0]["call_id"]
+        and message["content"] == "brief contents"
         for message in combined
     )
-    assert any("brief contents" in message["content"] for message in combined)
 
 
 def test_agent_context_compaction_is_opt_in() -> None:

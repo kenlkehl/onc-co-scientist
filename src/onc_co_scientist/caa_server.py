@@ -142,10 +142,10 @@ def build_generation_messages(
     chat_messages: bool = False,
     compact_agent_context: bool = False,
     include_tool_instructions: bool = True,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """Normalize Responses or Chat Completions payloads into chat messages."""
 
-    messages: list[dict[str, str]] = []
+    messages: list[dict[str, Any]] = []
     instructions = _as_text(payload.get("instructions"))
     if compact_agent_context:
         instructions = compact_context_text(instructions, role="system")
@@ -384,9 +384,9 @@ def build_responses_payload(
 
 
 def combine_previous_response_messages(
-    previous_messages: list[dict[str, str]],
-    current_messages: list[dict[str, str]],
-) -> list[dict[str, str]]:
+    previous_messages: list[dict[str, Any]],
+    current_messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     """Combine stored Responses state with the current turn.
 
     Responses clients commonly send a follow-up request with only
@@ -407,10 +407,10 @@ def combine_previous_response_messages(
     return previous_messages + current_rest
 
 
-def messages_from_response_output(output: list[dict[str, Any]]) -> list[dict[str, str]]:
+def messages_from_response_output(output: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Render Responses output items back into chat messages for local state."""
 
-    messages: list[dict[str, str]] = []
+    messages: list[dict[str, Any]] = []
     for item in output:
         item_type = item.get("type")
         if item_type == "function_call":
@@ -419,10 +419,17 @@ def messages_from_response_output(output: list[dict[str, Any]]) -> list[dict[str
             messages.append(
                 {
                     "role": "assistant",
-                    "content": json.dumps(
-                        {"tool_calls": [{"name": name, "arguments": arguments}]},
-                        separators=(",", ":"),
-                    ),
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": _as_text(item.get("call_id")) or _id("call"),
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": arguments,
+                            },
+                        }
+                    ],
                 }
             )
         elif item_type == "message":
@@ -763,7 +770,7 @@ class CAAInferenceEngine:
         self._load_lock = threading.Lock()
         self._generate_lock = threading.Lock()
         self._history_lock = threading.Lock()
-        self._response_histories: dict[str, list[dict[str, str]]] = {}
+        self._response_histories: dict[str, list[dict[str, Any]]] = {}
 
     @property
     def loaded(self) -> bool:
@@ -790,7 +797,7 @@ class CAAInferenceEngine:
         payload: dict[str, Any],
         *,
         chat_messages: bool = False,
-    ) -> tuple[str, CaaModelAlias, list[dict[str, str]]]:
+    ) -> tuple[str, CaaModelAlias, list[dict[str, Any]]]:
         self.load()
         alias = resolve_model_alias(_as_text(payload.get("model")), self.aliases)
         template_tools = normalize_tools_for_chat_template(payload.get("tools"))
@@ -860,7 +867,7 @@ class CAAInferenceEngine:
     def remember_response(
         self,
         response_id: str,
-        generation_messages: list[dict[str, str]],
+        generation_messages: list[dict[str, Any]],
         response_payload: dict[str, Any],
     ) -> None:
         output_messages = messages_from_response_output(response_payload.get("output") or [])
@@ -1015,8 +1022,8 @@ def _messages_from_input_list(
     items: list[Any],
     *,
     compact_agent_context: bool = False,
-) -> list[dict[str, str]]:
-    messages: list[dict[str, str]] = []
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
     for item in items:
         if isinstance(item, str):
             messages.append({"role": "user", "content": item})
@@ -1031,10 +1038,17 @@ def _messages_from_input_list(
             messages.append(
                 {
                     "role": "assistant",
-                    "content": json.dumps(
-                        {"tool_calls": [{"name": name, "arguments": arguments}]},
-                        separators=(",", ":"),
-                    ),
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": _as_text(item.get("call_id")) or _id("call"),
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": arguments,
+                            },
+                        }
+                    ],
                 }
             )
             continue
@@ -1043,8 +1057,27 @@ def _messages_from_input_list(
             output = _as_text(item.get("output"))
             messages.append(
                 {
-                    "role": "user",
-                    "content": f"Tool result for {call_id}: {output}",
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": output,
+                }
+            )
+            continue
+        if item.get("role") == "assistant" and isinstance(item.get("tool_calls"), list):
+            message = {
+                "role": "assistant",
+                "content": item.get("content"),
+                "tool_calls": item["tool_calls"],
+            }
+            messages.append(message)
+            continue
+        if item.get("role") == "tool":
+            content = _content_to_text(item.get("content", item.get("text", "")))
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": _as_text(item.get("tool_call_id") or item.get("call_id")),
+                    "content": content,
                 }
             )
             continue

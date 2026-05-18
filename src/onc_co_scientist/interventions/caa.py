@@ -196,7 +196,7 @@ def derive_caa_vectors(
 
 
 def collect_prompt_activations(
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     *,
     processor,
     model,
@@ -286,7 +286,7 @@ def generate_with_vector(
 
 def generate_messages_unsteered(
     *,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     processor,
     model,
     tools: Any = None,
@@ -313,7 +313,7 @@ def generate_messages_unsteered(
 
 def generate_messages_with_vector(
     *,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     vector_bundle: VectorBundle,
     concept: str,
     layers: list[int] | None,
@@ -357,7 +357,7 @@ def generate_messages_with_vector(
 
 def _generate_messages(
     *,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     processor,
     model,
     tools: Any = None,
@@ -481,7 +481,7 @@ class SteeringHooks:
 
 def render_messages(
     processor,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     *,
     tools: Any = None,
     add_generation_prompt: bool,
@@ -508,7 +508,12 @@ def render_messages(
         return template(messages, **kwargs)
     rendered = []
     for message in messages:
-        rendered.append(f"{message['role'].upper()}: {message['content']}")
+        content = message.get("content")
+        if message.get("tool_calls"):
+            content = json_dumps(message["tool_calls"])
+        elif message.get("role") == "tool":
+            content = f"tool_call_id={message.get('tool_call_id')}: {content}"
+        rendered.append(f"{message['role'].upper()}: {content}")
     if add_generation_prompt:
         rendered.append("ASSISTANT:")
     return "\n".join(rendered)
