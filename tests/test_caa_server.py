@@ -10,11 +10,13 @@ from onc_co_scientist.caa_server import (
     make_caa_model_aliases,
     messages_from_response_output,
     models_payload,
+    normalize_tools_for_chat_template,
     parse_tool_calls,
     render_tool_instructions,
     resolve_model_alias,
     responses_sse_events,
 )
+from onc_co_scientist.interventions.caa import processor_supports_tools, render_messages
 
 
 def test_caa_model_aliases_map_to_fixed_arms() -> None:
@@ -48,6 +50,124 @@ def test_dynamic_model_aliases_support_smaller_gemma_family() -> None:
 
     payload = models_payload(aliases)
     assert {item["id"] for item in payload["data"]} == set(aliases)
+
+
+def test_parse_tool_calls_accepts_textual_local_model_fallback() -> None:
+    calls = parse_tool_calls(
+        'I will inspect the task.\n'
+        'Tool call requested: exec_command({"cmd":"ls -F","yield_time_ms":1000})\n'
+        'Tool call requested: exec_command({"cmd":"ls -F","yield_time_ms":1000})'
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["name"] == "exec_command"
+    arguments = json.loads(calls[0]["arguments"])
+    assert arguments["cmd"] == "ls -F"
+    assert arguments["yield_time_ms"] == 30000
+
+
+def test_parse_tool_calls_accepts_hf_parsed_tool_response() -> None:
+    calls = parse_tool_calls(
+        json.dumps(
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "exec_command",
+                            "arguments": {"cmd": "pwd"},
+                        },
+                    }
+                ],
+            }
+        )
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["name"] == "exec_command"
+    assert json.loads(calls[0]["arguments"])["cmd"] == "pwd"
+
+
+def test_openai_tools_are_normalized_for_hf_chat_templates() -> None:
+    tools = normalize_tools_for_chat_template(
+        [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "description": "Run a command.",
+                "parameters": {
+                    "type": "object",
+                    "required": ["cmd"],
+                    "properties": {"cmd": {"type": "string"}},
+                },
+            }
+        ]
+    )
+
+    assert tools == [
+        {
+            "type": "function",
+            "function": {
+                "name": "exec_command",
+                "description": "Run a command.",
+                "parameters": {
+                    "type": "object",
+                    "required": ["cmd"],
+                    "properties": {"cmd": {"type": "string"}},
+                },
+            },
+        }
+    ]
+
+
+def test_native_tool_templates_skip_text_tool_prompt() -> None:
+    messages = build_generation_messages(
+        {
+            "instructions": "System context",
+            "input": "Use a tool.",
+            "tools": [{"type": "function", "name": "exec_command"}],
+        },
+        include_tool_instructions=False,
+    )
+
+    assert messages == [
+        {"role": "system", "content": "System context"},
+        {"role": "user", "content": "Use a tool."},
+    ]
+
+
+def test_hf_chat_template_tool_probe_and_rendering() -> None:
+    class ToolProcessor:
+        def apply_chat_template(
+            self,
+            messages,
+            *,
+            tools=None,
+            tokenize=False,
+            add_generation_prompt=True,
+        ):
+            assert tokenize is False
+            rendered = "|".join(message["content"] for message in messages)
+            if tools:
+                rendered += "|tools=" + tools[0]["function"]["name"]
+            if add_generation_prompt:
+                rendered += "|assistant"
+            return rendered
+
+    tools = normalize_tools_for_chat_template([{"type": "function", "name": "exec_command"}])
+
+    assert processor_supports_tools(ToolProcessor(), tools)
+    assert (
+        render_messages(
+            ToolProcessor(),
+            [{"role": "user", "content": "Use pwd."}],
+            tools=tools,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+        == "Use pwd.|tools=exec_command|assistant"
+    )
 
 
 def test_responses_input_normalization_accepts_string_arrays_and_instructions() -> None:
@@ -120,7 +240,7 @@ def test_previous_response_messages_are_preserved_for_tool_followups() -> None:
     assert "Current system instructions" in combined[0]["content"]
     assert {"role": "user", "content": "Read the task brief."} in combined
     assert any(
-        message["role"] == "assistant" and "Tool call requested: exec_command" in message["content"]
+        message["role"] == "assistant" and '"name":"exec_command"' in message["content"]
         for message in combined
     )
     assert any("brief contents" in message["content"] for message in combined)

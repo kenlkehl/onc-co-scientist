@@ -289,6 +289,7 @@ def generate_messages_unsteered(
     messages: list[dict[str, str]],
     processor,
     model,
+    tools: Any = None,
     max_new_tokens: int = 512,
     temperature: float = 1.0,
     top_p: float = 0.95,
@@ -299,6 +300,7 @@ def generate_messages_unsteered(
 
     return _generate_messages(
         messages=messages,
+        tools=tools,
         processor=processor,
         model=model,
         max_new_tokens=max_new_tokens,
@@ -317,6 +319,7 @@ def generate_messages_with_vector(
     layers: list[int] | None,
     processor,
     model,
+    tools: Any = None,
     mode: SteeringMode = "add",
     scale: float = -1.0,
     max_new_tokens: int = 512,
@@ -341,6 +344,7 @@ def generate_messages_with_vector(
     ):
         return _generate_messages(
             messages=messages,
+            tools=tools,
             processor=processor,
             model=model,
             max_new_tokens=max_new_tokens,
@@ -356,6 +360,7 @@ def _generate_messages(
     messages: list[dict[str, str]],
     processor,
     model,
+    tools: Any = None,
     max_new_tokens: int,
     temperature: float,
     top_p: float,
@@ -367,6 +372,7 @@ def _generate_messages(
     text = render_messages(
         processor,
         messages,
+        tools=tools,
         add_generation_prompt=True,
         enable_thinking=enable_thinking,
     )
@@ -397,7 +403,12 @@ def _generate_messages(
             if isinstance(parsed, str):
                 return parsed
             if isinstance(parsed, dict):
+                tool_calls = parsed.get("tool_calls")
+                if tool_calls:
+                    return json_dumps(parsed)
                 return str(parsed.get("content") or parsed.get("text") or parsed)
+            if isinstance(parsed, list):
+                return json_dumps(parsed)
             return str(parsed)
         except Exception:
             return decoded
@@ -472,6 +483,7 @@ def render_messages(
     processor,
     messages: list[dict[str, str]],
     *,
+    tools: Any = None,
     add_generation_prompt: bool,
     enable_thinking: bool,
 ) -> str:
@@ -484,6 +496,15 @@ def render_messages(
         signature = inspect.signature(template)
         if "enable_thinking" in signature.parameters:
             kwargs["enable_thinking"] = enable_thinking
+        if tools:
+            try:
+                return template(messages, tools=tools, **kwargs)
+            except TypeError:
+                pass
+            except Exception as exc:
+                message = str(exc).lower()
+                if "tool" not in message and "function" not in message:
+                    raise
         return template(messages, **kwargs)
     rendered = []
     for message in messages:
@@ -491,6 +512,35 @@ def render_messages(
     if add_generation_prompt:
         rendered.append("ASSISTANT:")
     return "\n".join(rendered)
+
+
+def processor_supports_tools(processor, tools: Any) -> bool:
+    """Return whether the processor can render HF chat-template tools."""
+
+    if not tools:
+        return False
+    template = getattr(processor, "apply_chat_template", None)
+    if not callable(template):
+        return False
+    kwargs = {
+        "tokenize": False,
+        "add_generation_prompt": True,
+        "tools": tools,
+    }
+    signature = inspect.signature(template)
+    if "enable_thinking" in signature.parameters:
+        kwargs["enable_thinking"] = False
+    try:
+        template([{"role": "user", "content": "tool capability probe"}], **kwargs)
+    except Exception:
+        return False
+    return True
+
+
+def json_dumps(value: Any) -> str:
+    import json
+
+    return json.dumps(value, separators=(",", ":"), sort_keys=True)
 
 
 def tokenize_text(processor, text: str):

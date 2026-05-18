@@ -141,6 +141,7 @@ def build_generation_messages(
     *,
     chat_messages: bool = False,
     compact_agent_context: bool = False,
+    include_tool_instructions: bool = True,
 ) -> list[dict[str, str]]:
     """Normalize Responses or Chat Completions payloads into chat messages."""
 
@@ -168,7 +169,7 @@ def build_generation_messages(
     else:
         messages.append({"role": "user", "content": _as_text(raw_messages)})
 
-    tools = payload.get("tools")
+    tools = payload.get("tools") if include_tool_instructions else None
     if tools:
         tool_instructions = render_tool_instructions(tools, compact=compact_agent_context)
         if messages and messages[0]["role"] == "system":
@@ -176,6 +177,30 @@ def build_generation_messages(
         else:
             messages.insert(0, {"role": "system", "content": tool_instructions})
     return messages
+
+
+def normalize_tools_for_chat_template(tools: Any) -> list[dict[str, Any]]:
+    """Normalize OpenAI-style tools for Hugging Face chat templates."""
+
+    if not isinstance(tools, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if isinstance(tool.get("function"), dict):
+            normalized.append(tool)
+            continue
+        name = _as_text(tool.get("name"))
+        if not name:
+            continue
+        function = {
+            "name": name,
+            "description": _as_text(tool.get("description")),
+            "parameters": tool.get("parameters") or {},
+        }
+        normalized.append({"type": tool.get("type") or "function", "function": function})
+    return normalized
 
 
 def render_tool_instructions(tools: Any, *, compact: bool = False) -> str:
@@ -187,7 +212,9 @@ def render_tool_instructions(tools: Any, *, compact: bool = False) -> str:
         rendered = (
             "Tool use is available. If a tool is needed, respond with only JSON in this shape:\n"
             '{"tool_calls":[{"name":"tool_name","arguments":{}}]}\n'
-            "Do not wrap tool-call JSON in markdown. Required arguments are marked with *.\n"
+            "Do not wrap tool-call JSON in markdown. Do not emit Python dicts, role fields, "
+            "or placeholder tool calls. Every tool call must include a real name and arguments. "
+            "Required arguments are marked with *.\n"
             "If a tool result says a session is still running, poll that session with the "
             "available polling tool before treating the command as complete.\n"
             "Do not stop with a plan or future-tense status update; if more work remains, "
@@ -205,7 +232,9 @@ def render_tool_instructions(tools: Any, *, compact: bool = False) -> str:
     return (
         "Tool use is available. If a tool is needed, respond with only JSON in this shape:\n"
         '{"tool_calls":[{"name":"tool_name","arguments":{}}]}\n'
-        "Do not wrap tool-call JSON in markdown. If a tool result says a session is still "
+        "Do not wrap tool-call JSON in markdown. Do not emit Python dicts, role fields, "
+        "or placeholder tool calls. Every tool call must include a real name and arguments. "
+        "If a tool result says a session is still "
         "running, poll that session with the available polling tool before treating the "
         "command as complete. Do not stop with a plan or future-tense status update; if "
         "more work remains, make the next tool call instead. Available tools:\n"
@@ -390,7 +419,10 @@ def messages_from_response_output(output: list[dict[str, Any]]) -> list[dict[str
             messages.append(
                 {
                     "role": "assistant",
-                    "content": f"Tool call requested: {name}({arguments})",
+                    "content": json.dumps(
+                        {"tool_calls": [{"name": name, "arguments": arguments}]},
+                        separators=(",", ":"),
+                    ),
                 }
             )
         elif item_type == "message":
@@ -595,7 +627,7 @@ def parse_tool_calls(text: str) -> list[dict[str, str]]:
 
     parsed = _parse_json_candidate(text)
     if parsed is None:
-        return []
+        return _parse_text_tool_calls(text)
     raw_calls: Any
     if isinstance(parsed, list):
         raw_calls = parsed
@@ -609,9 +641,9 @@ def parse_tool_calls(text: str) -> list[dict[str, str]]:
         elif parsed.get("type") in {"function_call", "tool_call"} or "name" in parsed:
             raw_calls = [parsed]
         else:
-            return []
+            return _parse_text_tool_calls(text)
     else:
-        return []
+        return _parse_text_tool_calls(text)
 
     calls: list[dict[str, str]] = []
     for raw in raw_calls:
@@ -638,6 +670,42 @@ def parse_tool_calls(text: str) -> list[dict[str, str]]:
                 "arguments": arguments_text,
             }
         )
+    return calls or _parse_text_tool_calls(text)
+
+
+def _parse_text_tool_calls(text: str) -> list[dict[str, str]]:
+    """Parse local-model fallback text like ``Tool call requested: name({...})``."""
+
+    calls: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    pattern = re.compile(r"Tool call requested:\s*([A-Za-z_][\w.-]*)\((.*)\)\s*$")
+    for line in text.splitlines():
+        match = pattern.search(line.strip())
+        if not match:
+            continue
+        name = match.group(1)
+        raw_arguments = match.group(2).strip()
+        arguments: Any
+        if not raw_arguments:
+            arguments = {}
+        else:
+            try:
+                arguments = json.loads(raw_arguments)
+            except json.JSONDecodeError:
+                try:
+                    arguments = ast.literal_eval(raw_arguments)
+                except (SyntaxError, ValueError):
+                    arguments = raw_arguments
+        if isinstance(arguments, str):
+            arguments_text = arguments
+        else:
+            arguments = _normalize_tool_arguments(name, arguments)
+            arguments_text = json.dumps(arguments, separators=(",", ":"), sort_keys=True)
+        key = (name, arguments_text)
+        if key in seen:
+            continue
+        seen.add(key)
+        calls.append({"call_id": _id("call"), "name": name, "arguments": arguments_text})
     return calls
 
 
@@ -725,10 +793,18 @@ class CAAInferenceEngine:
     ) -> tuple[str, CaaModelAlias, list[dict[str, str]]]:
         self.load()
         alias = resolve_model_alias(_as_text(payload.get("model")), self.aliases)
+        template_tools = normalize_tools_for_chat_template(payload.get("tools"))
+        use_native_tools = False
+        if template_tools:
+            from .interventions.caa import processor_supports_tools
+
+            assert self.processor is not None
+            use_native_tools = processor_supports_tools(self.processor, template_tools)
         messages = build_generation_messages(
             payload,
             chat_messages=chat_messages,
             compact_agent_context=self.compact_agent_context,
+            include_tool_instructions=not use_native_tools,
         )
         previous_response_id = _as_text(payload.get("previous_response_id"))
         if previous_response_id:
@@ -750,6 +826,7 @@ class CAAInferenceEngine:
 
                 text = generate_messages_unsteered(
                     messages=messages,
+                    tools=template_tools if use_native_tools else None,
                     processor=self.processor,
                     model=self.model,
                     max_new_tokens=max_new_tokens,
@@ -764,6 +841,7 @@ class CAAInferenceEngine:
                 assert self.vector_bundle is not None
                 text = generate_messages_with_vector(
                     messages=messages,
+                    tools=template_tools if use_native_tools else None,
                     vector_bundle=self.vector_bundle,
                     concept=alias.concept,
                     layers=[alias.layer],
@@ -953,7 +1031,10 @@ def _messages_from_input_list(
             messages.append(
                 {
                     "role": "assistant",
-                    "content": f"Tool call requested: {name}({arguments})",
+                    "content": json.dumps(
+                        {"tool_calls": [{"name": name, "arguments": arguments}]},
+                        separators=(",", ":"),
+                    ),
                 }
             )
             continue
