@@ -4,6 +4,7 @@ import json
 
 from onc_co_scientist.caa_server import (
     CAA_MODEL_ALIASES,
+    CAAInferenceEngine,
     build_generation_messages,
     build_responses_payload,
     combine_previous_response_messages,
@@ -50,6 +51,78 @@ def test_dynamic_model_aliases_support_smaller_gemma_family() -> None:
 
     payload = models_payload(aliases)
     assert {item["id"] for item in payload["data"]} == set(aliases)
+
+
+def test_inference_engine_passes_transformers_speed_knobs(monkeypatch, tmp_path) -> None:
+    calls = {}
+
+    def fake_vector_load(path):
+        calls["vector_file"] = path
+        return object()
+
+    def fake_model_load(model_path, **kwargs):
+        calls["model_path"] = model_path
+        calls.update(kwargs)
+        return object(), object()
+
+    monkeypatch.setattr("onc_co_scientist.caa_server.VectorBundle.load", fake_vector_load)
+    monkeypatch.setattr(
+        "onc_co_scientist.interventions.caa.load_transformers_text_model",
+        fake_model_load,
+    )
+
+    vector_file = tmp_path / "vectors.npz"
+    engine = CAAInferenceEngine(
+        model_path="local-model",
+        vector_file=vector_file,
+        attn_implementation="sdpa",
+        cache_implementation="static",
+        compile_forward=True,
+        compile_mode="max-autotune",
+    )
+
+    engine.load()
+
+    assert calls["vector_file"] == vector_file
+    assert calls["model_path"] == "local-model"
+    assert calls["attn_implementation"] == "sdpa"
+    assert calls["compile_forward"] is True
+    assert calls["compile_mode"] == "max-autotune"
+
+
+def test_inference_engine_passes_static_cache_to_generation(monkeypatch, tmp_path) -> None:
+    calls = {}
+
+    def fake_generate(**kwargs):
+        calls.update(kwargs)
+        return "READY"
+
+    monkeypatch.setattr(
+        "onc_co_scientist.interventions.caa.generate_messages_unsteered",
+        fake_generate,
+    )
+
+    engine = CAAInferenceEngine(
+        model_path="local-model",
+        vector_file=tmp_path / "vectors.npz",
+        cache_implementation="static",
+    )
+    engine.processor = object()
+    engine.model = object()
+
+    text, alias, _messages = engine.generate_for_request(
+        {
+            "model": "gemma4-31b-control",
+            "messages": [{"role": "user", "content": "Reply exactly READY."}],
+            "max_tokens": 16,
+        },
+        chat_messages=True,
+    )
+
+    assert text == "READY"
+    assert alias.is_control
+    assert calls["cache_implementation"] == "static"
+    assert calls["max_new_tokens"] == 16
 
 
 def test_parse_tool_calls_accepts_textual_local_model_fallback() -> None:

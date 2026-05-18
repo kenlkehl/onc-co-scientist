@@ -61,6 +61,9 @@ def load_transformers_text_model(
     dtype: str = "auto",
     device_map: str = "auto",
     trust_remote_code: bool = False,
+    attn_implementation: str | None = "sdpa",
+    compile_forward: bool = False,
+    compile_mode: str = "reduce-overhead",
 ):
     """Load a text-generation model plus processor/tokenizer via Transformers."""
 
@@ -99,6 +102,8 @@ def load_transformers_text_model(
         "device_map": device_map,
         "low_cpu_mem_usage": True,
     }
+    if attn_implementation and attn_implementation.lower() not in {"auto", "none", "default"}:
+        model_kwargs["attn_implementation"] = attn_implementation
     model_classes = [transformers.AutoModelForCausalLM]
     for class_name in ("AutoModelForImageTextToText", "AutoModelForMultimodalLM"):
         model_class = getattr(transformers, class_name, None)
@@ -131,6 +136,12 @@ def load_transformers_text_model(
         assert last_config_error is not None
         raise last_config_error
     model.eval()
+    if compile_forward:
+        model.forward = torch.compile(
+            model.forward,
+            mode=compile_mode,
+            fullgraph=True,
+        )
     return processor, model
 
 
@@ -259,6 +270,7 @@ def generate_with_vector(
     temperature: float = 1.0,
     top_p: float = 0.95,
     top_k: int = 64,
+    cache_implementation: str | None = "static",
     enable_thinking: bool = False,
 ) -> str:
     """Generate text while applying additive steering or runtime ablation."""
@@ -280,6 +292,7 @@ def generate_with_vector(
         temperature=temperature,
         top_p=top_p,
         top_k=top_k,
+        cache_implementation=cache_implementation,
         enable_thinking=enable_thinking,
     )
 
@@ -294,6 +307,7 @@ def generate_messages_unsteered(
     temperature: float = 1.0,
     top_p: float = 0.95,
     top_k: int = 64,
+    cache_implementation: str | None = "static",
     enable_thinking: bool = False,
 ) -> str:
     """Generate text from already-rendered chat messages without steering."""
@@ -307,6 +321,7 @@ def generate_messages_unsteered(
         temperature=temperature,
         top_p=top_p,
         top_k=top_k,
+        cache_implementation=cache_implementation,
         enable_thinking=enable_thinking,
     )
 
@@ -326,6 +341,7 @@ def generate_messages_with_vector(
     temperature: float = 1.0,
     top_p: float = 0.95,
     top_k: int = 64,
+    cache_implementation: str | None = "static",
     enable_thinking: bool = False,
 ) -> str:
     """Generate text from chat messages while applying CAA steering."""
@@ -351,6 +367,7 @@ def generate_messages_with_vector(
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
+            cache_implementation=cache_implementation,
             enable_thinking=enable_thinking,
         )
 
@@ -365,6 +382,7 @@ def _generate_messages(
     temperature: float,
     top_p: float,
     top_k: int,
+    cache_implementation: str | None,
     enable_thinking: bool,
 ) -> str:
     """Shared Transformers generation path for CAA server and CLI helpers."""
@@ -385,6 +403,8 @@ def _generate_messages(
         "top_p": top_p,
         "top_k": top_k,
     }
+    if cache_implementation and cache_implementation.lower() not in {"auto", "none", "default"}:
+        kwargs["cache_implementation"] = cache_implementation
     pad_token_id = _processor_token_id(processor, "pad_token_id")
     eos_token_id = _processor_token_id(processor, "eos_token_id")
     if pad_token_id is not None:

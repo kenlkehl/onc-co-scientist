@@ -898,6 +898,31 @@ def caa_serve(
         typer.Option("--local-files-only/--allow-download"),
     ] = True,
     trust_remote_code: Annotated[bool, typer.Option("--trust-remote-code")] = False,
+    attn_implementation: Annotated[
+        str,
+        typer.Option(
+            "--attn-implementation",
+            help="Transformers attention backend. Use 'none' to keep the model default.",
+        ),
+    ] = "sdpa",
+    cache_implementation: Annotated[
+        str,
+        typer.Option(
+            "--cache-implementation",
+            help="Generation KV-cache backend. Use 'none' to keep the Transformers default.",
+        ),
+    ] = "static",
+    compile_forward: Annotated[
+        bool,
+        typer.Option(
+            "--compile-forward/--no-compile-forward",
+            help="Opt-in torch.compile(model.forward) for repeated-generation experiments.",
+        ),
+    ] = False,
+    compile_mode: Annotated[
+        str,
+        typer.Option("--compile-mode", help="torch.compile mode when --compile-forward is set."),
+    ] = "reduce-overhead",
     default_max_new_tokens: Annotated[
         int,
         typer.Option("--default-max-new-tokens", min=1),
@@ -949,6 +974,10 @@ def caa_serve(
         device_map=device_map,
         local_files_only=local_files_only,
         trust_remote_code=trust_remote_code,
+        attn_implementation=attn_implementation,
+        cache_implementation=cache_implementation,
+        compile_forward=compile_forward,
+        compile_mode=compile_mode,
         default_max_new_tokens=default_max_new_tokens,
         cache_dir=cache_dir.expanduser() if cache_dir is not None else None,
         enable_thinking=enable_thinking,

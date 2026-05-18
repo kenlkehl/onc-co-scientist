@@ -28,6 +28,8 @@ DEFAULT_GEMMA31B_VECTOR_PATH = "data/caa/gemma4_31b_clinical_pubmed_layers20_30_
 DEFAULT_CAA_CONCEPT = "paradigm_orthogonalized"
 DEFAULT_CAA_LAYER = 40
 DEFAULT_ALIAS_PREFIX = "gemma4-31b"
+DEFAULT_ATTENTION_IMPLEMENTATION = "sdpa"
+DEFAULT_CACHE_IMPLEMENTATION = "static"
 MAX_SYSTEM_CONTEXT_CHARS = 4000
 MAX_TOOL_PROMPT_CHARS = 6000
 MAX_TOOL_DESCRIPTION_CHARS = 220
@@ -747,6 +749,10 @@ class CAAInferenceEngine:
         device_map: str = "auto",
         local_files_only: bool = True,
         trust_remote_code: bool = False,
+        attn_implementation: str | None = DEFAULT_ATTENTION_IMPLEMENTATION,
+        cache_implementation: str | None = DEFAULT_CACHE_IMPLEMENTATION,
+        compile_forward: bool = False,
+        compile_mode: str = "reduce-overhead",
         default_max_new_tokens: int = 4096,
         enable_thinking: bool = False,
         cache_dir: Path | None = None,
@@ -759,6 +765,10 @@ class CAAInferenceEngine:
         self.device_map = device_map
         self.local_files_only = local_files_only
         self.trust_remote_code = trust_remote_code
+        self.attn_implementation = attn_implementation
+        self.cache_implementation = cache_implementation
+        self.compile_forward = compile_forward
+        self.compile_mode = compile_mode
         self.default_max_new_tokens = default_max_new_tokens
         self.enable_thinking = enable_thinking
         self.cache_dir = cache_dir
@@ -790,6 +800,9 @@ class CAAInferenceEngine:
                 dtype=self.dtype,
                 device_map=self.device_map,
                 trust_remote_code=self.trust_remote_code,
+                attn_implementation=self.attn_implementation,
+                compile_forward=self.compile_forward,
+                compile_mode=self.compile_mode,
             )
 
     def generate_for_request(
@@ -840,6 +853,7 @@ class CAAInferenceEngine:
                     temperature=temperature,
                     top_p=top_p,
                     top_k=top_k,
+                    cache_implementation=self.cache_implementation,
                     enable_thinking=self.enable_thinking,
                 )
             else:
@@ -860,6 +874,7 @@ class CAAInferenceEngine:
                     temperature=temperature,
                     top_p=top_p,
                     top_k=top_k,
+                    cache_implementation=self.cache_implementation,
                     enable_thinking=self.enable_thinking,
                 )
         return text, alias, messages
@@ -979,6 +994,10 @@ def serve(
     device_map: str = "auto",
     local_files_only: bool = True,
     trust_remote_code: bool = False,
+    attn_implementation: str | None = DEFAULT_ATTENTION_IMPLEMENTATION,
+    cache_implementation: str | None = DEFAULT_CACHE_IMPLEMENTATION,
+    compile_forward: bool = False,
+    compile_mode: str = "reduce-overhead",
     default_max_new_tokens: int = 4096,
     enable_thinking: bool = False,
     cache_dir: Path | None = None,
@@ -1004,6 +1023,10 @@ def serve(
         device_map=device_map,
         local_files_only=local_files_only,
         trust_remote_code=trust_remote_code,
+        attn_implementation=attn_implementation,
+        cache_implementation=cache_implementation,
+        compile_forward=compile_forward,
+        compile_mode=compile_mode,
         default_max_new_tokens=default_max_new_tokens,
         enable_thinking=enable_thinking,
         cache_dir=cache_dir,
