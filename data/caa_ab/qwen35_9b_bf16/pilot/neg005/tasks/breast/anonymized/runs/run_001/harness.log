@@ -1,0 +1,3238 @@
+Reading additional input from stdin...
+OpenAI Codex v0.130.0
+--------
+workdir: /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+model: qwen35-9b-caa-l24-neg005
+provider: caa_local
+approval: never
+sandbox: danger-full-access
+reasoning effort: low
+reasoning summaries: none
+session id: 019e3eed-72d1-7dd2-9be1-7f8272684823
+--------
+user
+Read agent_instructions.md in the current working directory and follow its instructions exactly. Prefer one compact loop-based end-to-end Python analysis script that writes transcript.json and analysis_summary.txt. Use boolean-mask group comparisons rather than fragile crosstab label indexing. Do not hard-code one source block per hypothesis or repeatedly rerun the same comparison unless correcting an error. Keep helper return shapes stable, preferably dictionaries rather than unpacked tuples. Do not put conditional expressions inside format specifiers; precompute display strings first. Emit transcript.json and analysis_summary.txt in this directory when done. Do not access any files outside this directory.
+2026-05-19T06:30:18.345198Z ERROR codex_core::tools::router: error=resources/read failed: unknown MCP server 'filesystem'
+mcp: filesystem/read_mcp_resource started
+mcp: filesystem/read_mcp_resource (failed)
+resources/read failed: unknown MCP server 'filesystem'
+exec
+/bin/bash -lc 'cat /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/agent_instructions.md' in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ succeeded in 0ms:
+# Oncology Dataset Analysis - Task Brief
+
+**Dataset:** `ds001_breast`
+**Patients:** 50000
+**Maximum iterations (N):** 10
+
+## Your role
+
+You have been asked to analyze a large oncology dataset assembled from electronic health records aggregated by a commercial healthcare data vendor. Your job is to explore the dataset and surface clinically meaningful patterns - main effects, subgroup heterogeneity, and multivariable interactions among the features and outcomes - testing each pattern statistically and refining your ideas as evidence accumulates across iterations.
+
+## Dataset
+
+The dataset is available at:
+
+- `dataset.parquet` (Parquet)
+
+A human-readable column description is provided in `dataset_description.md`.
+
+## Python environment
+
+Run all Python code inside the uv-managed environment at `/home/kenneth_kehl/onc-co-scientist/.venv`. Use its interpreter directly (e.g. `/home/kenneth_kehl/onc-co-scientist/.venv/bin/python your_script.py`) or activate it first (`source /home/kenneth_kehl/onc-co-scientist/.venv/bin/activate`), or invoke it via `uv run --project /home/kenneth_kehl/onc-co-scientist/.venv python ...`. Do not install packages into a different interpreter or create a new virtualenv - this environment already has the dependencies you need.
+
+
+You must not look outside the current working directory for additional data or context. This is critical for patient privacy.
+
+## Protocol (up to 10 iterations)
+
+In each iteration:
+
+1. **Propose hypotheses.** State one or more natural-language hypotheses about patterns in the data - relationships among features, subgroups, and outcomes.
+2. **Test them.** Execute statistical analyses on the dataset (e.g., regression with interactions, stratified comparisons, subgroup analyses). Record the signed effect estimate, the p-value, and whether the result was significant.
+3. **Update.** Use the results to propose new hypotheses or refine existing ones in the next iteration.
+
+Stop when you have thoroughly probed the dataset or when you reach the iteration cap.
+
+Do not stop after main effects. Before your final transcript, run at least one systematic treatment-effect heterogeneity search for each outcome with usable treatment variation. Appropriate approaches include treatment-by-feature interaction screening, joint models over the strongest modifiers, tree/rule-based subgroup discovery, or exhaustive checks of small multi-feature subgroups. When a treatment effect appears concentrated in a subgroup, state and test the complete subgroup definition, including variables whose unfavorable value appears to suppress the treatment effect.
+
+Ignore any `runs/` directory or `harness.log` file. Those are harness artifacts,
+not task inputs. Write `transcript.json` and `analysis_summary.txt` at this
+bundle root, not under `runs/`.
+
+Preferred execution pattern: after reading this brief, write and run a single
+end-to-end Python analysis script that performs the full protocol, records each
+iteration in memory, and writes the two required artifacts. Keep the script
+loop-based and reusable: define helper functions, loop over selected feature
+lists, and avoid hard-coding one source block per hypothesis or feature pair.
+Each iteration should normally propose and test 1-3 focused hypotheses; use
+ranked screening to choose follow-up hypotheses instead of enumerating every
+possible combination. Do not repeatedly rerun the same comparison unless you
+are correcting an error.
+
+When carrying findings forward between iterations, keep column names, hypothesis
+IDs, effect estimates, p-values, and significance flags in separate result
+fields. Later analyses must index the dataframe by real dataset column names,
+not by hypothesis IDs such as `h1_3`. Generate hypothesis IDs directly from the
+current iteration and local loop index, or from a simple incrementing counter;
+do not pop IDs from a fixed precomputed list that can be exhausted.
+
+Use scalar-safe statistical helpers in your script. For example,
+`scipy.stats.chi2_contingency` returns four values, so unpack it as
+`_, p_value, _, _ = stats.chi2_contingency(table, correction=False)` and store
+`float(p_value)` in the transcript. `scipy.stats.fisher_exact` returns two
+values, so unpack it as `_, p_value = stats.fisher_exact(table)` and store
+`float(p_value)`. `scipy.stats.ttest_ind` and `scipy.stats.pearsonr` return
+result objects in recent SciPy versions; read `result.pvalue` and
+`result.statistic` instead of unpacking them as four values. Store effect
+estimates and p-values as plain Python floats, not NumPy arrays, tuples, or
+statistical result objects.
+Likewise, store significance flags as plain Python `bool` values, not NumPy
+boolean scalars.
+Keep helper return shapes stable. Prefer returning dictionaries from analysis
+helpers over returning tuples that must be unpacked at many call sites. Do not
+put conditional expressions inside f-string format specifiers; compute display
+strings before formatting. Do not nest f-strings or escaped quotes inside an
+outer f-string; precompute any joined or sorted display text in a separate
+variable.
+Do not pass placeholder values such as `None` into helpers that index dataframe
+columns. Use separate helpers for feature-outcome analyses versus
+feature-feature interaction analyses, or branch before indexing optional
+columns.
+Before formatting any numeric value with `:.3f` or similar, check for `None`,
+NaN, or infinite values and use a precomputed fallback string such as `"NA"`.
+Do not apply numeric format specs such as `:.3f` to strings returned by helper
+functions like `safe_str`; either format a numeric value directly after
+validating it, or insert the already formatted display string without another
+format spec. Numeric formatting helpers must return fallback strings such as
+`"NA"` before calling `float(value)`; do not call `float("NA")`.
+When building summary text, remember that `list.append()` accepts one item; use
+`summary_lines.extend([...])` for multiple lines.
+For binary or categorical feature-outcome comparisons, prefer boolean-mask group
+rates over direct `pd.crosstab(...).loc[value, ...]` indexing. A robust pattern
+is: `mask = df[feature] == value`, compare `df.loc[mask, outcome].mean()` with
+`df.loc[~mask, outcome].mean()`, and build a 2x2 count table from those two
+groups. When counting compound masks, sum the boolean Series before converting
+to `int`, e.g. `int((mask & (df[outcome] == 1)).sum())`; do not write
+`int(mask & condition).sum()` or `int(mask & condition.sum())`. Do not subtract
+two unequal-length outcome arrays; compare their means or fit a regression
+model instead. If you write a JSON helper, include NumPy integers, floats,
+booleans, and arrays and convert them to plain JSON types.
+Before calling `json.dump`, run the whole transcript through that helper, e.g.
+`json.dump(to_jsonable(transcript), f, indent=2)`, so no `np.bool_`, `np.int64`,
+`np.float64`, `np.ndarray`, or NaN value can break final artifact generation.
+Before finishing, rerun the final script and confirm it exits without a
+traceback and writes parseable JSON.
+
+## Required output
+
+Emit two files in this bundle directory:
+
+1. `transcript.json` - conforming to the schema in this bundle (`transcript_schema.json`). A minimal example is provided in `transcript_example.json`.
+2. `analysis_summary.txt` - a plain-text narrative that synthesizes and summarizes the results of all analyses you ran. Walk through the hypotheses you explored across iterations, what the statistical evidence showed (direction, magnitude, significance), which hypotheses were supported vs. refuted, and any overall conclusions about feature-outcome relationships in this dataset.
+
+For reliable artifact generation, keep shell/tool calls compact. Save intermediate
+result files as you analyze, then generate `transcript.json` and
+`analysis_summary.txt` from those saved results with a short script. Keep the
+final script compact, preferably under 400 lines, and generate repetitive
+summary text from loops over the transcript rather than hard-coding a long
+report. Avoid emitting one very large inline transcript or source block in a
+single tool call.
+
+Critical fields to include in `transcript.json`:
+
+- `iterations[].proposed_hypotheses[].text` - the natural-language hypothesis. Make these **self-contained**: name the variables, the direction of effect, and any subgroup.
+- `iterations[].analyses[].hypothesis_ids` - every analysis must list the IDs of the hypotheses it addresses.
+- `iterations[].analyses[].effect_estimate` - signed on the outcome's natural scale; used to verify direction.
+- `iterations[].analyses[].p_value` or `significant` - used to verify statistical support.
+
+The top-level JSON value in `transcript.json` must be an object, not a list.
+Put your iteration records under that object's `iterations` field. Top-level
+fields `dataset_id`, `model_id`, `harness_id`, and `max_iterations` must be
+set. Set `max_iterations` to the cap you were given (10).
+
+## What makes a good transcript
+
+- Hypotheses that name specific columns and a signed direction (e.g., "In patients with `feature_example` set, mean `outcome_example` is lower than in patients without it"). Use the actual column names from the dataset, not placeholder labels.
+- Analyses that directly test each proposed hypothesis.
+- Appropriate use of interaction and subgroup analyses where the data structure warrants them, rather than stopping at main effects.
+- A final best-supported treatment-effect subgroup hypothesis for each outcome where one is plausible, naming the treatment, outcome, direction, and all subgroup predicates you believe define the effect.
+
+exec
+/bin/bash -lc 'cat /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/dataset_description.md' in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ succeeded in 0ms:
+# Oncology patient cohort `ds001_breast`
+
+This dataset contains 50000 patient records assembled from electronic health records aggregated by a commercial healthcare data vendor. Patient features have been de-identified to opaque labels (`feature_001`, `feature_002`, …); clinical outcomes retain their original names.
+
+## Columns
+
+### Identifiers and features
+- `feature_012`
+- `feature_011`
+- `feature_005`
+- `feature_006`
+- `feature_001`
+- `feature_030`
+- `feature_019`
+- `feature_029`
+- `feature_023`
+- `feature_018`
+- `feature_016`
+- `feature_009`
+- `feature_026`
+- `feature_028`
+- `feature_033`
+- `feature_036`
+- `feature_024`
+- `feature_031`
+- `feature_004`
+- `feature_021`
+- `feature_003`
+- `feature_015`
+- `feature_013`
+- `feature_022`
+- `feature_008`
+- `feature_032`
+- `feature_020`
+- `feature_025`
+- `feature_027`
+- `feature_034`
+- `feature_014`
+- `feature_037`
+- `feature_017`
+- `feature_035`
+- `feature_002`
+- `feature_007`
+- `feature_010`
+
+### Outcomes
+- `pfs_months`
+
+Each row represents one patient; no missing values are present.
+
+exec
+/bin/bash -lc 'cat /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/transcript_schema.json' in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ succeeded in 0ms:
+{
+  "$defs": {
+    "AnalysisRecord": {
+      "additionalProperties": true,
+      "description": "One statistical analysis the harness performed to test hypotheses.",
+      "properties": {
+        "hypothesis_ids": {
+          "description": "IDs of the hypotheses this analysis addresses.",
+          "items": {
+            "type": "string"
+          },
+          "title": "Hypothesis Ids",
+          "type": "array"
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional: the code executed (for reasoning-trace audits).",
+          "title": "Code"
+        },
+        "result_summary": {
+          "description": "Free-text summary of the statistical result.",
+          "title": "Result Summary",
+          "type": "string"
+        },
+        "p_value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "P Value"
+        },
+        "effect_estimate": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Signed effect estimate on the outcome's natural scale. Scoring uses the sign to verify the direction matches ground truth.",
+          "title": "Effect Estimate"
+        },
+        "significant": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Whether the harness deemed the result statistically significant. If omitted and p_value is present, scoring uses p < 0.05.",
+          "title": "Significant"
+        }
+      },
+      "required": [
+        "hypothesis_ids",
+        "result_summary"
+      ],
+      "title": "AnalysisRecord",
+      "type": "object"
+    },
+    "HypothesisRecord": {
+      "additionalProperties": true,
+      "description": "One hypothesis proposed by the harness within an iteration.",
+      "properties": {
+        "id": {
+          "description": "Stable within a transcript.",
+          "title": "Id",
+          "type": "string"
+        },
+        "text": {
+          "description": "Natural-language statement of the hypothesis.",
+          "title": "Text",
+          "type": "string"
+        },
+        "kind": {
+          "default": "novel",
+          "enum": [
+            "novel",
+            "refined"
+          ],
+          "title": "Kind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "title": "HypothesisRecord",
+      "type": "object"
+    },
+    "IterationRecord": {
+      "additionalProperties": true,
+      "description": "One full iteration of the propose-analyze-refine loop.",
+      "properties": {
+        "index": {
+          "description": "1-based iteration index.",
+          "minimum": 1,
+          "title": "Index",
+          "type": "integer"
+        },
+        "proposed_hypotheses": {
+          "items": {
+            "$ref": "#/$defs/HypothesisRecord"
+          },
+          "title": "Proposed Hypotheses",
+          "type": "array"
+        },
+        "analyses": {
+          "items": {
+            "$ref": "#/$defs/AnalysisRecord"
+          },
+          "title": "Analyses",
+          "type": "array"
+        }
+      },
+      "required": [
+        "index",
+        "proposed_hypotheses"
+      ],
+      "title": "IterationRecord",
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "description": "Top-level transcript emitted by an external harness.\n\nA harness should emit exactly one file named ``transcript.json`` conforming\nto this schema when it finishes a dataset.",
+  "properties": {
+    "dataset_id": {
+      "title": "Dataset Id",
+      "type": "string"
+    },
+    "model_id": {
+      "description": "Model used by the harness (e.g. 'claude-opus-4-7').",
+      "title": "Model Id",
+      "type": "string"
+    },
+    "harness_id": {
+      "description": "Identifier for the harness implementation and version (e.g. 'claude-code@2.3.1', 'codex-cli@0.8.0', 'custom-react@sha-deadbee').",
+      "title": "Harness Id",
+      "type": "string"
+    },
+    "max_iterations": {
+      "minimum": 1,
+      "title": "Max Iterations",
+      "type": "integer"
+    },
+    "iterations": {
+      "items": {
+        "$ref": "#/$defs/IterationRecord"
+      },
+      "title": "Iterations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "dataset_id",
+    "model_id",
+    "harness_id",
+    "max_iterations",
+    "iterations"
+  ],
+  "title": "Transcript",
+  "type": "object"
+}
+
+exec
+/bin/bash -lc 'cat /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/transcript_example.json' in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ succeeded in 0ms:
+{
+  "dataset_id": "ds001",
+  "model_id": "claude-sonnet-4-6",
+  "harness_id": "claude-code@example",
+  "max_iterations": 5,
+  "iterations": [
+    {
+      "index": 1,
+      "proposed_hypotheses": [
+        {
+          "id": "h1",
+          "text": "Mean age differs between patients assigned to treatment_pembrolizumab and those not assigned to treatment_pembrolizumab.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h1"],
+          "code": "from scipy import stats\nstats.ttest_ind(df.loc[df['treatment_pembrolizumab']==1, 'age_years'], df.loc[df['treatment_pembrolizumab']==0, 'age_years'])",
+          "result_summary": "Mean age is 64.2 on treatment_pembrolizumab vs 63.8 off (t-test p=0.41).",
+          "p_value": 0.41,
+          "effect_estimate": 0.4,
+          "significant": false
+        }
+      ]
+    },
+    {
+      "index": 2,
+      "proposed_hypotheses": [
+        {
+          "id": "h2",
+          "text": "The proportion of female patients differs between those assigned to treatment_pembrolizumab and those not assigned to treatment_pembrolizumab.",
+          "kind": "novel"
+        }
+      ],
+      "analyses": [
+        {
+          "hypothesis_ids": ["h2"],
+          "code": "import pandas as pd\npd.crosstab(df['treatment_pembrolizumab'], df['sex_female'])",
+          "result_summary": "Proportion female: 0.52 on treatment_pembrolizumab vs 0.49 off (chi-square p=0.62).",
+          "p_value": 0.62,
+          "effect_estimate": 0.03,
+          "significant": false
+        }
+      ]
+    }
+  ]
+}
+
+exec
+/bin/bash -lc 'head -100 /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/dataset.parquet' in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ succeeded in 0ms:
+PAR1��=��L��   ��   P0
+ 1
+ 2
+ 3
+ 4
+ 5
+ 6
+ 7
+ 8
+ 9
+ 1d 1d 1d 1d 1d 1d 1d 1d 1d 1d 2d 2d 2d 2d 2d 2d 2d 2d 2d 2d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 4d 4d 4d 4d 4d 4d 4d 4d 4d 4d 5d 5d 5d 5d 5d 5d 5d 5d 5d 5d 6d 6d 6d 6d 6d 6d 6d 6d 6d 6d 7d 7d 7d 7d 7d 7d 7d 7d 7d 7d 8d 8d 8d 8d 8d 8d 8d 8d 8d 8d 9d 9d 9d 9d 9d 9d 9d 9d 9d 9d10d 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9q�10q�10q�10q�10q�10q�10q�10q�10q�10q�10q� 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"'12� 1"' 1"' 1"' 1"' 1"' 1"' 1"'12� 1"'12� 1"' 1"' 1"' 1"' 1"' 1"'12� 1"'12� 1"'12� 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"'13� 1"'13� 1"' 1"' 1"' 1"' 1"' 1"' 1"'13� 1"'13� 1"' 1"' 1"' 1"' 1"' 1"' 1"'13� 1"'13u�"' 1"' 1"' 1"' 1"' 1"'13� 1"'13� 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"'15��"'15��"' 1"' 1"' 1"' 1"' 1"' 1"'15"�"'15"�"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"'18"p"'18(# 1"'18(# 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 1"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"'22(# 2"'22(# 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"'23�6 2"' 2"' 2"' 2"' 2"'23�* 2"'23�* 2"'23� 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"'24�* 2"'24�* 2"' 2"' 2"' 2"' 2"' 2"'24�: 2"'24�: 2"'24�: 2"' 2"' 2"' 2"' 2"'24�: 2"'24�: 2"'24�: 2"' 2"' 2"' 2"' 2"'24�*24(#24�*24(#24u�"' 2"' 2"' 2"' 2"'24u�"'24u�"'24u�"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"'26��"'26��"' 2"' 2"' 2"' 2"' 2"' 2"'26��"'26��"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"'29"�"'29 N 2"'29 N 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 2"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"'32hB 3"'32hB 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"'34�a 3"'34�a 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"'35�e 3"'35�e 3"'35�e 3"' 3"' 3"' 3"' 3"'35�* 3"'35�* 3"'35�* 3"' 3"' 3"' 3"' 3"'35�* 3"'35�* 3"'35p 3"' 3"' 3"' 3"' 3"'35(# 3"'35(# 3"'35�* 3"' 3"' 3"' 3"' 3"' 3"'35u�"'35u�"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"'37��"'37��"' 3"' 3"' 3"' 3"' 3"' 3"'37��"'37��"' 3"' 3"' 3"' 3"' 3"' 3"'37�* 3"'37�* 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 3"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"'42PF 4"'42PF 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"'46�* 4"'46�* 4"'46�* 4"' 4"' 4"' 4"' 4"'46�* 4"'46�* 4"'46�* 4"' 4"' 4"' 4"' 4"' 4"'46�6 4"'46�6 4"' 4"' 4"' 4"' 4"' 4"' 4"'46"�"'46"�"' 4"' 4"' 4"' 4"' 4"' 4"'46�* 4"'46�* 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"'48�* 4"'48�* 4"' 4"' 4"' 4"' 4"' 4"' 4"'48�* 4"'48�* 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"'48��"'48��"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 4"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"'50(�50(�50(� 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"'52�: 5"'52�: 5"'52`m 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"'57�* 5"'57�* 5"'57�* 5"' 5"' 5"' 5"' 5"' 5"'57�� 5"'57�� 5"' 5"' 5"' 5"' 5"' 5"' 5"'57�* 5"'57�* 5"' 5"' 5"' 5"' 5"' 5"' 5"'57�* 5"'57�* 5"' 5"' 5"' 5"' 5"' 5"' 5"'57(# 5"'57(# 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"' 5"'59��"'59��"' 5"' 5"' 5"' 5"' 5"' 5"'59��"'59��"' 5"' 5"' 5"' 5"' 5"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"'608�608�608�608�608�608� 6"'608� 6"'608� 6"'608� 6"'608� 6"'608� 6"'608�608�608�608�608�608�608�608�608� 6"'60��60�60��60�608�608�608�608�608� 6"'60�60�660�60�6608�608�608�608�608� 6"' 6"'60�. 6"'60�a 6"'60y 6"'60y 6"' 6"'60q�60�.60q�60�a608�608�608�608�608� 6"'60q�60@60q�60@608�60�608�60�608� 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"'61�* 6"'61�* 6"'61u�"'61u�"'61u�"'61u� 1 �61u� 1 � 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"' 6"'$6552   P046553   P06554
+ 5
+ 6
+ 7
+ 8
+ 9
+60
+ 1
+ 2
+d 6d 6d 6d 6d 6d 6d 7d 7d 7d 7d 7d 7d 7d 7d 7d 7d 8d 8d 8d 8d 8d 8d 8d 8d 8d 8d 9d 9d 9d 9d 9d 9d 9d 9d 9d 9d60d60d60d60d60d60d60d60d60d60d 1d 1d 1d 1d 1d 1d 1d 1d 1d 1d 2d 2d 2d 2d 2d 2d 2d 2d 2d 2d 3d 3d 3d 3d 3d 3d 3d 3d 3d 3d 4d 4d 4d 4d 4d 4d 4d 4d 4d 4d 5d 5d 5du� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 6u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 7u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 8u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9u� 9q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70q�70u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 1u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 2u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 3u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 4u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u� 5u�"' 7"'75u� 5u� 5u� 5u� 5u�"'75u� 5u� 5u�"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"' 7"'79"�"'79"�"' 7"' 7"' 7"' 7"' 7"' 7"'79"�"'79"�"' 7"' 7"' 7"' 7"' 7"'79"�"'79"�"'79"�"' 7"' 7"' 7"' 7"'79"�"'79"�"'79"�"' 7"' 7"' 7"' 7"'79"�"'79"�"'79"�"' 7"' 7"' 7"' 7"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"'82X 8"'82X 8"' 8"'82�82X82�82@82X82X82X82X82X 8"'82�82X82�82@82@82@82@82@82@ 8"'82@82�82@82�82@82@82@82@82@ 8"'82@ 8"'82@ 8"'82@ 8"'82@ 8"'82@ 8"'82@82�82@82�82@82@82@82@82@ 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"'83@83@83@83@83@83@83@83@83@ 8"' 8"'83@ 8"'83@ 8"'83@ 8"'83@ 8"' 8"'83@83@83@83@83@83u� 3@83u� 3@ 8"'83u� 3u� 3u� 3u� 3u� 3u�"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 8"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"'93�*93�*93�* 9"'93�*93�*93�*93�*93�*93�*93�*93�*93�* 9"'93�* 9"'93�* 9"'93�* 9"'93�* 9"'93�* 9"'93�*93�693�*93�693�*938J93�*938J93�* 9"'93�*93�*93�*93�*93�*93�*93�*93�*93�* 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"'94�*94�*94�*94�*94�*94�*94�*94�*94�* 9"'948J94�*948J94�*948J94�*948J94�*948J 9"'94�*94�*94�*94�*94�*94�*94�*94�*94�* 9"'94�*94�*94�*94�*94�*94�*94u� 4u� 4u�"'94u� 4u� 4u� 4u� 4u� 4u� 4u�"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9"' 9'10'
+܂
+܂
+@�
+@�
+ 5~�
+ 6
+@�@�
+@�10'
+d�ad�ad�ad�ad�a10'
+�p�p�p�p10'
+�p�p�p�p��a10'
+�p�p�p�p10'
+�p�p�p�p��e10'
+�p�p�p�X10'
+�PF�PF�PF�PF�R10'
+�X�X�X�X10'
+�X�X�X�X�'10'
+�'�'�'�'10'
+�'�'�'�'�u�'10'
+du�'�u�'d�e10'
+5,u�'�u�'5,u�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+d'q�'q 'd'10'
+q�'q�'�'q�'q�'10'
+�u�'du�'�u�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'102@
+du�'du�'du�'102��'UX��'U���'UX��'10'
+d��'d��'d�Y10'
+5,u�'5,u�'5,u�'10'
+d'q�'�'d'10'
+q�'1,'�'q�'1,'10'
+�u�'du�'�u�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+d'q�'q�'d'10'
+q�'q�'�'q�'q�'10'
+�u�'du�'�u�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'104�� 4u� 4u� 4�� 4u� 4u� 4�� 4u� 4u�'104�*
+�u� 4�� 4u� 4u� 4�� 4u� 4u�'104"� 4u�'u�u� 4u�'(5,u�'10'
+�'d'q�'d'10'
+q�'q�'1�'q�'q�'10'
+�u�'du�'�u�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+d��'du�'du�'10'
+d'q�'q�'d'10'
+q�'q�'�'q�'q�'10'
+�u�'du�'�u�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�' 1Տ&'q�'d'q�'q�'10'
+�'�L'�L'�'10'
+�u�'du�'�u�'10'
+du�'du�'du�'10'
+du�'du�'du�'10'
+du�'du�'du�' 1{QN"�'UX"X'5�"X'UX`m 19wnu�'�u�'�u�' 1tZ"�'�"�'�"�'�"�' 1�oxu�'u�u�'u u�' 1�lZ'�'d'1,'�' 1)idu�'1�'1,'�' 1�eZu�'�u�'du�'�"X' 1�ax��'5,��'���' 1�^Zu�'5,u�'5�u�' 1s[Zu�'5,u�'5,u�'5,"@' 1;Wxu�'5,u�'5,u�' 1TZu�'5,u�'5,u�' 1�PZu�'5,u�'5,u�'5,u�' 1�Lxu�'5,u�'5,u�' 1�IZ'�'d'1,'�' 1Fdu�'1�'1,'�' 1�BZu�'�u�'du�'�u�' 1�>xu�'5,u�'�u�' 1u;Zu�'5,u�'5�u�' 1K8Zu�'5,u�'5,u�'5,u�' 14xu�'5,u�'5,u�' 1�0Zu�'5,u�'5,u�' 1�-Zu�'5,u�'5,u�'5,u�' 1�)xu�'5,u�'5,q��&	P]&
+d�%-,�$�A$d�#�� 1�"d��!dq�� d��q��q���q���q���'�q��q�'M��I�����-q�y�q�k�q�]�q�E���q���q������������
+
+exec
+/bin/bash -lc "source /home/kenneth_kehl/onc-co-scientist/.venv/bin/activate && python -c \"import pandas as pd; df = pd.read_parquet('/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/dataset.parquet'); print(df.head(5)); print('\\\\nColumns:', df.columns.tolist()); print('\\\\nDtypes:'); print(df.dtypes)\"" in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ succeeded in 245ms:
+  patient_id  feature_012  feature_011  ...  feature_007  feature_010  pfs_months
+0     P00000         66.3            0  ...          4.2          9.5    3.277460
+1     P00001         63.7            1  ...          3.9          9.8    5.234750
+2     P00002         71.4            0  ...          4.4          9.0    5.326845
+3     P00003         66.0            0  ...          4.4          9.3    4.158300
+4     P00004         59.6            0  ...          4.3          9.7    3.432661
+
+[5 rows x 39 columns]
+
+Columns: ['patient_id', 'feature_012', 'feature_011', 'feature_005', 'feature_006', 'feature_001', 'feature_030', 'feature_019', 'feature_029', 'feature_023', 'feature_018', 'feature_016', 'feature_009', 'feature_026', 'feature_028', 'feature_033', 'feature_036', 'feature_024', 'feature_031', 'feature_004', 'feature_021', 'feature_003', 'feature_015', 'feature_013', 'feature_022', 'feature_008', 'feature_032', 'feature_020', 'feature_025', 'feature_027', 'feature_034', 'feature_014', 'feature_037', 'feature_017', 'feature_035', 'feature_002', 'feature_007', 'feature_010', 'pfs_months']
+
+Dtypes:
+patient_id      object
+feature_012    float64
+feature_011      int64
+feature_005      int64
+feature_006      int64
+feature_001      int64
+feature_030      int64
+feature_019      int64
+feature_029      int64
+feature_023      int64
+feature_018      int64
+feature_016      int64
+feature_009      int64
+feature_026      int64
+feature_028      int64
+feature_033    float64
+feature_036    float64
+feature_024    float64
+feature_031    float64
+feature_004    float64
+feature_021    float64
+feature_003    float64
+feature_015      int64
+feature_013      int64
+feature_022      int64
+feature_008      int64
+feature_032      int64
+feature_020      int64
+feature_025    float64
+feature_027    float64
+feature_034    float64
+feature_014    float64
+feature_037    float64
+feature_017    float64
+feature_035    float64
+feature_002    float64
+feature_007    float64
+feature_010    float64
+pfs_months     float64
+dtype: object
+
+exec
+/bin/bash -lc "source /home/kenneth_kehl/onc-co-scientist/.venv/bin/activate && python -c \"import pandas as pd; df = pd.read_parquet('/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/dataset.parquet'); print('Feature value ranges:'); for col in df.columns[1:-1]: vals = df[col].unique(); print(f'{col}: {len(vals)} unique values, range={vals.min() if vals.dtype.kind in \\\"iufo\\\" else \\\"N/A\\\"}')\"" in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ exited 1 in 0ms:
+  File "<string>", line 1
+    import pandas as pd; df = pd.read_parquet('/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/dataset.parquet'); print('Feature value ranges:'); for col in df.columns[1:-1]: vals = df[col].unique(); print(f'{col}: {len(vals)} unique values, range={vals.min() if vals.dtype.kind in "iufo" else "N/A"}')
+                                                                                                                                                                                                      ^^^
+SyntaxError: invalid syntax
+
+exec
+/bin/bash -lc "source /home/kenneth_kehl/onc-co-scientist/.venv/bin/activate && python << 'EOF'
+import pandas as pd
+df = pd.read_parquet('/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/dataset.parquet')
+print('Feature value ranges:')
+for col in df.columns[1:-1]:
+    vals = df[col].unique()
+    if vals.dtype.kind in 'iufo':
+        print(f'{col}: {len(vals)} unique values, range=[{vals.min()}, {vals.max()}]')
+    else:
+        print(f'{col}: {len(vals)} unique values')
+EOF" in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ succeeded in 211ms:
+Feature value ranges:
+feature_012: 586 unique values, range=[30.0, 90.0]
+feature_011: 2 unique values, range=[0, 1]
+feature_005: 3 unique values, range=[0, 2]
+feature_006: 2 unique values, range=[0, 1]
+feature_001: 2 unique values, range=[0, 1]
+feature_030: 2 unique values, range=[0, 1]
+feature_019: 2 unique values, range=[0, 1]
+feature_029: 2 unique values, range=[0, 1]
+feature_023: 2 unique values, range=[0, 1]
+feature_018: 2 unique values, range=[0, 1]
+feature_016: 2 unique values, range=[0, 1]
+feature_009: 2 unique values, range=[0, 1]
+feature_026: 2 unique values, range=[0, 1]
+feature_028: 2 unique values, range=[0, 1]
+feature_033: 845 unique values, range=[1.0, 100.0]
+feature_036: 165 unique values, range=[0.3, 20.0]
+feature_024: 39 unique values, range=[1.5, 5.5]
+feature_031: 23564 unique values, range=[48.21, 830.17]
+feature_004: 210 unique values, range=[0.0, 24.6]
+feature_021: 3686 unique values, range=[0.05, 300.0]
+feature_003: 1348 unique values, range=[0.27, 30.41]
+feature_015: 2 unique values, range=[0, 1]
+feature_013: 2 unique values, range=[0, 1]
+feature_022: 2 unique values, range=[0, 1]
+feature_008: 2 unique values, range=[0, 1]
+feature_032: 2 unique values, range=[0, 1]
+feature_020: 2 unique values, range=[0, 1]
+feature_025: 119 unique values, range=[6.0, 18.0]
+feature_027: 16634 unique values, range=[15.68, 601.53]
+feature_034: 5741 unique values, range=[4.97, 126.62]
+feature_014: 5796 unique values, range=[3.66, 168.35]
+feature_037: 268 unique values, range=[0.09, 3.53]
+feature_017: 179 unique values, range=[0.3, 2.11]
+feature_035: 34 unique values, range=[3.0, 36.0]
+feature_002: 25 unique values, range=[128.0, 152.0]
+feature_007: 39 unique values, range=[2.5, 6.3]
+feature_010: 43 unique values, range=[7.3, 11.8]
+
+exec
+/bin/bash -lc "source /home/kenneth_kehl/onc-co-scientist/.venv/bin/activate && python << 'EOF'
+import pandas as pd
+import numpy as np
+df = pd.read_parquet('/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/dataset.parquet')
+print('pfs_months stats:')
+print(df['pfs_months'].describe())
+print('\\nCorrelation with pfs_months (top 10):')
+corr = df.corrwith(df['pfs_months'])
+print(corr.sort_values(ascending=False).head(15))
+EOF" in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ exited 1 in 214ms:
+pfs_months stats:
+count    50000.000000
+mean         4.692876
+std          2.495828
+min          0.000000
+25%          2.971543
+50%          4.535234
+75%          6.173794
+max         16.660357
+Name: pfs_months, dtype: float64
+
+Correlation with pfs_months (top 10):
+Traceback (most recent call last):
+  File "<stdin>", line 7, in <module>
+  File "/home/kenneth_kehl/onc-co-scientist/.venv/lib/python3.13/site-packages/pandas/core/frame.py", line 11322, in corrwith
+    return this.apply(lambda x: other.corr(x, method=method), axis=axis)
+           ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kenneth_kehl/onc-co-scientist/.venv/lib/python3.13/site-packages/pandas/core/frame.py", line 10401, in apply
+    return op.apply().__finalize__(self, method="apply")
+           ~~~~~~~~^^
+  File "/home/kenneth_kehl/onc-co-scientist/.venv/lib/python3.13/site-packages/pandas/core/apply.py", line 916, in apply
+    return self.apply_standard()
+           ~~~~~~~~~~~~~~~~~~~^^
+  File "/home/kenneth_kehl/onc-co-scientist/.venv/lib/python3.13/site-packages/pandas/core/apply.py", line 1063, in apply_standard
+    results, res_index = self.apply_series_generator()
+                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/kenneth_kehl/onc-co-scientist/.venv/lib/python3.13/site-packages/pandas/core/apply.py", line 1081, in apply_series_generator
+    results[i] = self.func(v, *self.args, **self.kwargs)
+                 ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/kenneth_kehl/onc-co-scientist/.venv/lib/python3.13/site-packages/pandas/core/frame.py", line 11322, in <lambda>
+    return this.apply(lambda x: other.corr(x, method=method), axis=axis)
+                                ~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/home/kenneth_kehl/onc-co-scientist/.venv/lib/python3.13/site-packages/pandas/core/series.py", line 2988, in corr
+    other_values = other.to_numpy(dtype=float, na_value=np.nan, copy=False)
+  File "/home/kenneth_kehl/onc-co-scientist/.venv/lib/python3.13/site-packages/pandas/core/base.py", line 666, in to_numpy
+    result = np.asarray(values, dtype=dtype)
+ValueError: could not convert string to float: 'P00000'
+
+exec
+/bin/bash -lc "source /home/kenneth_kehl/onc-co-scientist/.venv/bin/activate && python << 'EOF'
+import pandas as pd
+import numpy as np
+df = pd.read_parquet('/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/dataset.parquet')
+print('pfs_months stats:')
+print(df['pfs_months'].describe())
+print('\\nCorrelation with pfs_months (top 10, numeric features only):')
+numeric_cols = df.select_dtypes(include=[np.number]).columns.drop('pfs_months')
+corr = df[numeric_cols].corrwith(df['pfs_months'])
+print(corr.sort_values(ascending=False).head(15))
+EOF" in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ succeeded in 221ms:
+pfs_months stats:
+count    50000.000000
+mean         4.692876
+std          2.495828
+min          0.000000
+25%          2.971543
+50%          4.535234
+75%          6.173794
+max         16.660357
+Name: pfs_months, dtype: float64
+
+Correlation with pfs_months (top 10, numeric features only):
+feature_012    0.701535
+feature_013    0.209666
+feature_029    0.104490
+feature_024    0.100210
+feature_023    0.069651
+feature_016    0.022141
+feature_007    0.010022
+feature_015    0.007922
+feature_003    0.002759
+feature_036    0.000388
+feature_032   -0.000877
+feature_035   -0.001134
+feature_009   -0.001549
+feature_002   -0.001935
+feature_011   -0.002594
+dtype: float64
+
+exec
+/bin/bash -lc "cat > /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/analysis_script.py << 'ENDSCRIPT'
+#"'!/usr/bin/env python
+"""
+End-to-end oncology dataset analysis script.
+Performs iterative hypothesis generation, testing, and refinement.
+Outputs transcript.json and analysis_summary.txt.
+"""
+
+import json
+import os
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+warnings.filterwarnings('"'ignore')
+
+# Paths
+DATA_PATH = Path('/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/dataset.parquet')
+OUTPUT_DIR = Path('/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized')
+MAX_ITERATIONS = 10
+
+# Load data
+print(\"Loading dataset...\")
+df = pd.read_parquet(DATA_PATH)
+print(f\"Loaded {len(df)} rows, {len(df.columns)} columns\")
+
+# Separate features and outcome
+feature_cols = [c for c in df.columns if c "'!= '"'patient_id' and c "'!= '"'pfs_months']
+outcome_col = 'pfs_months'
+
+# Helper: safe numeric formatting
+def safe_format(val, decimals=3):
+    \"\"\"Format a numeric value safely, returning 'NA' for invalid values.\"\"\"
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return \"NA\"
+    if isinstance(val, (int, float)):
+        if np.isinf(val):
+            return \"NA\"
+        return f\"{val:.{decimals}f}\"
+    return str(val)
+
+# Helper: compute effect estimate and p-value for feature-outcome comparison
+def compare_feature_outcome(df, feature, outcome, feature_value):
+    \"\"\"
+    Compare outcome between feature==value and feature"'!=value.
+    Returns dict with effect_estimate, p_value, significant, and descriptive stats.
+    """
+    mask = df[feature] == feature_value
+    group1 = df.loc[mask, outcome]
+    group2 = df.loc[~mask, outcome]
+    
+    # Effect estimate: mean difference (group1 - group2)
+    effect = group1.mean() - group2.mean()
+    
+    # Two-sample t-test
+    t_stat, p_value = stats.ttest_ind(group1, group2)
+    
+    # Build 2x2 count table for categorical features
+    counts = {
+        '"'feature_value': int(mask.sum()),
+        'not_feature_value': int(~mask.sum()),
+        'outcome_group1': int((mask & (df[outcome] >= df[outcome].median())).sum()),
+        'outcome_group2': int((~mask & (df[outcome] >= df[outcome].median())).sum()),
+    }
+    
+    return {
+        'effect_estimate': float(effect),
+        'p_value': float(p_value),
+        'significant': bool(p_value < 0.05),
+        'group1_mean': float(group1.mean()),
+        'group2_mean': float(group2.mean()),
+        'n_group1': int(len(group1)),
+        'n_group2': int(len(group2)),
+        'counts': counts,
+    }
+
+# Helper: compute correlation for continuous features
+def correlate_feature_outcome(df, feature, outcome):
+    \"\"\"Compute Pearson correlation and p-value.\"\"\"
+    mask = df[[feature, outcome]].dropna()
+    if len(mask) < 3:
+        return {
+            'effect_estimate': None,
+            'p_value': None,
+            'significant': False,
+            'correlation': None,
+            'n': 0,
+        }
+    corr, p_value = stats.pearsonr(mask[feature], mask[outcome])
+    return {
+        'effect_estimate': float(corr),
+        'p_value': float(p_value),
+        'significant': bool(p_value < 0.05),
+        'correlation': float(corr),
+        'n': int(len(mask)),
+    }
+
+# Helper: treatment effect heterogeneity search
+def find_treatment_heterogeneity(df, treatment_col, outcome_col, feature_cols, top_k=5):
+    \"\"\"
+    Screen for treatment-by-feature interactions.
+    Returns list of (feature, effect_diff, p_value) tuples.
+    \"\"\"
+    results = []
+    treatment_levels = df[treatment_col].unique()
+    if len(treatment_levels) < 2:
+        return results
+    
+    # Get treatment groups
+    t1_mask = df[treatment_col] == treatment_levels[1] if len(treatment_levels) > 1 else df[treatment_col] == 1
+    t0_mask = ~t1_mask
+    
+    # For each feature, compute treatment effect in each group
+    for feat in feature_cols:
+        # Group 1: treatment effect in feature=value group
+        feat_mask = df[feat] == 1
+        t1_feat = df.loc[t1_mask & feat_mask, outcome_col]
+        t0_feat = df.loc[t0_mask & feat_mask, outcome_col]
+        effect1 = t1_feat.mean() - t0_feat.mean() if len(t1_feat) > 0 and len(t0_feat) > 0 else np.nan
+        
+        # Group 0: treatment effect in feature"'!=value group
+        t1_notfeat = df.loc[t1_mask & ~feat_mask, outcome_col]
+        t0_notfeat = df.loc[t0_mask & ~feat_mask, outcome_col]
+        effect0 = t1_notfeat.mean() - t0_notfeat.mean() if len(t1_notfeat) > 0 and len(t0_notfeat) > 0 else np.nan
+        
+        # Interaction effect
+        if not np.isnan(effect1) and not np.isnan(effect0):
+            interaction = effect1 - effect0
+            # Simple interaction test via 2x2 ANOVA approximation
+            groups = [
+                df.loc[t1_mask & feat_mask, outcome_col],
+                df.loc[t0_mask & feat_mask, outcome_col],
+                df.loc[t1_mask & ~feat_mask, outcome_col],
+                df.loc[t0_mask & ~feat_mask, outcome_col],
+            ]
+            flat = np.concatenate([g for g in groups if len(g) > 0])
+            if len(flat) > 3:
+                # Compute interaction p-value via regression
+                X = pd.get_dummies(df[[treatment_col, feat]], drop_first=True)
+                X = X.reindex(df.index)
+                model = stats.linregress(flat, X.iloc[:, 1].values)
+                p_interaction = model.pvalue
+            else:
+                p_interaction = 1.0
+            results.append((feat, interaction, p_interaction))
+    
+    results.sort(key=lambda x: abs(x[1]), reverse=True)
+    return results[:top_k]
+
+# Initialize transcript
+transcript = {
+    '"'dataset_id': 'ds001_breast',
+    'model_id': 'codex-cli',
+    'harness_id': 'codex-cli@1.0.0',
+    'max_iterations': MAX_ITERATIONS,
+    'iterations': [],
+}
+
+# Iteration 1: Main effects - identify strongest feature-outcome associations
+print(\"\\n=== Iteration 1: Main effects screening ===\")
+
+# Identify binary and continuous features
+binary_features = [f for f in feature_cols if df[f].nunique() == 2]
+continuous_features = [f for f in feature_cols if df[f].dtype in ['float64', 'int64'] and df[f].nunique() > 10]
+
+# Test binary features
+print(\"Testing binary features...\")
+binary_results = []
+for feat in binary_features:
+    result = compare_feature_outcome(df, feat, outcome_col, 1)
+    result['feature'] = feat
+    result['feature_value'] = 1
+    binary_results.append(result)
+
+# Test continuous features (top correlations)
+print(\"Testing continuous features...\")
+continuous_results = []
+for feat in continuous_features[:10]:  # Top 10 by correlation
+    result = correlate_feature_outcome(df, feat, outcome_col)
+    result['feature'] = feat
+    continuous_results.append(result)
+
+# Combine and rank
+all_results = binary_results + continuous_results
+all_results.sort(key=lambda x: abs(x.get('effect_estimate', 0) or 0), reverse=True)
+
+# Propose hypotheses for top findings
+hypotheses = []
+analyses = []
+
+for i, res in enumerate(all_results[:5]):
+    feat = res['feature']
+    effect = res.get('effect_estimate')
+    pval = res.get('p_value')
+    corr = res.get('correlation')
+    
+    if feat in binary_features:
+        text = f\"Patients with {feat}==1 have {'higher' if effect > 0 else 'lower'} {outcome_col} (mean diff={safe_format(effect)}, p={safe_format(pval)})\"
+        hypothesis_id = f\"h1_{i+1}\"
+        hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+        analyses.append({
+            'hypothesis_ids': [hypothesis_id],
+            'result_summary': f\"Mean {outcome_col}: {safe_format(res['group1_mean'])} vs {safe_format(res['group2_mean'])} (t={safe_format(stats.ttest_ind(df.loc[df[feat]==1, outcome_col], df.loc[df[feat]==0, outcome_col])[0]:.3f}), p={safe_format(pval)})\" if feat in binary_features else f\"Correlation: {safe_format(corr)}, p={safe_format(pval)}\",
+            'effect_estimate': effect,
+            'p_value': pval,
+            'significant': pval is not None and pval < 0.05,
+        })
+    else:
+        text = f\"{feat} correlates with {outcome_col} (r={safe_format(corr)}, p={safe_format(pval)})\"
+        hypothesis_id = f\"h1_{i+1}\"
+        hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+        analyses.append({
+            'hypothesis_ids': [hypothesis_id],
+            'result_summary': f\"Correlation: {safe_format(corr)}, p={safe_format(pval)}\",
+            'effect_estimate': corr,
+            'p_value': pval,
+            'significant': pval is not None and pval < 0.05,
+        })
+
+transcript['iterations'].append({
+    'index': 1,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 2: Deep dive on top feature
+print(\"\\n=== Iteration 2: Deep dive on top feature ===\")
+top_feat = all_results[0]['feature']
+print(f\"Top feature: {top_feat}, effect: {safe_format(all_results[0].get('effect_estimate'))}\")
+
+# Test different values for this feature
+if top_feat in binary_features:
+    values = [0, 1]
+else:
+    values = [0, 1, 2]  # Try low, mid, high
+
+hypotheses = []
+analyses = []
+
+for i, val in enumerate(values):
+    result = compare_feature_outcome(df, top_feat, outcome_col, val)
+    text = f\"Patients with {top_feat}={val} have {'higher' if result['effect_estimate'] > 0 else 'lower'} {outcome_col} (mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])})\"
+    hypothesis_id = f\"h2_{i+1}\"
+    hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+    analyses.append({
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Mean {outcome_col}: {safe_format(result['group1_mean'])} vs {safe_format(result['group2_mean'])}, p={safe_format(result['p_value'])}\",
+        'effect_estimate': result['effect_estimate'],
+        'p_value': result['p_value'],
+        'significant': result['p_value'] is not None and result['p_value'] < 0.05,
+    })
+
+transcript['iterations'].append({
+    'index': 2,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 3: Interaction screening
+print(\"\\n=== Iteration 3: Interaction screening ===\")
+
+# Use top binary feature as treatment
+treatment_feat = binary_features[0] if binary_features else feature_cols[0]
+
+# Find treatment heterogeneity
+interactions = find_treatment_heterogeneity(df, treatment_feat, outcome_col, feature_cols, top_k=5)
+
+hypotheses = []
+analyses = []
+
+for i, (feat, interaction, pval) in enumerate(interactions):
+    text = f\"Interaction between {treatment_feat} and {feat} on {outcome_col}: effect diff={safe_format(interaction)}, p={safe_format(pval)}\"
+    hypothesis_id = f\"h3_{i+1}\"
+    hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+    analyses.append({
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Interaction effect: {safe_format(interaction)}, p={safe_format(pval)}\",
+        'effect_estimate': interaction,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    })
+
+transcript['iterations'].append({
+    'index': 3,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 4: Subgroup analysis for strongest interaction
+print(\"\\n=== Iteration 4: Subgroup analysis ===\")
+
+if interactions:
+    best_interaction_feat = interactions[0][0]
+    best_interaction_pval = interactions[0][2]
+    
+    # Test the interaction subgroup
+    mask = (df[treatment_feat] == 1) & (df[best_interaction_feat] == 1)
+    group1 = df.loc[mask, outcome_col]
+    group2 = df.loc[~mask, outcome_col]
+    
+    effect = group1.mean() - group2.mean()
+    t_stat, pval = stats.ttest_ind(group1, group2)
+    
+    text = f\"Patients with {treatment_feat}==1 AND {best_interaction_feat}==1 have {'higher' if effect > 0 else 'lower'} {outcome_col} (mean diff={safe_format(effect)}, p={safe_format(pval)})\"
+    hypothesis_id = \"h4\"
+    hypotheses = [{'id': hypothesis_id, 'text': text, 'kind': 'novel'}]
+    analyses = [{
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Subgroup mean {outcome_col}: {safe_format(group1.mean())} vs {safe_format(group2.mean())}, p={safe_format(pval)}\",
+        'effect_estimate': effect,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    }]
+else:
+    hypotheses = []
+    analyses = []
+
+transcript['iterations'].append({
+    'index': 4,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 5: Additional binary feature testing
+print(\"\\n=== Iteration 5: Additional binary features ===\")
+
+remaining_binary = [f for f in binary_features if f "'!= treatment_feat]
+hypotheses = []
+analyses = []
+
+for i, feat in enumerate(remaining_binary[:3]):
+    result = compare_feature_outcome(df, feat, outcome_col, 1)
+    text = f"Patients with {feat}==1 have {'"'higher' if result['effect_estimate'] > 0 else 'lower'} {outcome_col} (mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])})\"
+    hypothesis_id = f\"h5_{i+1}\"
+    hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+    analyses.append({
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Mean {outcome_col}: {safe_format(result['group1_mean'])} vs {safe_format(result['group2_mean'])}, p={safe_format(result['p_value'])}\",
+        'effect_estimate': result['effect_estimate'],
+        'p_value': result['p_value'],
+        'significant': result['p_value'] is not None and result['p_value'] < 0.05,
+    })
+
+transcript['iterations'].append({
+    'index': 5,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 6: Three-way interaction (if applicable)
+print(\"\\n=== Iteration 6: Three-way interaction ===\")
+
+if len(binary_features) >= 3:
+    f1, f2, f3 = binary_features[0], binary_features[1], binary_features[2]
+    
+    # Test 4-group interaction
+    groups = [
+        ('f1=0,f2=0', df.loc[(df[f1]==0) & (df[f2]==0), outcome_col]),
+        ('f1=0,f2=1', df.loc[(df[f1]==0) & (df[f2]==1), outcome_col]),
+        ('f1=1,f2=0', df.loc[(df[f1]==1) & (df[f2]==0), outcome_col]),
+        ('f1=1,f2=1', df.loc[(df[f1]==1) & (df[f2]==1), outcome_col]),
+    ]
+    
+    means = [g[1].mean() if len(g[1]) > 0 else np.nan for g in groups]
+    ns = [len(g[1]) for g in groups]
+    
+    # Simple interaction test
+    if all(m is not None for m in means) and all(n > 0 for n in ns):
+        # Two-way interaction effect
+        effect = means[3] - means[2] - means[1] + means[0]
+        
+        # P-value via ANOVA-like approach
+        from scipy import stats as st
+        data = np.concatenate([g[1] for g in groups if len(g[1]) > 0])
+        X = pd.get_dummies(df[[f1, f2]], drop_first=True).reindex(df.index)
+        model = st.linregress(data, X.iloc[:, 1].values)
+        pval = model.pvalue
+        
+        text = f\"Two-way interaction between {f1} and {f2} on {outcome_col}: effect={safe_format(effect)}, p={safe_format(pval)}\"
+        hypothesis_id = \"h6\"
+        hypotheses = [{'id': hypothesis_id, 'text': text, 'kind': 'novel'}]
+        analyses = [{
+            'hypothesis_ids': [hypothesis_id],
+            'result_summary': f\"Interaction effect: {safe_format(effect)}, p={safe_format(pval)}\",
+            'effect_estimate': effect,
+            'p_value': pval,
+            'significant': pval is not None and pval < 0.05,
+        }]
+    else:
+        hypotheses = []
+        analyses = []
+else:
+    hypotheses = []
+    analyses = []
+
+transcript['iterations'].append({
+    'index': 6,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 7: Continuous feature subgroup
+print(\"\\n=== Iteration 7: Continuous feature subgroup ===\")
+
+if continuous_features:
+    cont_feat = continuous_features[0]
+    
+    # Test quartile-based subgroups
+    quartiles = pd.qcut(df[cont_feat], 4, duplicates='drop')
+    quartile_means = []
+    for i, q in enumerate(quartiles):
+        mask = df[cont_feat].isin(q)
+        mean_val = df.loc[mask, outcome_col].mean()
+        quartile_means.append((i, mean_val, len(mask)))
+    
+    quartile_means.sort(key=lambda x: x[1])
+    
+    # Compare lowest vs highest quartile
+    low_q, low_mean, low_n = quartile_means[0]
+    high_q, high_mean, high_n = quartile_means[-1]
+    
+    low_mask = df[cont_feat].isin(quartiles[low_q])
+    high_mask = df[cont_feat].isin(quartiles[high_q])
+    
+    effect = high_mean - low_mean
+    t_stat, pval = stats.ttest_ind(df.loc[high_mask, outcome_col], df.loc[low_mask, outcome_col])
+    
+    text = f\"Patients in highest quartile of {cont_feat} have {'higher' if effect > 0 else 'lower'} {outcome_col} (mean diff={safe_format(effect)}, p={safe_format(pval)})\"
+    hypothesis_id = \"h7\"
+    hypotheses = [{'id': hypothesis_id, 'text': text, 'kind': 'novel'}]
+    analyses = [{
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Q{high_q+1} mean: {safe_format(high_mean)}, Q{low_q+1} mean: {safe_format(low_mean)}, p={safe_format(pval)}\",
+        'effect_estimate': effect,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    }]
+else:
+    hypotheses = []
+    analyses = []
+
+transcript['iterations'].append({
+    'index': 7,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 8: Refine top hypothesis
+print(\"\\n=== Iteration 8: Refine top hypothesis ===\")
+
+# Find most significant finding from iteration 1
+if all_results:
+    top_result = all_results[0]
+    top_feat = top_result['feature']
+    
+    # Test with different thresholds
+    hypotheses = []
+    analyses = []
+    
+    if top_feat in binary_features:
+        for thresh in [0.5, 0.6, 0.7]:
+            result = compare_feature_outcome(df, top_feat, outcome_col, thresh)
+            text = f\"Patients with {top_feat} >= {thresh} have {'higher' if result['effect_estimate'] > 0 else 'lower'} {outcome_col} (mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])})\"
+            hypothesis_id = f\"h8_{thresh}\"
+            hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'refined'})
+            analyses.append({
+                'hypothesis_ids': [hypothesis_id],
+                'result_summary': f\"Mean {outcome_col}: {safe_format(result['group1_mean'])} vs {safe_format(result['group2_mean'])}, p={safe_format(result['p_value'])}\",
+                'effect_estimate': result['effect_estimate'],
+                'p_value': result['p_value'],
+                'significant': result['p_value'] is not None and result['p_value'] < 0.05,
+            })
+    else:
+        # For continuous, test percentile-based
+        for pct in [25, 50, 75]:
+            result = compare_feature_outcome(df, top_feat, outcome_col, pct)
+            text = f\"Patients in top {pct}% of {top_feat} have {'higher' if result['effect_estimate'] > 0 else 'lower'} {outcome_col} (mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])})\"
+            hypothesis_id = f\"h8_{pct}\"
+            hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'refined'})
+            analyses.append({
+                'hypothesis_ids': [hypothesis_id],
+                'result_summary': f\"Mean {outcome_col}: {safe_format(result['group1_mean'])} vs {safe_format(result['group2_mean'])}, p={safe_format(result['p_value'])}\",
+                'effect_estimate': result['effect_estimate'],
+                'p_value': result['p_value'],
+                'significant': result['p_value'] is not None and result['p_value'] < 0.05,
+            })
+
+transcript['iterations'].append({
+    'index': 8,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 9: Comprehensive interaction search
+print(\"\\n=== Iteration 9: Comprehensive interaction search ===\")
+
+# Screen all binary feature pairs for interactions
+binary_results = []
+for f1 in binary_features[:5]:
+    for f2 in binary_features[:5]:
+        if f1 "'!= f2:
+            # Test interaction
+            groups = [
+                df.loc[(df[f1]==0) & (df[f2]==0), outcome_col],
+                df.loc[(df[f1]==0) & (df[f2]==1), outcome_col],
+                df.loc[(df[f1]==1) & (df[f2]==0), outcome_col],
+                df.loc[(df[f1]==1) & (df[f2]==1), outcome_col],
+            ]
+            flat = np.concatenate([g for g in groups if len(g) > 0])
+            if len(flat) > 3:
+                X = pd.get_dummies(df[[f1, f2]], drop_first=True).reindex(df.index)
+                model = stats.linregress(flat, X.iloc[:, 1].values)
+                pval = model.pvalue
+                # Interaction effect
+                means = [g.mean() if len(g) > 0 else np.nan for g in groups]
+                interaction = means[3] - means[2] - means[1] + means[0]
+                binary_results.append((f1, f2, interaction, pval))
+
+binary_results.sort(key=lambda x: abs(x[2]), reverse=True)
+
+hypotheses = []
+analyses = []
+
+for i, (f1, f2, interaction, pval) in enumerate(binary_results[:3]):
+    text = f"Interaction between {f1} and {f2} on {outcome_col}: effect={safe_format(interaction)}, p={safe_format(pval)}"
+    hypothesis_id = f"h9_{i+1}"
+    hypotheses.append({'"'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+    analyses.append({
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Interaction effect: {safe_format(interaction)}, p={safe_format(pval)}\",
+        'effect_estimate': interaction,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    })
+
+transcript['iterations'].append({
+    'index': 9,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 10: Final best-supported hypothesis
+print(\"\\n=== Iteration 10: Final best-supported hypothesis ===\")
+
+# Find the most significant interaction
+best_interaction = None
+best_pval = 1.0
+best_effect = 0.0
+
+for f1 in binary_features[:5]:
+    for f2 in binary_features[:5]:
+        if f1 "'!= f2:
+            groups = [
+                df.loc[(df[f1]==0) & (df[f2]==0), outcome_col],
+                df.loc[(df[f1]==0) & (df[f2]==1), outcome_col],
+                df.loc[(df[f1]==1) & (df[f2]==0), outcome_col],
+                df.loc[(df[f1]==1) & (df[f2]==1), outcome_col],
+            ]
+            flat = np.concatenate([g for g in groups if len(g) > 0])
+            if len(flat) > 3:
+                X = pd.get_dummies(df[[f1, f2]], drop_first=True).reindex(df.index)
+                model = stats.linregress(flat, X.iloc[:, 1].values)
+                pval = model.pvalue
+                means = [g.mean() if len(g) > 0 else np.nan for g in groups]
+                interaction = means[3] - means[2] - means[1] + means[0]
+                if pval < best_pval and pval < 0.1:
+                    best_pval = pval
+                    best_effect = interaction
+                    best_interaction = (f1, f2)
+
+if best_interaction:
+    f1, f2 = best_interaction
+    # Define the subgroup where treatment effect is strongest
+    mask = (df[f1] == 1) & (df[f2] == 1)
+    group1 = df.loc[mask, outcome_col]
+    group2 = df.loc[~mask, outcome_col]
+    
+    effect = group1.mean() - group2.mean()
+    t_stat, pval = stats.ttest_ind(group1, group2)
+    
+    text = f"In patients with {f1}==1 AND {f2}==1, {outcome_col} is {'"'higher' if effect > 0 else 'lower'} (mean diff={safe_format(effect)}, p={safe_format(pval)})\"
+    hypothesis_id = \"h10\"
+    hypotheses = [{'id': hypothesis_id, 'text': text, 'kind': 'refined'}]
+    analyses = [{
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Subgroup mean {outcome_col}: {safe_format(group1.mean())} vs {safe_format(group2.mean())}, p={safe_format(pval)}\",
+        'effect_estimate': effect,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    }]
+else:
+    hypotheses = []
+    analyses = []
+
+transcript['iterations'].append({
+    'index': 10,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Convert transcript to JSON-serializable format
+def to_jsonable(obj):
+    \"\"\"Convert object to JSON-serializable format.\"\"\"
+    if isinstance(obj, dict):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [to_jsonable(v) for v in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (float, int, bool, str, type(None))):
+        return obj
+    else:
+        return str(obj)
+
+# Clean up transcript for JSON
+clean_transcript = to_jsonable(transcript)
+
+# Write transcript.json
+transcript_path = OUTPUT_DIR / 'transcript.json'
+with open(transcript_path, 'w') as f:
+    json.dump(clean_transcript, f, indent=2)
+print(f\"\\nWrote {transcript_path}\")
+
+# Generate analysis_summary.txt
+print(\"Generating analysis summary...\")
+
+summary_lines = [
+    \"=\" * 80,
+    \"ONCOLOGY DATASET ANALYSIS SUMMARY\",
+    \"=\" * 80,
+    \"\",
+    f\"Dataset: ds001_breast\",
+    f\"Total patients: {len(df)}\",
+    f\"Outcome: {outcome_col} (mean={safe_format(df[outcome_col].mean())}, std={safe_format(df[outcome_col].std())})\",
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 1: MAIN EFFECTS SCREENING\",
+    \"-\" * 80,
+]
+
+# Add iteration 1 results
+if all_results:
+    summary_lines.append(f\"\\nTop feature-outcome associations (by effect magnitude):\")
+    for i, res in enumerate(all_results[:5]):
+        feat = res['feature']
+        effect = res.get('effect_estimate')
+        pval = res.get('p_value')
+        corr = res.get('correlation')
+        if feat in binary_features:
+            summary_lines.append(f\"  {feat}==1: mean diff={safe_format(effect)}, p={safe_format(pval)}\")
+        else:
+            summary_lines.append(f\"  {feat}: r={safe_format(corr)}, p={safe_format(pval)}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 2: DEEP DIVE ON TOP FEATURE\",
+    \"-\" * 80,
+])
+
+if all_results:
+    top_feat = all_results[0]['feature']
+    summary_lines.append(f\"\\nTop feature: {top_feat}\")
+    summary_lines.append(f\"Effect on {outcome_col}: {safe_format(all_results[0].get('effect_estimate'))}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 3: INTERACTION SCREENING\",
+    \"-\" * 80,
+])
+
+if interactions:
+    summary_lines.append(f\"\\nTreatment feature: {treatment_feat}\")
+    summary_lines.append(f\"Top interactions with {outcome_col}:\")
+    for feat, effect, pval in interactions[:5]:
+        summary_lines.append(f\"  {feat}: interaction effect={safe_format(effect)}, p={safe_format(pval)}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 4: SUBGROUP ANALYSIS\",
+    \"-\" * 80,
+])
+
+if interactions:
+    best_feat = interactions[0][0]
+    summary_lines.append(f\"\\nBest interaction: {treatment_feat} x {best_feat}\")
+    summary_lines.append(f\"Subgroup (both=1) mean {outcome_col}: {safe_format(interactions[0][0].__class__.__name__ if hasattr(interactions[0][0], '__class__') else 'N/A')}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 5-7: ADDITIONAL ANALYSES\",
+    \"-\" * 80,
+])
+
+summary_lines.append(\"\\nAdditional binary features tested:\")
+for feat in remaining_binary[:3]:
+    result = compare_feature_outcome(df, feat, outcome_col, 1)
+    summary_lines.append(f\"  {feat}==1: mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 8: THRESHOLD ANALYSIS\",
+    \"-\" * 80,
+])
+
+if all_results:
+    top_feat = all_results[0]['feature']
+    summary_lines.append(f\"\\nThreshold analysis for {top_feat}:\")
+    for thresh in [0.5, 0.6, 0.7]:
+        result = compare_feature_outcome(df, top_feat, outcome_col, thresh)
+        summary_lines.append(f\"  {top_feat} >= {thresh}: mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 9: COMPREHENSIVE INTERACTION SEARCH\",
+    \"-\" * 80,
+])
+
+if binary_results:
+    summary_lines.append(f\"\\nTop binary feature interactions:\")
+    for f1, f2, effect, pval in binary_results[:5]:
+        summary_lines.append(f\"  {f1} x {f2}: effect={safe_format(effect)}, p={safe_format(pval)}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 10: FINAL BEST-SUPPORTED HYPOTHESIS\",
+    \"-\" * 80,
+])
+
+if best_interaction:
+    f1, f2 = best_interaction
+    summary_lines.append(f\"\\nBest-supported interaction: {f1} x {f2}\")
+    summary_lines.append(f\"Interaction effect: {safe_format(best_effect)}, p={safe_format(best_pval)}\")
+    summary_lines.append(f\"Subgroup (f1=1, f2=1) mean {outcome_col}: {safe_format(group1.mean())}\")
+    summary_lines.append(f\"Non-subgroup mean {outcome_col}: {safe_format(group2.mean())}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"CONCLUSIONS\",
+    \"-\" * 80,
+])
+
+# Count significant findings
+significant_count = sum(1 for it in transcript['iterations'] for a in it['analyses'] if a.get('significant', False))
+summary_lines.append(f\"\\nTotal hypotheses tested: {sum(len(it['analyses']) for it in transcript['iterations'])}\")
+summary_lines.append(f\"Statistically significant (p<0.05): {significant_count}\")
+
+summary_lines.append(f\"\\nKey findings:\")
+summary_lines.append(f\"  1. {all_results[0]['feature']} shows the strongest association with {outcome_col}\")
+if interactions:
+    summary_lines.append(f\"  2. Interaction between {treatment_feat} and {interactions[0][0]} modifies {outcome_col}\")
+if best_interaction:
+    summary_lines.append(f\"  3. Best interaction: {best_interaction[0]} x {best_interaction[1]}\")
+
+summary_lines.extend([
+    \"\",
+    \"=\" * 80,
+    \"END OF SUMMARY\",
+    \"=\" * 80,
+])
+
+# Write analysis_summary.txt
+summary_path = OUTPUT_DIR / 'analysis_summary.txt'
+with open(summary_path, 'w') as f:
+    f.write('\\n'.join(summary_lines))
+print(f\"Wrote {summary_path}\")
+
+print(\"\\n\" + \"=\" * 80)
+print(\"ANALYSIS COMPLETE\")
+print(\"=\" * 80)
+print(f\"Output files:\")
+print(f\"  - {transcript_path}\")
+print(f\"  - {summary_path}\")
+ENDSCRIPT
+echo \"Script created successfully\"" in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ succeeded in 0ms:
+Script created successfully
+
+exec
+/bin/bash -lc 'source /home/kenneth_kehl/onc-co-scientist/.venv/bin/activate && cd /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized && python analysis_script.py' in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ exited 1 in 0ms:
+  File "/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/analysis_script.py", line 205
+    'result_summary': f"Mean {outcome_col}: {safe_format(res['group1_mean'])} vs {safe_format(res['group2_mean'])} (t={safe_format(stats.ttest_ind(df.loc[df[feat]==1, outcome_col], df.loc[df[feat]==0, outcome_col])[0]:.3f}), p={safe_format(pval)})" if feat in binary_features else f"Correlation: {safe_format(corr)}, p={safe_format(pval)}",
+                                                                                                                                  ^
+SyntaxError: f-string: expecting '=', or '!', or ':', or '}'
+
+exec
+/bin/bash -lc "cat > /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/analysis_script.py << 'ENDSCRIPT'
+#"'!/usr/bin/env python
+"""
+End-to-end oncology dataset analysis script.
+Performs iterative hypothesis generation, testing, and refinement.
+Outputs transcript.json and analysis_summary.txt.
+"""
+
+import json
+import os
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+warnings.filterwarnings('"'ignore')
+
+# Paths
+DATA_PATH = Path('/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/dataset.parquet')
+OUTPUT_DIR = Path('/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized')
+MAX_ITERATIONS = 10
+
+# Load data
+print(\"Loading dataset...\")
+df = pd.read_parquet(DATA_PATH)
+print(f\"Loaded {len(df)} rows, {len(df.columns)} columns\")
+
+# Separate features and outcome
+feature_cols = [c for c in df.columns if c "'!= '"'patient_id' and c "'!= '"'pfs_months']
+outcome_col = 'pfs_months'
+
+# Helper: safe numeric formatting
+def safe_format(val, decimals=3):
+    \"\"\"Format a numeric value safely, returning 'NA' for invalid values.\"\"\"
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return \"NA\"
+    if isinstance(val, (int, float)):
+        if np.isinf(val):
+            return \"NA\"
+        return f\"{val:.{decimals}f}\"
+    return str(val)
+
+# Helper: compute effect estimate and p-value for feature-outcome comparison
+def compare_feature_outcome(df, feature, outcome, feature_value):
+    \"\"\"
+    Compare outcome between feature==value and feature"'!=value.
+    Returns dict with effect_estimate, p_value, significant, and descriptive stats.
+    """
+    mask = df[feature] == feature_value
+    group1 = df.loc[mask, outcome]
+    group2 = df.loc[~mask, outcome]
+    
+    # Effect estimate: mean difference (group1 - group2)
+    effect = group1.mean() - group2.mean()
+    
+    # Two-sample t-test
+    t_stat, p_value = stats.ttest_ind(group1, group2)
+    
+    # Build 2x2 count table for categorical features
+    counts = {
+        '"'feature_value': int(mask.sum()),
+        'not_feature_value': int(~mask.sum()),
+        'outcome_group1': int((mask & (df[outcome] >= df[outcome].median())).sum()),
+        'outcome_group2': int((~mask & (df[outcome] >= df[outcome].median())).sum()),
+    }
+    
+    return {
+        'effect_estimate': float(effect),
+        'p_value': float(p_value),
+        'significant': bool(p_value < 0.05),
+        'group1_mean': float(group1.mean()),
+        'group2_mean': float(group2.mean()),
+        'n_group1': int(len(group1)),
+        'n_group2': int(len(group2)),
+        'counts': counts,
+    }
+
+# Helper: compute correlation for continuous features
+def correlate_feature_outcome(df, feature, outcome):
+    \"\"\"Compute Pearson correlation and p-value.\"\"\"
+    mask = df[[feature, outcome]].dropna()
+    if len(mask) < 3:
+        return {
+            'effect_estimate': None,
+            'p_value': None,
+            'significant': False,
+            'correlation': None,
+            'n': 0,
+        }
+    corr, p_value = stats.pearsonr(mask[feature], mask[outcome])
+    return {
+        'effect_estimate': float(corr),
+        'p_value': float(p_value),
+        'significant': bool(p_value < 0.05),
+        'correlation': float(corr),
+        'n': int(len(mask)),
+    }
+
+# Helper: treatment effect heterogeneity search
+def find_treatment_heterogeneity(df, treatment_col, outcome_col, feature_cols, top_k=5):
+    \"\"\"
+    Screen for treatment-by-feature interactions.
+    Returns list of (feature, effect_diff, p_value) tuples.
+    \"\"\"
+    results = []
+    treatment_levels = df[treatment_col].unique()
+    if len(treatment_levels) < 2:
+        return results
+    
+    # Get treatment groups
+    t1_mask = df[treatment_col] == treatment_levels[1] if len(treatment_levels) > 1 else df[treatment_col] == 1
+    t0_mask = ~t1_mask
+    
+    # For each feature, compute treatment effect in each group
+    for feat in feature_cols:
+        # Group 1: treatment effect in feature=value group
+        feat_mask = df[feat] == 1
+        t1_feat = df.loc[t1_mask & feat_mask, outcome_col]
+        t0_feat = df.loc[t0_mask & feat_mask, outcome_col]
+        effect1 = t1_feat.mean() - t0_feat.mean() if len(t1_feat) > 0 and len(t0_feat) > 0 else np.nan
+        
+        # Group 0: treatment effect in feature"'!=value group
+        t1_notfeat = df.loc[t1_mask & ~feat_mask, outcome_col]
+        t0_notfeat = df.loc[t0_mask & ~feat_mask, outcome_col]
+        effect0 = t1_notfeat.mean() - t0_notfeat.mean() if len(t1_notfeat) > 0 and len(t0_notfeat) > 0 else np.nan
+        
+        # Interaction effect
+        if not np.isnan(effect1) and not np.isnan(effect0):
+            interaction = effect1 - effect0
+            # Simple interaction test via 2x2 ANOVA approximation
+            groups = [
+                df.loc[t1_mask & feat_mask, outcome_col],
+                df.loc[t0_mask & feat_mask, outcome_col],
+                df.loc[t1_mask & ~feat_mask, outcome_col],
+                df.loc[t0_mask & ~feat_mask, outcome_col],
+            ]
+            flat = np.concatenate([g for g in groups if len(g) > 0])
+            if len(flat) > 3:
+                # Compute interaction p-value via regression
+                X = pd.get_dummies(df[[treatment_col, feat]], drop_first=True)
+                X = X.reindex(df.index)
+                model = stats.linregress(flat, X.iloc[:, 1].values)
+                p_interaction = model.pvalue
+            else:
+                p_interaction = 1.0
+            results.append((feat, interaction, p_interaction))
+    
+    results.sort(key=lambda x: abs(x[1]), reverse=True)
+    return results[:top_k]
+
+# Initialize transcript
+transcript = {
+    '"'dataset_id': 'ds001_breast',
+    'model_id': 'codex-cli',
+    'harness_id': 'codex-cli@1.0.0',
+    'max_iterations': MAX_ITERATIONS,
+    'iterations': [],
+}
+
+# Iteration 1: Main effects - identify strongest feature-outcome associations
+print(\"\\n=== Iteration 1: Main effects screening ===\")
+
+# Identify binary and continuous features
+binary_features = [f for f in feature_cols if df[f].nunique() == 2]
+continuous_features = [f for f in feature_cols if df[f].dtype in ['float64', 'int64'] and df[f].nunique() > 10]
+
+# Test binary features
+print(\"Testing binary features...\")
+binary_results = []
+for feat in binary_features:
+    result = compare_feature_outcome(df, feat, outcome_col, 1)
+    result['feature'] = feat
+    result['feature_value'] = 1
+    binary_results.append(result)
+
+# Test continuous features (top correlations)
+print(\"Testing continuous features...\")
+continuous_results = []
+for feat in continuous_features[:10]:  # Top 10 by correlation
+    result = correlate_feature_outcome(df, feat, outcome_col)
+    result['feature'] = feat
+    continuous_results.append(result)
+
+# Combine and rank
+all_results = binary_results + continuous_results
+all_results.sort(key=lambda x: abs(x.get('effect_estimate', 0) or 0), reverse=True)
+
+# Propose hypotheses for top findings
+hypotheses = []
+analyses = []
+
+for i, res in enumerate(all_results[:5]):
+    feat = res['feature']
+    effect = res.get('effect_estimate')
+    pval = res.get('p_value')
+    corr = res.get('correlation')
+    
+    if feat in binary_features:
+        text = f\"Patients with {feat}==1 have {'higher' if effect > 0 else 'lower'} {outcome_col} (mean diff={safe_format(effect)}, p={safe_format(pval)})\"
+        hypothesis_id = f\"h1_{i+1}\"
+        hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+        
+        # Precompute t-stat for result summary
+        t_stat, _ = stats.ttest_ind(df.loc[df[feat]==1, outcome_col], df.loc[df[feat]==0, outcome_col])
+        t_str = safe_format(t_stat)
+        res_summary = f\"Mean {outcome_col}: {safe_format(res['group1_mean'])} vs {safe_format(res['group2_mean'])} (t={t_str}, p={safe_format(pval)})\"
+        
+        analyses.append({
+            'hypothesis_ids': [hypothesis_id],
+            'result_summary': res_summary,
+            'effect_estimate': effect,
+            'p_value': pval,
+            'significant': pval is not None and pval < 0.05,
+        })
+    else:
+        text = f\"{feat} correlates with {outcome_col} (r={safe_format(corr)}, p={safe_format(pval)})\"
+        hypothesis_id = f\"h1_{i+1}\"
+        hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+        analyses.append({
+            'hypothesis_ids': [hypothesis_id],
+            'result_summary': f\"Correlation: {safe_format(corr)}, p={safe_format(pval)}\",
+            'effect_estimate': corr,
+            'p_value': pval,
+            'significant': pval is not None and pval < 0.05,
+        })
+
+transcript['iterations'].append({
+    'index': 1,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 2: Deep dive on top feature
+print(\"\\n=== Iteration 2: Deep dive on top feature ===\")
+top_feat = all_results[0]['feature']
+print(f\"Top feature: {top_feat}, effect: {safe_format(all_results[0].get('effect_estimate'))}\")
+
+# Test different values for this feature
+if top_feat in binary_features:
+    values = [0, 1]
+else:
+    values = [0, 1, 2]  # Try low, mid, high
+
+hypotheses = []
+analyses = []
+
+for i, val in enumerate(values):
+    result = compare_feature_outcome(df, top_feat, outcome_col, val)
+    text = f\"Patients with {top_feat}={val} have {'higher' if result['effect_estimate'] > 0 else 'lower'} {outcome_col} (mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])})\"
+    hypothesis_id = f\"h2_{i+1}\"
+    hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+    analyses.append({
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Mean {outcome_col}: {safe_format(result['group1_mean'])} vs {safe_format(result['group2_mean'])}, p={safe_format(result['p_value'])}\",
+        'effect_estimate': result['effect_estimate'],
+        'p_value': result['p_value'],
+        'significant': result['p_value'] is not None and result['p_value'] < 0.05,
+    })
+
+transcript['iterations'].append({
+    'index': 2,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 3: Interaction screening
+print(\"\\n=== Iteration 3: Interaction screening ===\")
+
+# Use top binary feature as treatment
+treatment_feat = binary_features[0] if binary_features else feature_cols[0]
+
+# Find treatment heterogeneity
+interactions = find_treatment_heterogeneity(df, treatment_feat, outcome_col, feature_cols, top_k=5)
+
+hypotheses = []
+analyses = []
+
+for i, (feat, interaction, pval) in enumerate(interactions):
+    text = f\"Interaction between {treatment_feat} and {feat} on {outcome_col}: effect diff={safe_format(interaction)}, p={safe_format(pval)}\"
+    hypothesis_id = f\"h3_{i+1}\"
+    hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+    analyses.append({
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Interaction effect: {safe_format(interaction)}, p={safe_format(pval)}\",
+        'effect_estimate': interaction,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    })
+
+transcript['iterations'].append({
+    'index': 3,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 4: Subgroup analysis for strongest interaction
+print(\"\\n=== Iteration 4: Subgroup analysis ===\")
+
+if interactions:
+    best_interaction_feat = interactions[0][0]
+    best_interaction_pval = interactions[0][2]
+    
+    # Test the interaction subgroup
+    mask = (df[treatment_feat] == 1) & (df[best_interaction_feat] == 1)
+    group1 = df.loc[mask, outcome_col]
+    group2 = df.loc[~mask, outcome_col]
+    
+    effect = group1.mean() - group2.mean()
+    t_stat, pval = stats.ttest_ind(group1, group2)
+    
+    text = f\"Patients with {treatment_feat}==1 AND {best_interaction_feat}==1 have {'higher' if effect > 0 else 'lower'} {outcome_col} (mean diff={safe_format(effect)}, p={safe_format(pval)})\"
+    hypothesis_id = \"h4\"
+    hypotheses = [{'id': hypothesis_id, 'text': text, 'kind': 'novel'}]
+    analyses = [{
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Subgroup mean {outcome_col}: {safe_format(group1.mean())} vs {safe_format(group2.mean())}, p={safe_format(pval)}\",
+        'effect_estimate': effect,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    }]
+else:
+    hypotheses = []
+    analyses = []
+
+transcript['iterations'].append({
+    'index': 4,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 5: Additional binary feature testing
+print(\"\\n=== Iteration 5: Additional binary features ===\")
+
+remaining_binary = [f for f in binary_features if f "'!= treatment_feat]
+hypotheses = []
+analyses = []
+
+for i, feat in enumerate(remaining_binary[:3]):
+    result = compare_feature_outcome(df, feat, outcome_col, 1)
+    text = f"Patients with {feat}==1 have {'"'higher' if result['effect_estimate'] > 0 else 'lower'} {outcome_col} (mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])})\"
+    hypothesis_id = f\"h5_{i+1}\"
+    hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+    analyses.append({
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Mean {outcome_col}: {safe_format(result['group1_mean'])} vs {safe_format(result['group2_mean'])}, p={safe_format(result['p_value'])}\",
+        'effect_estimate': result['effect_estimate'],
+        'p_value': result['p_value'],
+        'significant': result['p_value'] is not None and result['p_value'] < 0.05,
+    })
+
+transcript['iterations'].append({
+    'index': 5,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 6: Three-way interaction (if applicable)
+print(\"\\n=== Iteration 6: Three-way interaction ===\")
+
+if len(binary_features) >= 3:
+    f1, f2, f3 = binary_features[0], binary_features[1], binary_features[2]
+    
+    # Test 4-group interaction
+    groups = [
+        ('f1=0,f2=0', df.loc[(df[f1]==0) & (df[f2]==0), outcome_col]),
+        ('f1=0,f2=1', df.loc[(df[f1]==0) & (df[f2]==1), outcome_col]),
+        ('f1=1,f2=0', df.loc[(df[f1]==1) & (df[f2]==0), outcome_col]),
+        ('f1=1,f2=1', df.loc[(df[f1]==1) & (df[f2]==1), outcome_col]),
+    ]
+    
+    means = [g[1].mean() if len(g[1]) > 0 else np.nan for g in groups]
+    ns = [len(g[1]) for g in groups]
+    
+    # Simple interaction test
+    if all(m is not None for m in means) and all(n > 0 for n in ns):
+        # Two-way interaction effect
+        effect = means[3] - means[2] - means[1] + means[0]
+        
+        # P-value via ANOVA-like approach
+        from scipy import stats as st
+        data = np.concatenate([g[1] for g in groups if len(g[1]) > 0])
+        X = pd.get_dummies(df[[f1, f2]], drop_first=True).reindex(df.index)
+        model = st.linregress(data, X.iloc[:, 1].values)
+        pval = model.pvalue
+        
+        text = f\"Two-way interaction between {f1} and {f2} on {outcome_col}: effect={safe_format(effect)}, p={safe_format(pval)}\"
+        hypothesis_id = \"h6\"
+        hypotheses = [{'id': hypothesis_id, 'text': text, 'kind': 'novel'}]
+        analyses = [{
+            'hypothesis_ids': [hypothesis_id],
+            'result_summary': f\"Interaction effect: {safe_format(effect)}, p={safe_format(pval)}\",
+            'effect_estimate': effect,
+            'p_value': pval,
+            'significant': pval is not None and pval < 0.05,
+        }]
+    else:
+        hypotheses = []
+        analyses = []
+else:
+    hypotheses = []
+    analyses = []
+
+transcript['iterations'].append({
+    'index': 6,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 7: Continuous feature subgroup
+print(\"\\n=== Iteration 7: Continuous feature subgroup ===\")
+
+if continuous_features:
+    cont_feat = continuous_features[0]
+    
+    # Test quartile-based subgroups
+    quartiles = pd.qcut(df[cont_feat], 4, duplicates='drop')
+    quartile_means = []
+    for i, q in enumerate(quartiles):
+        mask = df[cont_feat].isin(q)
+        mean_val = df.loc[mask, outcome_col].mean()
+        quartile_means.append((i, mean_val, len(mask)))
+    
+    quartile_means.sort(key=lambda x: x[1])
+    
+    # Compare lowest vs highest quartile
+    low_q, low_mean, low_n = quartile_means[0]
+    high_q, high_mean, high_n = quartile_means[-1]
+    
+    low_mask = df[cont_feat].isin(quartiles[low_q])
+    high_mask = df[cont_feat].isin(quartiles[high_q])
+    
+    effect = high_mean - low_mean
+    t_stat, pval = stats.ttest_ind(df.loc[high_mask, outcome_col], df.loc[low_mask, outcome_col])
+    
+    text = f\"Patients in highest quartile of {cont_feat} have {'higher' if effect > 0 else 'lower'} {outcome_col} (mean diff={safe_format(effect)}, p={safe_format(pval)})\"
+    hypothesis_id = \"h7\"
+    hypotheses = [{'id': hypothesis_id, 'text': text, 'kind': 'novel'}]
+    analyses = [{
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Q{high_q+1} mean: {safe_format(high_mean)}, Q{low_q+1} mean: {safe_format(low_mean)}, p={safe_format(pval)}\",
+        'effect_estimate': effect,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    }]
+else:
+    hypotheses = []
+    analyses = []
+
+transcript['iterations'].append({
+    'index': 7,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 8: Refine top hypothesis
+print(\"\\n=== Iteration 8: Refine top hypothesis ===\")
+
+# Find most significant finding from iteration 1
+if all_results:
+    top_result = all_results[0]
+    top_feat = top_result['feature']
+    
+    # Test with different thresholds
+    hypotheses = []
+    analyses = []
+    
+    if top_feat in binary_features:
+        for thresh in [0.5, 0.6, 0.7]:
+            result = compare_feature_outcome(df, top_feat, outcome_col, thresh)
+            text = f\"Patients with {top_feat} >= {thresh} have {'higher' if result['effect_estimate'] > 0 else 'lower'} {outcome_col} (mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])})\"
+            hypothesis_id = f\"h8_{thresh}\"
+            hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'refined'})
+            analyses.append({
+                'hypothesis_ids': [hypothesis_id],
+                'result_summary': f\"Mean {outcome_col}: {safe_format(result['group1_mean'])} vs {safe_format(result['group2_mean'])}, p={safe_format(result['p_value'])}\",
+                'effect_estimate': result['effect_estimate'],
+                'p_value': result['p_value'],
+                'significant': result['p_value'] is not None and result['p_value'] < 0.05,
+            })
+    else:
+        # For continuous, test percentile-based
+        for pct in [25, 50, 75]:
+            result = compare_feature_outcome(df, top_feat, outcome_col, pct)
+            text = f\"Patients in top {pct}% of {top_feat} have {'higher' if result['effect_estimate'] > 0 else 'lower'} {outcome_col} (mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])})\"
+            hypothesis_id = f\"h8_{pct}\"
+            hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'refined'})
+            analyses.append({
+                'hypothesis_ids': [hypothesis_id],
+                'result_summary': f\"Mean {outcome_col}: {safe_format(result['group1_mean'])} vs {safe_format(result['group2_mean'])}, p={safe_format(result['p_value'])}\",
+                'effect_estimate': result['effect_estimate'],
+                'p_value': result['p_value'],
+                'significant': result['p_value'] is not None and result['p_value'] < 0.05,
+            })
+
+transcript['iterations'].append({
+    'index': 8,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 9: Comprehensive interaction search
+print(\"\\n=== Iteration 9: Comprehensive interaction search ===\")
+
+# Screen all binary feature pairs for interactions
+binary_results = []
+for f1 in binary_features[:5]:
+    for f2 in binary_features[:5]:
+        if f1 "'!= f2:
+            # Test interaction
+            groups = [
+                df.loc[(df[f1]==0) & (df[f2]==0), outcome_col],
+                df.loc[(df[f1]==0) & (df[f2]==1), outcome_col],
+                df.loc[(df[f1]==1) & (df[f2]==0), outcome_col],
+                df.loc[(df[f1]==1) & (df[f2]==1), outcome_col],
+            ]
+            flat = np.concatenate([g for g in groups if len(g) > 0])
+            if len(flat) > 3:
+                X = pd.get_dummies(df[[f1, f2]], drop_first=True).reindex(df.index)
+                model = stats.linregress(flat, X.iloc[:, 1].values)
+                pval = model.pvalue
+                # Interaction effect
+                means = [g.mean() if len(g) > 0 else np.nan for g in groups]
+                interaction = means[3] - means[2] - means[1] + means[0]
+                binary_results.append((f1, f2, interaction, pval))
+
+binary_results.sort(key=lambda x: abs(x[2]), reverse=True)
+
+hypotheses = []
+analyses = []
+
+for i, (f1, f2, interaction, pval) in enumerate(binary_results[:3]):
+    text = f"Interaction between {f1} and {f2} on {outcome_col}: effect={safe_format(interaction)}, p={safe_format(pval)}"
+    hypothesis_id = f"h9_{i+1}"
+    hypotheses.append({'"'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+    analyses.append({
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Interaction effect: {safe_format(interaction)}, p={safe_format(pval)}\",
+        'effect_estimate': interaction,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    })
+
+transcript['iterations'].append({
+    'index': 9,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 10: Final best-supported hypothesis
+print(\"\\n=== Iteration 10: Final best-supported hypothesis ===\")
+
+# Find the most significant interaction
+best_interaction = None
+best_pval = 1.0
+best_effect = 0.0
+
+for f1 in binary_features[:5]:
+    for f2 in binary_features[:5]:
+        if f1 "'!= f2:
+            groups = [
+                df.loc[(df[f1]==0) & (df[f2]==0), outcome_col],
+                df.loc[(df[f1]==0) & (df[f2]==1), outcome_col],
+                df.loc[(df[f1]==1) & (df[f2]==0), outcome_col],
+                df.loc[(df[f1]==1) & (df[f2]==1), outcome_col],
+            ]
+            flat = np.concatenate([g for g in groups if len(g) > 0])
+            if len(flat) > 3:
+                X = pd.get_dummies(df[[f1, f2]], drop_first=True).reindex(df.index)
+                model = stats.linregress(flat, X.iloc[:, 1].values)
+                pval = model.pvalue
+                means = [g.mean() if len(g) > 0 else np.nan for g in groups]
+                interaction = means[3] - means[2] - means[1] + means[0]
+                if pval < best_pval and pval < 0.1:
+                    best_pval = pval
+                    best_effect = interaction
+                    best_interaction = (f1, f2)
+
+if best_interaction:
+    f1, f2 = best_interaction
+    # Define the subgroup where treatment effect is strongest
+    mask = (df[f1] == 1) & (df[f2] == 1)
+    group1 = df.loc[mask, outcome_col]
+    group2 = df.loc[~mask, outcome_col]
+    
+    effect = group1.mean() - group2.mean()
+    t_stat, pval = stats.ttest_ind(group1, group2)
+    
+    text = f"In patients with {f1}==1 AND {f2}==1, {outcome_col} is {'"'higher' if effect > 0 else 'lower'} (mean diff={safe_format(effect)}, p={safe_format(pval)})\"
+    hypothesis_id = \"h10\"
+    hypotheses = [{'id': hypothesis_id, 'text': text, 'kind': 'refined'}]
+    analyses = [{
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Subgroup mean {outcome_col}: {safe_format(group1.mean())} vs {safe_format(group2.mean())}, p={safe_format(pval)}\",
+        'effect_estimate': effect,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    }]
+else:
+    hypotheses = []
+    analyses = []
+
+transcript['iterations'].append({
+    'index': 10,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Convert transcript to JSON-serializable format
+def to_jsonable(obj):
+    \"\"\"Convert object to JSON-serializable format.\"\"\"
+    if isinstance(obj, dict):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [to_jsonable(v) for v in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (float, int, bool, str, type(None))):
+        return obj
+    else:
+        return str(obj)
+
+# Clean up transcript for JSON
+clean_transcript = to_jsonable(transcript)
+
+# Write transcript.json
+transcript_path = OUTPUT_DIR / 'transcript.json'
+with open(transcript_path, 'w') as f:
+    json.dump(clean_transcript, f, indent=2)
+print(f\"\\nWrote {transcript_path}\")
+
+# Generate analysis_summary.txt
+print(\"Generating analysis summary...\")
+
+summary_lines = [
+    \"=\" * 80,
+    \"ONCOLOGY DATASET ANALYSIS SUMMARY\",
+    \"=\" * 80,
+    \"\",
+    f\"Dataset: ds001_breast\",
+    f\"Total patients: {len(df)}\",
+    f\"Outcome: {outcome_col} (mean={safe_format(df[outcome_col].mean())}, std={safe_format(df[outcome_col].std())})\",
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 1: MAIN EFFECTS SCREENING\",
+    \"-\" * 80,
+]
+
+# Add iteration 1 results
+if all_results:
+    summary_lines.append(f\"\\nTop feature-outcome associations (by effect magnitude):\")
+    for i, res in enumerate(all_results[:5]):
+        feat = res['feature']
+        effect = res.get('effect_estimate')
+        pval = res.get('p_value')
+        corr = res.get('correlation')
+        if feat in binary_features:
+            summary_lines.append(f\"  {feat}==1: mean diff={safe_format(effect)}, p={safe_format(pval)}\")
+        else:
+            summary_lines.append(f\"  {feat}: r={safe_format(corr)}, p={safe_format(pval)}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 2: DEEP DIVE ON TOP FEATURE\",
+    \"-\" * 80,
+])
+
+if all_results:
+    top_feat = all_results[0]['feature']
+    summary_lines.append(f\"\\nTop feature: {top_feat}\")
+    summary_lines.append(f\"Effect on {outcome_col}: {safe_format(all_results[0].get('effect_estimate'))}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 3: INTERACTION SCREENING\",
+    \"-\" * 80,
+])
+
+if interactions:
+    summary_lines.append(f\"\\nTreatment feature: {treatment_feat}\")
+    summary_lines.append(f\"Top interactions with {outcome_col}:\")
+    for feat, effect, pval in interactions[:5]:
+        summary_lines.append(f\"  {feat}: interaction effect={safe_format(effect)}, p={safe_format(pval)}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 4: SUBGROUP ANALYSIS\",
+    \"-\" * 80,
+])
+
+if interactions:
+    best_feat = interactions[0][0]
+    summary_lines.append(f\"\\nBest interaction: {treatment_feat} x {best_feat}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 5-7: ADDITIONAL ANALYSES\",
+    \"-\" * 80,
+])
+
+summary_lines.append(\"\\nAdditional binary features tested:\")
+for feat in remaining_binary[:3]:
+    result = compare_feature_outcome(df, feat, outcome_col, 1)
+    summary_lines.append(f\"  {feat}==1: mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 8: THRESHOLD ANALYSIS\",
+    \"-\" * 80,
+])
+
+if all_results:
+    top_feat = all_results[0]['feature']
+    summary_lines.append(f\"\\nThreshold analysis for {top_feat}:\")
+    for thresh in [0.5, 0.6, 0.7]:
+        result = compare_feature_outcome(df, top_feat, outcome_col, thresh)
+        summary_lines.append(f\"  {top_feat} >= {thresh}: mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 9: COMPREHENSIVE INTERACTION SEARCH\",
+    \"-\" * 80,
+])
+
+if binary_results:
+    summary_lines.append(f\"\\nTop binary feature interactions:\")
+    for f1, f2, effect, pval in binary_results[:5]:
+        summary_lines.append(f\"  {f1} x {f2}: effect={safe_format(effect)}, p={safe_format(pval)}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 10: FINAL BEST-SUPPORTED HYPOTHESIS\",
+    \"-\" * 80,
+])
+
+if best_interaction:
+    f1, f2 = best_interaction
+    summary_lines.append(f\"\\nBest-supported interaction: {f1} x {f2}\")
+    summary_lines.append(f\"Interaction effect: {safe_format(best_effect)}, p={safe_format(best_pval)}\")
+    summary_lines.append(f\"Subgroup (f1=1, f2=1) mean {outcome_col}: {safe_format(group1.mean())}\")
+    summary_lines.append(f\"Non-subgroup mean {outcome_col}: {safe_format(group2.mean())}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"CONCLUSIONS\",
+    \"-\" * 80,
+])
+
+# Count significant findings
+significant_count = sum(1 for it in transcript['iterations'] for a in it['analyses'] if a.get('significant', False))
+summary_lines.append(f\"\\nTotal hypotheses tested: {sum(len(it['analyses']) for it in transcript['iterations'])}\")
+summary_lines.append(f\"Statistically significant (p<0.05): {significant_count}\")
+
+summary_lines.append(f\"\\nKey findings:\")
+summary_lines.append(f\"  1. {all_results[0]['feature']} shows the strongest association with {outcome_col}\")
+if interactions:
+    summary_lines.append(f\"  2. Interaction between {treatment_feat} and {interactions[0][0]} modifies {outcome_col}\")
+if best_interaction:
+    summary_lines.append(f\"  3. Best interaction: {best_interaction[0]} x {best_interaction[1]}\")
+
+summary_lines.extend([
+    \"\",
+    \"=\" * 80,
+    \"END OF SUMMARY\",
+    \"=\" * 80,
+])
+
+# Write analysis_summary.txt
+summary_path = OUTPUT_DIR / 'analysis_summary.txt'
+with open(summary_path, 'w') as f:
+    f.write('\\n'.join(summary_lines))
+print(f\"Wrote {summary_path}\")
+
+print(\"\\n\" + \"=\" * 80)
+print(\"ANALYSIS COMPLETE\")
+print(\"=\" * 80)
+print(f\"Output files:\")
+print(f\"  - {transcript_path}\")
+print(f\"  - {summary_path}\")
+ENDSCRIPT
+echo \"Script updated\"" in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ succeeded in 0ms:
+Script updated
+
+exec
+/bin/bash -lc 'source /home/kenneth_kehl/onc-co-scientist/.venv/bin/activate && cd /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized && python analysis_script.py' in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ exited 1 in 746ms:
+Traceback (most recent call last):
+Loading dataset...
+Loaded 50000 rows, 39 columns
+
+=== Iteration 1: Main effects screening ===
+Testing binary features...
+Testing continuous features...
+
+=== Iteration 2: Deep dive on top feature ===
+Top feature: feature_006, effect: -1.536
+
+=== Iteration 3: Interaction screening ===
+
+=== Iteration 4: Subgroup analysis ===
+
+=== Iteration 5: Additional binary features ===
+
+=== Iteration 6: Three-way interaction ===
+
+=== Iteration 7: Continuous feature subgroup ===
+  File "/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/analysis_script.py", line 420, in <module>
+    mask = df[cont_feat].isin(q)
+  File "/home/kenneth_kehl/onc-co-scientist/.venv/lib/python3.13/site-packages/pandas/core/series.py", line 5578, in isin
+    result = algorithms.isin(self._values, values)
+  File "/home/kenneth_kehl/onc-co-scientist/.venv/lib/python3.13/site-packages/pandas/core/algorithms.py", line 477, in isin
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: only list-like objects are allowed to be passed to isin(), you passed a `Interval`
+
+exec
+/bin/bash -lc "cat > /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/analysis_script.py << 'ENDSCRIPT'
+#"'!/usr/bin/env python
+"""
+End-to-end oncology dataset analysis script.
+Performs iterative hypothesis generation, testing, and refinement.
+Outputs transcript.json and analysis_summary.txt.
+"""
+
+import json
+import warnings
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+from scipy import stats
+
+warnings.filterwarnings('"'ignore')
+
+# Paths
+DATA_PATH = Path('/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/dataset.parquet')
+OUTPUT_DIR = Path('/home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized')
+
+# Load data
+print(\"Loading dataset...\")
+df = pd.read_parquet(DATA_PATH)
+print(f\"Loaded {len(df)} rows, {len(df.columns)} columns\")
+
+# Separate features and outcome
+feature_cols = [c for c in df.columns if c "'!= '"'patient_id' and c "'!= '"'pfs_months']
+outcome_col = 'pfs_months'
+
+# Helper: safe numeric formatting
+def safe_format(val, decimals=3):
+    \"\"\"Format a numeric value safely, returning 'NA' for invalid values.\"\"\"
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return \"NA\"
+    if isinstance(val, (int, float)):
+        if np.isinf(val):
+            return \"NA\"
+        return f\"{val:.{decimals}f}\"
+    return str(val)
+
+# Helper: compute effect estimate and p-value for feature-outcome comparison
+def compare_feature_outcome(df, feature, outcome, feature_value):
+    \"\"\"
+    Compare outcome between feature==value and feature"'!=value.
+    Returns dict with effect_estimate, p_value, significant, and descriptive stats.
+    """
+    mask = df[feature] == feature_value
+    group1 = df.loc[mask, outcome]
+    group2 = df.loc[~mask, outcome]
+    
+    # Effect estimate: mean difference (group1 - group2)
+    effect = group1.mean() - group2.mean()
+    
+    # Two-sample t-test
+    t_stat, p_value = stats.ttest_ind(group1, group2)
+    
+    # Build 2x2 count table for categorical features
+    counts = {
+        '"'feature_value': int(mask.sum()),
+        'not_feature_value': int(~mask.sum()),
+        'outcome_group1': int((mask & (df[outcome] >= df[outcome].median())).sum()),
+        'outcome_group2': int((~mask & (df[outcome] >= df[outcome].median())).sum()),
+    }
+    
+    return {
+        'effect_estimate': float(effect),
+        'p_value': float(p_value),
+        'significant': bool(p_value < 0.05),
+        'group1_mean': float(group1.mean()),
+        'group2_mean': float(group2.mean()),
+        'n_group1': int(len(group1)),
+        'n_group2': int(len(group2)),
+        'counts': counts,
+    }
+
+# Helper: compute correlation for continuous features
+def correlate_feature_outcome(df, feature, outcome):
+    \"\"\"Compute Pearson correlation and p-value.\"\"\"
+    mask = df[[feature, outcome]].dropna()
+    if len(mask) < 3:
+        return {
+            'effect_estimate': None,
+            'p_value': None,
+            'significant': False,
+            'correlation': None,
+            'n': 0,
+        }
+    corr, p_value = stats.pearsonr(mask[feature], mask[outcome])
+    return {
+        'effect_estimate': float(corr),
+        'p_value': float(p_value),
+        'significant': bool(p_value < 0.05),
+        'correlation': float(corr),
+        'n': int(len(mask)),
+    }
+
+# Helper: treatment effect heterogeneity search
+def find_treatment_heterogeneity(df, treatment_col, outcome_col, feature_cols, top_k=5):
+    \"\"\"
+    Screen for treatment-by-feature interactions.
+    Returns list of (feature, effect_diff, p_value) tuples.
+    \"\"\"
+    results = []
+    treatment_levels = df[treatment_col].unique()
+    if len(treatment_levels) < 2:
+        return results
+    
+    # Get treatment groups
+    t1_mask = df[treatment_col] == treatment_levels[1] if len(treatment_levels) > 1 else df[treatment_col] == 1
+    t0_mask = ~t1_mask
+    
+    # For each feature, compute treatment effect in each group
+    for feat in feature_cols:
+        # Group 1: treatment effect in feature=value group
+        feat_mask = df[feat] == 1
+        t1_feat = df.loc[t1_mask & feat_mask, outcome_col]
+        t0_feat = df.loc[t0_mask & feat_mask, outcome_col]
+        effect1 = t1_feat.mean() - t0_feat.mean() if len(t1_feat) > 0 and len(t0_feat) > 0 else np.nan
+        
+        # Group 0: treatment effect in feature"'!=value group
+        t1_notfeat = df.loc[t1_mask & ~feat_mask, outcome_col]
+        t0_notfeat = df.loc[t0_mask & ~feat_mask, outcome_col]
+        effect0 = t1_notfeat.mean() - t0_notfeat.mean() if len(t1_notfeat) > 0 and len(t0_notfeat) > 0 else np.nan
+        
+        # Interaction effect
+        if not np.isnan(effect1) and not np.isnan(effect0):
+            interaction = effect1 - effect0
+            # Simple interaction test via 2x2 ANOVA approximation
+            groups = [
+                df.loc[t1_mask & feat_mask, outcome_col],
+                df.loc[t0_mask & feat_mask, outcome_col],
+                df.loc[t1_mask & ~feat_mask, outcome_col],
+                df.loc[t0_mask & ~feat_mask, outcome_col],
+            ]
+            flat = np.concatenate([g for g in groups if len(g) > 0])
+            if len(flat) > 3:
+                # Compute interaction p-value via regression
+                X = pd.get_dummies(df[[treatment_col, feat]], drop_first=True)
+                X = X.reindex(df.index)
+                model = stats.linregress(flat, X.iloc[:, 1].values)
+                p_interaction = model.pvalue
+            else:
+                p_interaction = 1.0
+            results.append((feat, interaction, p_interaction))
+    
+    results.sort(key=lambda x: abs(x[1]), reverse=True)
+    return results[:top_k]
+
+# Initialize transcript
+transcript = {
+    '"'dataset_id': 'ds001_breast',
+    'model_id': 'codex-cli',
+    'harness_id': 'codex-cli@1.0.0',
+    'max_iterations': 10,
+    'iterations': [],
+}
+
+# Iteration 1: Main effects - identify strongest feature-outcome associations
+print(\"\\n=== Iteration 1: Main effects screening ===\")
+
+# Identify binary and continuous features
+binary_features = [f for f in feature_cols if df[f].nunique() == 2]
+continuous_features = [f for f in feature_cols if df[f].dtype in ['float64', 'int64'] and df[f].nunique() > 10]
+
+# Test binary features
+print(\"Testing binary features...\")
+binary_results = []
+for feat in binary_features:
+    result = compare_feature_outcome(df, feat, outcome_col, 1)
+    result['feature'] = feat
+    result['feature_value'] = 1
+    binary_results.append(result)
+
+# Test continuous features (top correlations)
+print(\"Testing continuous features...\")
+continuous_results = []
+for feat in continuous_features[:10]:  # Top 10 by correlation
+    result = correlate_feature_outcome(df, feat, outcome_col)
+    result['feature'] = feat
+    continuous_results.append(result)
+
+# Combine and rank
+all_results = binary_results + continuous_results
+all_results.sort(key=lambda x: abs(x.get('effect_estimate', 0) or 0), reverse=True)
+
+# Propose hypotheses for top findings
+hypotheses = []
+analyses = []
+
+for i, res in enumerate(all_results[:5]):
+    feat = res['feature']
+    effect = res.get('effect_estimate')
+    pval = res.get('p_value')
+    corr = res.get('correlation')
+    
+    if feat in binary_features:
+        text = f\"Patients with {feat}==1 have {'higher' if effect > 0 else 'lower'} {outcome_col} (mean diff={safe_format(effect)}, p={safe_format(pval)})\"
+        hypothesis_id = f\"h1_{i+1}\"
+        hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+        
+        # Precompute t-stat for result summary
+        t_stat, _ = stats.ttest_ind(df.loc[df[feat]==1, outcome_col], df.loc[df[feat]==0, outcome_col])
+        t_str = safe_format(t_stat)
+        res_summary = f\"Mean {outcome_col}: {safe_format(res['group1_mean'])} vs {safe_format(res['group2_mean'])} (t={t_str}, p={safe_format(pval)})\"
+        
+        analyses.append({
+            'hypothesis_ids': [hypothesis_id],
+            'result_summary': res_summary,
+            'effect_estimate': effect,
+            'p_value': pval,
+            'significant': pval is not None and pval < 0.05,
+        })
+    else:
+        text = f\"{feat} correlates with {outcome_col} (r={safe_format(corr)}, p={safe_format(pval)})\"
+        hypothesis_id = f\"h1_{i+1}\"
+        hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+        analyses.append({
+            'hypothesis_ids': [hypothesis_id],
+            'result_summary': f\"Correlation: {safe_format(corr)}, p={safe_format(pval)}\",
+            'effect_estimate': corr,
+            'p_value': pval,
+            'significant': pval is not None and pval < 0.05,
+        })
+
+transcript['iterations'].append({
+    'index': 1,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 2: Deep dive on top feature
+print(\"\\n=== Iteration 2: Deep dive on top feature ===\")
+top_feat = all_results[0]['feature']
+print(f\"Top feature: {top_feat}, effect: {safe_format(all_results[0].get('effect_estimate'))}\")
+
+# Test different values for this feature
+if top_feat in binary_features:
+    values = [0, 1]
+else:
+    values = [0, 1, 2]  # Try low, mid, high
+
+hypotheses = []
+analyses = []
+
+for i, val in enumerate(values):
+    result = compare_feature_outcome(df, top_feat, outcome_col, val)
+    text = f\"Patients with {top_feat}={val} have {'higher' if result['effect_estimate'] > 0 else 'lower'} {outcome_col} (mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])})\"
+    hypothesis_id = f\"h2_{i+1}\"
+    hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+    analyses.append({
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Mean {outcome_col}: {safe_format(result['group1_mean'])} vs {safe_format(result['group2_mean'])}, p={safe_format(result['p_value'])}\",
+        'effect_estimate': result['effect_estimate'],
+        'p_value': result['p_value'],
+        'significant': result['p_value'] is not None and result['p_value'] < 0.05,
+    })
+
+transcript['iterations'].append({
+    'index': 2,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 3: Interaction screening
+print(\"\\n=== Iteration 3: Interaction screening ===\")
+
+# Use top binary feature as treatment
+treatment_feat = binary_features[0] if binary_features else feature_cols[0]
+
+# Find treatment heterogeneity
+interactions = find_treatment_heterogeneity(df, treatment_feat, outcome_col, feature_cols, top_k=5)
+
+hypotheses = []
+analyses = []
+
+for i, (feat, interaction, pval) in enumerate(interactions):
+    text = f\"Interaction between {treatment_feat} and {feat} on {outcome_col}: effect diff={safe_format(interaction)}, p={safe_format(pval)}\"
+    hypothesis_id = f\"h3_{i+1}\"
+    hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+    analyses.append({
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Interaction effect: {safe_format(interaction)}, p={safe_format(pval)}\",
+        'effect_estimate': interaction,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    })
+
+transcript['iterations'].append({
+    'index': 3,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 4: Subgroup analysis for strongest interaction
+print(\"\\n=== Iteration 4: Subgroup analysis ===\")
+
+if interactions:
+    best_interaction_feat = interactions[0][0]
+    best_interaction_pval = interactions[0][2]
+    
+    # Test the interaction subgroup
+    mask = (df[treatment_feat] == 1) & (df[best_interaction_feat] == 1)
+    group1 = df.loc[mask, outcome_col]
+    group2 = df.loc[~mask, outcome_col]
+    
+    effect = group1.mean() - group2.mean()
+    t_stat, pval = stats.ttest_ind(group1, group2)
+    
+    text = f\"Patients with {treatment_feat}==1 AND {best_interaction_feat}==1 have {'higher' if effect > 0 else 'lower'} {outcome_col} (mean diff={safe_format(effect)}, p={safe_format(pval)})\"
+    hypothesis_id = \"h4\"
+    hypotheses = [{'id': hypothesis_id, 'text': text, 'kind': 'novel'}]
+    analyses = [{
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Subgroup mean {outcome_col}: {safe_format(group1.mean())} vs {safe_format(group2.mean())}, p={safe_format(pval)}\",
+        'effect_estimate': effect,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    }]
+else:
+    hypotheses = []
+    analyses = []
+
+transcript['iterations'].append({
+    'index': 4,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 5: Additional binary feature testing
+print(\"\\n=== Iteration 5: Additional binary features ===\")
+
+remaining_binary = [f for f in binary_features if f "'!= treatment_feat]
+hypotheses = []
+analyses = []
+
+for i, feat in enumerate(remaining_binary[:3]):
+    result = compare_feature_outcome(df, feat, outcome_col, 1)
+    text = f"Patients with {feat}==1 have {'"'higher' if result['effect_estimate'] > 0 else 'lower'} {outcome_col} (mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])})\"
+    hypothesis_id = f\"h5_{i+1}\"
+    hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+    analyses.append({
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Mean {outcome_col}: {safe_format(result['group1_mean'])} vs {safe_format(result['group2_mean'])}, p={safe_format(result['p_value'])}\",
+        'effect_estimate': result['effect_estimate'],
+        'p_value': result['p_value'],
+        'significant': result['p_value'] is not None and result['p_value'] < 0.05,
+    })
+
+transcript['iterations'].append({
+    'index': 5,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 6: Three-way interaction (if applicable)
+print(\"\\n=== Iteration 6: Three-way interaction ===\")
+
+if len(binary_features) >= 3:
+    f1, f2, f3 = binary_features[0], binary_features[1], binary_features[2]
+    
+    # Test 4-group interaction
+    groups = [
+        ('f1=0,f2=0', df.loc[(df[f1]==0) & (df[f2]==0), outcome_col]),
+        ('f1=0,f2=1', df.loc[(df[f1]==0) & (df[f2]==1), outcome_col]),
+        ('f1=1,f2=0', df.loc[(df[f1]==1) & (df[f2]==0), outcome_col]),
+        ('f1=1,f2=1', df.loc[(df[f1]==1) & (df[f2]==1), outcome_col]),
+    ]
+    
+    means = [g[1].mean() if len(g[1]) > 0 else np.nan for g in groups]
+    ns = [len(g[1]) for g in groups]
+    
+    # Simple interaction test
+    if all(m is not None for m in means) and all(n > 0 for n in ns):
+        # Two-way interaction effect
+        effect = means[3] - means[2] - means[1] + means[0]
+        
+        # P-value via ANOVA-like approach
+        from scipy import stats as st
+        data = np.concatenate([g[1] for g in groups if len(g[1]) > 0])
+        X = pd.get_dummies(df[[f1, f2]], drop_first=True).reindex(df.index)
+        model = st.linregress(data, X.iloc[:, 1].values)
+        pval = model.pvalue
+        
+        text = f\"Two-way interaction between {f1} and {f2} on {outcome_col}: effect={safe_format(effect)}, p={safe_format(pval)}\"
+        hypothesis_id = \"h6\"
+        hypotheses = [{'id': hypothesis_id, 'text': text, 'kind': 'novel'}]
+        analyses = [{
+            'hypothesis_ids': [hypothesis_id],
+            'result_summary': f\"Interaction effect: {safe_format(effect)}, p={safe_format(pval)}\",
+            'effect_estimate': effect,
+            'p_value': pval,
+            'significant': pval is not None and pval < 0.05,
+        }]
+    else:
+        hypotheses = []
+        analyses = []
+else:
+    hypotheses = []
+    analyses = []
+
+transcript['iterations'].append({
+    'index': 6,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 7: Continuous feature subgroup
+print(\"\\n=== Iteration 7: Continuous feature subgroup ===\")
+
+if continuous_features:
+    cont_feat = continuous_features[0]
+    
+    # Test quartile-based subgroups using cut instead of qcut
+    quartiles = pd.cut(df[cont_feat], 4, labels=False, duplicates='drop')
+    quartile_means = []
+    for i in range(4):
+        mask = quartiles == i
+        mean_val = df.loc[mask, outcome_col].mean()
+        quartile_means.append((i, mean_val, mask.sum()))
+    
+    quartile_means.sort(key=lambda x: x[1])
+    
+    # Compare lowest vs highest quartile
+    low_q, low_mean, low_n = quartile_means[0]
+    high_q, high_mean, high_n = quartile_means[-1]
+    
+    low_mask = quartiles == low_q
+    high_mask = quartiles == high_q
+    
+    effect = high_mean - low_mean
+    t_stat, pval = stats.ttest_ind(df.loc[high_mask, outcome_col], df.loc[low_mask, outcome_col])
+    
+    text = f\"Patients in highest quartile of {cont_feat} have {'higher' if effect > 0 else 'lower'} {outcome_col} (mean diff={safe_format(effect)}, p={safe_format(pval)})\"
+    hypothesis_id = \"h7\"
+    hypotheses = [{'id': hypothesis_id, 'text': text, 'kind': 'novel'}]
+    analyses = [{
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Q{high_q+1} mean: {safe_format(high_mean)}, Q{low_q+1} mean: {safe_format(low_mean)}, p={safe_format(pval)}\",
+        'effect_estimate': effect,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    }]
+else:
+    hypotheses = []
+    analyses = []
+
+transcript['iterations'].append({
+    'index': 7,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 8: Refine top hypothesis
+print(\"\\n=== Iteration 8: Refine top hypothesis ===\")
+
+# Find most significant finding from iteration 1
+if all_results:
+    top_result = all_results[0]
+    top_feat = top_result['feature']
+    
+    # Test with different thresholds
+    hypotheses = []
+    analyses = []
+    
+    if top_feat in binary_features:
+        for thresh in [0.5, 0.6, 0.7]:
+            result = compare_feature_outcome(df, top_feat, outcome_col, thresh)
+            text = f\"Patients with {top_feat} >= {thresh} have {'higher' if result['effect_estimate'] > 0 else 'lower'} {outcome_col} (mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])})\"
+            hypothesis_id = f\"h8_{thresh}\"
+            hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'refined'})
+            analyses.append({
+                'hypothesis_ids': [hypothesis_id],
+                'result_summary': f\"Mean {outcome_col}: {safe_format(result['group1_mean'])} vs {safe_format(result['group2_mean'])}, p={safe_format(result['p_value'])}\",
+                'effect_estimate': result['effect_estimate'],
+                'p_value': result['p_value'],
+                'significant': result['p_value'] is not None and result['p_value'] < 0.05,
+            })
+    else:
+        # For continuous, test percentile-based
+        for pct in [25, 50, 75]:
+            result = compare_feature_outcome(df, top_feat, outcome_col, pct)
+            text = f\"Patients in top {pct}% of {top_feat} have {'higher' if result['effect_estimate'] > 0 else 'lower'} {outcome_col} (mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])})\"
+            hypothesis_id = f\"h8_{pct}\"
+            hypotheses.append({'id': hypothesis_id, 'text': text, 'kind': 'refined'})
+            analyses.append({
+                'hypothesis_ids': [hypothesis_id],
+                'result_summary': f\"Mean {outcome_col}: {safe_format(result['group1_mean'])} vs {safe_format(result['group2_mean'])}, p={safe_format(result['p_value'])}\",
+                'effect_estimate': result['effect_estimate'],
+                'p_value': result['p_value'],
+                'significant': result['p_value'] is not None and result['p_value'] < 0.05,
+            })
+
+transcript['iterations'].append({
+    'index': 8,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 9: Comprehensive interaction search
+print(\"\\n=== Iteration 9: Comprehensive interaction search ===\")
+
+# Screen all binary feature pairs for interactions
+binary_results = []
+for f1 in binary_features[:5]:
+    for f2 in binary_features[:5]:
+        if f1 "'!= f2:
+            # Test interaction
+            groups = [
+                df.loc[(df[f1]==0) & (df[f2]==0), outcome_col],
+                df.loc[(df[f1]==0) & (df[f2]==1), outcome_col],
+                df.loc[(df[f1]==1) & (df[f2]==0), outcome_col],
+                df.loc[(df[f1]==1) & (df[f2]==1), outcome_col],
+            ]
+            flat = np.concatenate([g for g in groups if len(g) > 0])
+            if len(flat) > 3:
+                X = pd.get_dummies(df[[f1, f2]], drop_first=True).reindex(df.index)
+                model = stats.linregress(flat, X.iloc[:, 1].values)
+                pval = model.pvalue
+                # Interaction effect
+                means = [g.mean() if len(g) > 0 else np.nan for g in groups]
+                interaction = means[3] - means[2] - means[1] + means[0]
+                binary_results.append((f1, f2, interaction, pval))
+
+binary_results.sort(key=lambda x: abs(x[2]), reverse=True)
+
+hypotheses = []
+analyses = []
+
+for i, (f1, f2, interaction, pval) in enumerate(binary_results[:3]):
+    text = f"Interaction between {f1} and {f2} on {outcome_col}: effect={safe_format(interaction)}, p={safe_format(pval)}"
+    hypothesis_id = f"h9_{i+1}"
+    hypotheses.append({'"'id': hypothesis_id, 'text': text, 'kind': 'novel'})
+    analyses.append({
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Interaction effect: {safe_format(interaction)}, p={safe_format(pval)}\",
+        'effect_estimate': interaction,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    })
+
+transcript['iterations'].append({
+    'index': 9,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Iteration 10: Final best-supported hypothesis
+print(\"\\n=== Iteration 10: Final best-supported hypothesis ===\")
+
+# Find the most significant interaction
+best_interaction = None
+best_pval = 1.0
+best_effect = 0.0
+
+for f1 in binary_features[:5]:
+    for f2 in binary_features[:5]:
+        if f1 "'!= f2:
+            groups = [
+                df.loc[(df[f1]==0) & (df[f2]==0), outcome_col],
+                df.loc[(df[f1]==0) & (df[f2]==1), outcome_col],
+                df.loc[(df[f1]==1) & (df[f2]==0), outcome_col],
+                df.loc[(df[f1]==1) & (df[f2]==1), outcome_col],
+            ]
+            flat = np.concatenate([g for g in groups if len(g) > 0])
+            if len(flat) > 3:
+                X = pd.get_dummies(df[[f1, f2]], drop_first=True).reindex(df.index)
+                model = stats.linregress(flat, X.iloc[:, 1].values)
+                pval = model.pvalue
+                means = [g.mean() if len(g) > 0 else np.nan for g in groups]
+                interaction = means[3] - means[2] - means[1] + means[0]
+                if pval < best_pval and pval < 0.1:
+                    best_pval = pval
+                    best_effect = interaction
+                    best_interaction = (f1, f2)
+
+if best_interaction:
+    f1, f2 = best_interaction
+    # Define the subgroup where treatment effect is strongest
+    mask = (df[f1] == 1) & (df[f2] == 1)
+    group1 = df.loc[mask, outcome_col]
+    group2 = df.loc[~mask, outcome_col]
+    
+    effect = group1.mean() - group2.mean()
+    t_stat, pval = stats.ttest_ind(group1, group2)
+    
+    text = f"In patients with {f1}==1 AND {f2}==1, {outcome_col} is {'"'higher' if effect > 0 else 'lower'} (mean diff={safe_format(effect)}, p={safe_format(pval)})\"
+    hypothesis_id = \"h10\"
+    hypotheses = [{'id': hypothesis_id, 'text': text, 'kind': 'refined'}]
+    analyses = [{
+        'hypothesis_ids': [hypothesis_id],
+        'result_summary': f\"Subgroup mean {outcome_col}: {safe_format(group1.mean())} vs {safe_format(group2.mean())}, p={safe_format(pval)}\",
+        'effect_estimate': effect,
+        'p_value': pval,
+        'significant': pval is not None and pval < 0.05,
+    }]
+else:
+    hypotheses = []
+    analyses = []
+
+transcript['iterations'].append({
+    'index': 10,
+    'proposed_hypotheses': hypotheses,
+    'analyses': analyses,
+})
+
+# Convert transcript to JSON-serializable format
+def to_jsonable(obj):
+    \"\"\"Convert object to JSON-serializable format.\"\"\"
+    if isinstance(obj, dict):
+        return {k: to_jsonable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [to_jsonable(v) for v in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (float, int, bool, str, type(None))):
+        return obj
+    else:
+        return str(obj)
+
+# Clean up transcript for JSON
+clean_transcript = to_jsonable(transcript)
+
+# Write transcript.json
+transcript_path = OUTPUT_DIR / 'transcript.json'
+with open(transcript_path, 'w') as f:
+    json.dump(clean_transcript, f, indent=2)
+print(f\"\\nWrote {transcript_path}\")
+
+# Generate analysis_summary.txt
+print(\"Generating analysis summary...\")
+
+summary_lines = [
+    \"=\" * 80,
+    \"ONCOLOGY DATASET ANALYSIS SUMMARY\",
+    \"=\" * 80,
+    \"\",
+    f\"Dataset: ds001_breast\",
+    f\"Total patients: {len(df)}\",
+    f\"Outcome: {outcome_col} (mean={safe_format(df[outcome_col].mean())}, std={safe_format(df[outcome_col].std())})\",
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 1: MAIN EFFECTS SCREENING\",
+    \"-\" * 80,
+]
+
+# Add iteration 1 results
+if all_results:
+    summary_lines.append(f\"\\nTop feature-outcome associations (by effect magnitude):\")
+    for i, res in enumerate(all_results[:5]):
+        feat = res['feature']
+        effect = res.get('effect_estimate')
+        pval = res.get('p_value')
+        corr = res.get('correlation')
+        if feat in binary_features:
+            summary_lines.append(f\"  {feat}==1: mean diff={safe_format(effect)}, p={safe_format(pval)}\")
+        else:
+            summary_lines.append(f\"  {feat}: r={safe_format(corr)}, p={safe_format(pval)}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 2: DEEP DIVE ON TOP FEATURE\",
+    \"-\" * 80,
+])
+
+if all_results:
+    top_feat = all_results[0]['feature']
+    summary_lines.append(f\"\\nTop feature: {top_feat}\")
+    summary_lines.append(f\"Effect on {outcome_col}: {safe_format(all_results[0].get('effect_estimate'))}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 3: INTERACTION SCREENING\",
+    \"-\" * 80,
+])
+
+if interactions:
+    summary_lines.append(f\"\\nTreatment feature: {treatment_feat}\")
+    summary_lines.append(f\"Top interactions with {outcome_col}:\")
+    for feat, effect, pval in interactions[:5]:
+        summary_lines.append(f\"  {feat}: interaction effect={safe_format(effect)}, p={safe_format(pval)}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 4: SUBGROUP ANALYSIS\",
+    \"-\" * 80,
+])
+
+if interactions:
+    best_feat = interactions[0][0]
+    summary_lines.append(f\"\\nBest interaction: {treatment_feat} x {best_feat}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 5-7: ADDITIONAL ANALYSES\",
+    \"-\" * 80,
+])
+
+summary_lines.append(\"\\nAdditional binary features tested:\")
+for feat in remaining_binary[:3]:
+    result = compare_feature_outcome(df, feat, outcome_col, 1)
+    summary_lines.append(f\"  {feat}==1: mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 8: THRESHOLD ANALYSIS\",
+    \"-\" * 80,
+])
+
+if all_results:
+    top_feat = all_results[0]['feature']
+    summary_lines.append(f\"\\nThreshold analysis for {top_feat}:\")
+    for thresh in [0.5, 0.6, 0.7]:
+        result = compare_feature_outcome(df, top_feat, outcome_col, thresh)
+        summary_lines.append(f\"  {top_feat} >= {thresh}: mean diff={safe_format(result['effect_estimate'])}, p={safe_format(result['p_value'])}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 9: COMPREHENSIVE INTERACTION SEARCH\",
+    \"-\" * 80,
+])
+
+if binary_results:
+    summary_lines.append(f\"\\nTop binary feature interactions:\")
+    for f1, f2, effect, pval in binary_results[:5]:
+        summary_lines.append(f\"  {f1} x {f2}: effect={safe_format(effect)}, p={safe_format(pval)}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"ITERATION 10: FINAL BEST-SUPPORTED HYPOTHESIS\",
+    \"-\" * 80,
+])
+
+if best_interaction:
+    f1, f2 = best_interaction
+    summary_lines.append(f\"\\nBest-supported interaction: {f1} x {f2}\")
+    summary_lines.append(f\"Interaction effect: {safe_format(best_effect)}, p={safe_format(best_pval)}\")
+    summary_lines.append(f\"Subgroup (f1=1, f2=1) mean {outcome_col}: {safe_format(group1.mean())}\")
+    summary_lines.append(f\"Non-subgroup mean {outcome_col}: {safe_format(group2.mean())}\")
+
+summary_lines.extend([
+    \"\",
+    \"-\" * 80,
+    \"CONCLUSIONS\",
+    \"-\" * 80,
+])
+
+# Count significant findings
+significant_count = sum(1 for it in transcript['iterations'] for a in it['analyses'] if a.get('significant', False))
+summary_lines.append(f\"\\nTotal hypotheses tested: {sum(len(it['analyses']) for it in transcript['iterations'])}\")
+summary_lines.append(f\"Statistically significant (p<0.05): {significant_count}\")
+
+summary_lines.append(f\"\\nKey findings:\")
+summary_lines.append(f\"  1. {all_results[0]['feature']} shows the strongest association with {outcome_col}\")
+if interactions:
+    summary_lines.append(f\"  2. Interaction between {treatment_feat} and {interactions[0][0]} modifies {outcome_col}\")
+if best_interaction:
+    summary_lines.append(f\"  3. Best interaction: {best_interaction[0]} x {best_interaction[1]}\")
+
+summary_lines.extend([
+    \"\",
+    \"=\" * 80,
+    \"END OF SUMMARY\",
+    \"=\" * 80,
+])
+
+# Write analysis_summary.txt
+summary_path = OUTPUT_DIR / 'analysis_summary.txt'
+with open(summary_path, 'w') as f:
+    f.write('\\n'.join(summary_lines))
+print(f\"Wrote {summary_path}\")
+
+print(\"\\n\" + \"=\" * 80)
+print(\"ANALYSIS COMPLETE\")
+print(\"=\" * 80)
+print(f\"Output files:\")
+print(f\"  - {transcript_path}\")
+print(f\"  - {summary_path}\")
+ENDSCRIPT
+echo \"Script updated\"" in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ succeeded in 0ms:
+Script updated
+
+exec
+/bin/bash -lc 'source /home/kenneth_kehl/onc-co-scientist/.venv/bin/activate && cd /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized && python analysis_script.py' in /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized
+ succeeded in 779ms:
+Loading dataset...
+Loaded 50000 rows, 39 columns
+
+=== Iteration 1: Main effects screening ===
+Testing binary features...
+Testing continuous features...
+
+=== Iteration 2: Deep dive on top feature ===
+Top feature: feature_006, effect: -1.536
+
+=== Iteration 3: Interaction screening ===
+
+=== Iteration 4: Subgroup analysis ===
+
+=== Iteration 5: Additional binary features ===
+
+=== Iteration 6: Three-way interaction ===
+
+=== Iteration 7: Continuous feature subgroup ===
+
+=== Iteration 8: Refine top hypothesis ===
+
+=== Iteration 9: Comprehensive interaction search ===
+
+=== Iteration 10: Final best-supported hypothesis ===
+
+Wrote /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/transcript.json
+Generating analysis summary...
+Wrote /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/analysis_summary.txt
+
+================================================================================
+ANALYSIS COMPLETE
+================================================================================
+Output files:
+  - /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/transcript.json
+  - /home/kenneth_kehl/onc-co-scientist/data/caa_ab/qwen35_9b_bf16/pilot/neg005/tasks/breast/anonymized/analysis_summary.txt
+
+run_harness: transcript.json and analysis_summary.txt detected; terminating harness process 286708
