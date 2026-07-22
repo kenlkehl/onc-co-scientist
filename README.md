@@ -290,6 +290,31 @@ not write abliterated model weights.
 
 Top-level package: `src/onc_co_scientist/`. See docstrings for module-level detail.
 
+## Constructed benchmarks: multi-agent information cascades
+
+`experiments/` contains two small, controlled behavioral benchmarks that are separate from the
+synthetic-dataset pipeline above. Both use constructed quantitative evidence and rule-defined truth
+to test whether workflow and communication conditions alter model decisions. They do not validate
+the named oncology mechanisms, estimate failure rates in deployed systems, or establish a
+human-like psychological mechanism.
+
+- **Federated complete-evidence ceiling test.** `experiments/groupthink_pilot/` has four agents
+  privately evaluate local effect estimates, then revise after seeing complete evidence under
+  evidence-only, visible majority/lead, and source-lineage plus minority-report conditions.
+- **Sequential information-cascade assay.** `experiments/groupthink_cascade/` uses two mirrored
+  mechanism tasks, including on-target alteration versus drug efflux. It counterbalances the order
+  of identical evidence, passes only actual predecessor choices and confidence scores between
+  analysts, and gives fresh chairs matched artifacts-only, verdicts-only, and
+  artifacts-plus-verdicts inputs.
+
+The runners use fresh ephemeral Codex CLI sessions and deterministic scoring. Each run can retain
+raw prompts, responses, and event logs locally for audit; Git includes only the compact aggregate
+`report.md` and `summary.json` outputs. See the [pilot protocol](experiments/groupthink_pilot/protocol.md),
+[cascade protocol](experiments/groupthink_cascade/protocol.md),
+[pilot report](experiments/groupthink_pilot/results/luna_pilot_20260715/report.md),
+[combined cascade report](experiments/groupthink_cascade/results/luna_cascade_combined_20260715/report.md),
+and [preliminary findings](experiments/GROUPTHINK_FINDINGS.md).
+
 ## License
 
 MIT.
