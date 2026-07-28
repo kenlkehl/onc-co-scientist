@@ -21,6 +21,8 @@ import yaml
 from pydantic import ValidationError
 from rich.console import Console
 
+from .harness.experiment import load_experiment_spec
+from .harness.orchestrator import build_run_plans, run_experiment
 from .harness.task_spec import (
     INSTRUCTIONS_FILENAME,
     TASK_DATASET_LINK,
@@ -351,6 +353,87 @@ def harness_build_task(
     console.print(f"[green]Built {len(tasks)} task bundle(s)[/green] under {out}")
 
 
+@harness_app.command("validate-experiment")
+def harness_validate_experiment(
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Co-scientist experiment YAML manifest.",
+        ),
+    ],
+) -> None:
+    """Validate and expand a co-scientist experiment matrix without running agents."""
+
+    try:
+        spec = load_experiment_spec(config)
+        plans = build_run_plans(spec)
+    except (ValueError, ValidationError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(
+        f"[green]Valid experiment[/green] {spec.experiment_id}: "
+        f"{len(spec.tasks)} task(s) × {len(spec.workflows)} workflow(s) × "
+        f"{len(spec.models)} model profile(s) × {spec.replicates} replicate(s) "
+        f"= {len(plans)} run(s)"
+    )
+
+
+@harness_app.command("run-experiment")
+def harness_run_experiment(
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Co-scientist experiment YAML manifest.",
+        ),
+    ],
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Optional output-root override."),
+    ] = None,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume", help="Reuse completed cells with the same spec fingerprint."),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Write the expanded plan without invoking agents."),
+    ] = False,
+    max_parallel: Annotated[
+        int | None,
+        typer.Option("--max-parallel", min=1, help="Optional run-level concurrency override."),
+    ] = None,
+) -> None:
+    """Run persistent, sequential, deliberative, and federated experiment cells."""
+
+    try:
+        spec = load_experiment_spec(config)
+        summary = run_experiment(
+            spec,
+            output_root=out,
+            resume=resume,
+            dry_run=dry_run,
+            max_parallel=max_parallel,
+        )
+    except (ValueError, ValidationError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    label = "Planned" if dry_run else "Finished"
+    console.print(
+        f"[green]{label}[/green] {summary['n_runs']} run(s) under {summary['output_root']}"
+    )
+    if not dry_run:
+        console.print(
+            f"completed={summary['n_completed']} failed={summary['n_failed']} "
+            f"resumed={summary['n_resumed']}"
+        )
+
+
 def _build_judge(
     backend: JudgeBackend,
     *,
@@ -530,8 +613,8 @@ def _no_source_bundles_message(synth_root: Path, tasks_root: Path) -> str:
         task_root_hint = tasks_root
     if task_bundles:
         message += (
-            f" Found {len(task_bundles)} task bundle(s) under {task_root_hint}, "
-            "but task bundles intentionally omit manifest.json so agents cannot "
+            f" Found {len(task_bundles)} task bundle(s) under {task_root_hint}.\n"
+            "task bundles intentionally omit manifest.json so agents cannot "
             "see the ground truth. Pass the synth output root to --synth-root "
             "(or set SYNTH_ROOT when using scripts/resume.sh), not a task-only tree."
         )

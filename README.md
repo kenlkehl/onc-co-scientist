@@ -290,6 +290,17 @@ not write abliterated model weights.
 
 Top-level package: `src/onc_co_scientist/`. See docstrings for module-level detail.
 
+## Controlled co-scientist experiment harness
+
+`ocs harness run-experiment` now executes manifest-defined persistent,
+sequential-handoff, deliberative, and federated workflows across matched task,
+model, and replicate matrices. It supports Pi's headless RPC protocol and a
+framework-neutral JSON CLI adapter, with run-level budgets, resumability,
+gold-free clinical benchmark imports, per-site model deployment profiles, and
+an append-only provenance ledger. See the
+[co-scientist harness guide](docs/CO_SCIENTIST_HARNESS.md) and
+[`configs/co_scientist.example.yaml`](configs/co_scientist.example.yaml).
+
 ## Constructed benchmarks: multi-agent information cascades
 
 `experiments/` contains two small, controlled behavioral benchmarks that are separate from the

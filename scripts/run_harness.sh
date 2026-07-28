@@ -387,7 +387,11 @@ if (( ! DRY_RUN )); then
 fi
 
 # Discover bundles: every <ct>/<variant>/agent_instructions.md is a bundle.
-mapfile -d '' bundles < <(
+# Use a read loop instead of mapfile so the script works with macOS Bash 3.2.
+bundles=()
+while IFS= read -r -d '' bf; do
+    bundles+=( "$bf" )
+done < <(
     find "$TASKS_ROOT" -mindepth 3 -maxdepth 3 -type f -name 'agent_instructions.md' -print0 \
         | sort -z
 )
