@@ -104,6 +104,16 @@ def _runtime_environment(model: ModelSpec) -> dict[str, str]:
     return {key: value for key in keys if (value := os.environ.get(key)) is not None}
 
 
+def _captured_text(value: str | bytes | None) -> str:
+    """Normalize subprocess output retained on both completion and timeout."""
+
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
 def _strip_json_fence(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -222,6 +232,9 @@ class CliJsonRuntime:
             command.extend(["--output", str(output_path)])
 
         env = _runtime_environment(self.model)
+        (request.call_dir / "command.json").write_text(
+            json.dumps(command, indent=2) + "\n", encoding="utf-8"
+        )
         started = time.monotonic()
         try:
             completed = subprocess.run(
@@ -234,15 +247,18 @@ class CliJsonRuntime:
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
+            (request.call_dir / "stdout.log").write_text(
+                _captured_text(exc.stdout), encoding="utf-8"
+            )
+            (request.call_dir / "stderr.log").write_text(
+                _captured_text(exc.stderr), encoding="utf-8"
+            )
             raise TimeoutError(
                 f"Agent call {request.request_id} exceeded {budget.max_runtime_seconds_per_call}s"
             ) from exc
         duration = time.monotonic() - started
         (request.call_dir / "stdout.log").write_text(completed.stdout, encoding="utf-8")
         (request.call_dir / "stderr.log").write_text(completed.stderr, encoding="utf-8")
-        (request.call_dir / "command.json").write_text(
-            json.dumps(command, indent=2) + "\n", encoding="utf-8"
-        )
         if completed.returncode != 0:
             raise RuntimeError(
                 f"Agent command exited {completed.returncode}: {completed.stderr[-1000:]}"

@@ -52,6 +52,13 @@ def _atomic_json(path: Path, payload: Any) -> None:
     temporary.replace(path)
 
 
+def _atomic_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+
+
 @dataclass(frozen=True)
 class RunPlan:
     run_id: str
@@ -109,9 +116,10 @@ def build_run_plans(spec: ExperimentSpec) -> list[RunPlan]:
 class EventRecorder:
     """Append-only provenance ledger for a single run."""
 
-    def __init__(self, path: Path, run_id: str):
+    def __init__(self, path: Path, run_id: str, attempt: int = 1):
         self.path = path
         self.run_id = run_id
+        self.attempt = attempt
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
 
@@ -119,6 +127,7 @@ class EventRecorder:
         event = {
             "timestamp": _utc_now(),
             "run_id": self.run_id,
+            "attempt": self.attempt,
             "event_type": event_type,
             "payload": payload,
         }
@@ -169,6 +178,7 @@ class RunController:
         runtime: AgentRuntime,
         fingerprint: str,
         scoped_runtimes: dict[str, AgentRuntime] | None = None,
+        attempt: int = 1,
     ):
         self.spec = spec
         self.plan = plan
@@ -176,9 +186,18 @@ class RunController:
         self.runtime = runtime
         self.scoped_runtimes = scoped_runtimes or {}
         self.fingerprint = fingerprint
-        self.recorder = EventRecorder(run_dir / "events.jsonl", plan.run_id)
+        self.attempt = attempt
+        self.recorder = EventRecorder(run_dir / "events.jsonl", plan.run_id, attempt)
+        self.output_recorder = EventRecorder(
+            run_dir / "agent_outputs.jsonl", plan.run_id, attempt
+        )
         self.ledger = BudgetLedger(spec.budget)
-        self.call_index = 0
+        existing_call_indices = [
+            int(path.name.removeprefix("call_"))
+            for path in (run_dir / "calls").glob("call_*")
+            if path.name.removeprefix("call_").isdigit()
+        ]
+        self.call_index = max(existing_call_indices, default=0)
         self.artifacts: list[dict[str, Any]] = []
 
     def _runtime_scope(self, site_id: str | None) -> str | None:
@@ -310,6 +329,10 @@ class RunController:
         )
         request_payload = request.model_dump(mode="json", exclude={"prompt"})
         request_payload["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+        _atomic_json(
+            call_dir / "request.json",
+            request.model_dump(mode="json", exclude={"call_dir"}),
+        )
         self.recorder.emit("agent_request", request_payload)
         started = time.monotonic()
         try:
@@ -330,6 +353,10 @@ class RunController:
             self.ledger.add(response.usage)
         except BudgetExceeded as exc:
             budget_error = exc
+        raw_text = response.raw_text
+        raw_bytes = raw_text.encode("utf-8")
+        raw_response_path = call_dir / "raw_response.txt"
+        _atomic_text(raw_response_path, raw_text)
         record = {
             "request_id": request.request_id,
             "stage_id": stage_id,
@@ -341,10 +368,23 @@ class RunController:
             "artifact": response.artifact.model_dump(mode="json"),
             "usage": response.usage.model_dump(mode="json"),
             "runtime_metadata": response.runtime_metadata,
+            "raw_response": {
+                "path": str(raw_response_path.relative_to(self.run_dir)),
+                "sha256": hashlib.sha256(raw_bytes).hexdigest(),
+                "bytes": len(raw_bytes),
+            },
         }
         self.artifacts.append(record)
         self.recorder.emit("agent_response", record)
+        self.output_recorder.emit(
+            "agent_output",
+            {
+                **record,
+                "raw_text": raw_text,
+            },
+        )
         _atomic_json(call_dir / "normalized_response.json", record)
+        _atomic_json(self.run_dir / "artifacts.json", self.artifacts)
         if budget_error is not None:
             raise budget_error
         return response.artifact
@@ -547,6 +587,7 @@ class RunController:
 
     def execute(self) -> dict[str, Any]:
         self.run_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_json(self.run_dir / "artifacts.json", self.artifacts)
         self.recorder.emit("run_started", self.plan.public_dict())
         if self.plan.workflow.federated:
             site_reports: dict[str, AgentArtifact] = {}
@@ -610,6 +651,7 @@ class RunController:
             **self.plan.public_dict(),
             "status": "completed",
             "spec_fingerprint": self.fingerprint,
+            "attempt": self.attempt,
             "started_at": None,
             "ended_at": _utc_now(),
             "agent_calls": self.ledger.agent_calls,
@@ -648,6 +690,16 @@ def _run_one(
             return {**prior, "resumed": True}
 
     started_at = _utc_now()
+    events_path = run_dir / "events.jsonl"
+    attempt = 1
+    if events_path.exists():
+        for line in events_path.read_text(encoding="utf-8").splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("event_type") == "run_started":
+                attempt += 1
     runtime = create_runtime(plan.model.for_scope(None))
     scoped_runtimes: dict[str, AgentRuntime] = {}
     if plan.workflow.federated:
@@ -663,6 +715,7 @@ def _run_one(
         runtime=runtime,
         fingerprint=fingerprint,
         scoped_runtimes=scoped_runtimes,
+        attempt=attempt,
     )
     try:
         result = controller.execute()
@@ -673,6 +726,7 @@ def _run_one(
             **plan.public_dict(),
             "status": "failed",
             "spec_fingerprint": fingerprint,
+            "attempt": attempt,
             "started_at": started_at,
             "ended_at": _utc_now(),
             "error_type": type(exc).__name__,
@@ -681,6 +735,15 @@ def _run_one(
             "usage": controller.ledger.usage.model_dump(mode="json"),
             "resumed": False,
         }
+        controller.recorder.emit(
+            "run_failed",
+            {
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "agent_calls": controller.ledger.agent_calls,
+                "usage": controller.ledger.usage.model_dump(mode="json"),
+            },
+        )
     finally:
         for scoped_runtime in scoped_runtimes.values():
             scoped_runtime.close()

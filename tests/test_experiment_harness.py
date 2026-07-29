@@ -86,6 +86,19 @@ def test_stub_matrix_runs_all_three_workflow_policies(tmp_path: Path) -> None:
     )
     assert len({item["session_id"] for item in persistent_artifacts}) == 1
     assert len({item["session_id"] for item in sequential_artifacts}) == 4
+    persistent_run_dir = tmp_path / "out" / "runs" / runs["persistent"]["run_id"]
+    output_records = [
+        json.loads(line)
+        for line in (persistent_run_dir / "agent_outputs.jsonl").read_text().splitlines()
+    ]
+    assert len(output_records) == runs["persistent"]["agent_calls"]
+    assert all(record["event_type"] == "agent_output" for record in output_records)
+    assert all(record["payload"]["raw_text"] for record in output_records)
+    first_call = persistent_run_dir / "calls" / "call_0001"
+    assert json.loads((first_call / "request.json").read_text())["prompt"].startswith(
+        "You are the hypothesis scientist"
+    )
+    assert (first_call / "raw_response.txt").read_text() == output_records[0]["payload"]["raw_text"]
 
 
 def test_resume_reuses_completed_cells_with_same_fingerprint(tmp_path: Path) -> None:
@@ -98,6 +111,26 @@ def test_resume_reuses_completed_cells_with_same_fingerprint(tmp_path: Path) -> 
     assert second["n_resumed"] == 1
 
 
+def test_rerun_preserves_prior_attempt_outputs_and_call_files(tmp_path: Path) -> None:
+    spec = _spec(tmp_path, [WorkflowSpec(id="sequential", mode="sequential")])
+    first = run_experiment(spec)
+    second = run_experiment(spec)
+
+    first_run = first["runs"][0]
+    second_run = second["runs"][0]
+    run_dir = tmp_path / "out" / "runs" / first_run["run_id"]
+    output_records = [
+        json.loads(line) for line in (run_dir / "agent_outputs.jsonl").read_text().splitlines()
+    ]
+
+    assert first_run["attempt"] == 1
+    assert second_run["attempt"] == 2
+    assert len(output_records) == first_run["agent_calls"] + second_run["agent_calls"]
+    assert {record["attempt"] for record in output_records} == {1, 2}
+    assert (run_dir / "calls" / "call_0001" / "raw_response.txt").exists()
+    assert (run_dir / "calls" / "call_0008" / "raw_response.txt").exists()
+
+
 def test_budget_failure_is_recorded_without_crashing_matrix(tmp_path: Path) -> None:
     spec = _spec(tmp_path, [WorkflowSpec(id="sequential", mode="sequential")])
     spec.budget = ResourceBudget(max_agent_calls=2)
@@ -107,7 +140,10 @@ def test_budget_failure_is_recorded_without_crashing_matrix(tmp_path: Path) -> N
     run = summary["runs"][0]
     assert run["error_type"] == "BudgetExceeded"
     assert run["agent_calls"] == 2
-    assert (tmp_path / "out" / "runs" / run["run_id"] / "events.jsonl").exists()
+    run_dir = tmp_path / "out" / "runs" / run["run_id"]
+    assert (run_dir / "events.jsonl").exists()
+    assert len(json.loads((run_dir / "artifacts.json").read_text())) == 2
+    assert len((run_dir / "agent_outputs.jsonl").read_text().splitlines()) == 2
 
 
 class _SensitiveRuntime:

@@ -17,9 +17,12 @@ outside the agent runtime so those factors can be manipulated independently.
   prompts, raw outputs, and data paths are not placed in the central prompt.
 - **Matched budgets:** calls, tokens, tool calls, cost, and per-call wall time are
   controlled by one experiment-level budget.
-- **Provenance:** each run retains the configuration fingerprint, prompt hashes,
-  normalized artifacts, runtime metadata, usage, failures, and an append-only
-  JSONL event ledger.
+- **Provenance:** each run retains the configuration fingerprint, full prompts,
+  exact raw text returned by every agent call, normalized artifacts, runtime
+  metadata, usage, failures, and append-only JSONL event and agent-output
+  ledgers. Pi calls additionally retain all observable RPC events, including
+  tool events and tool results. Provider-internal hidden reasoning is not
+  observable and therefore cannot be recorded.
 - **Resume:** completed matrix cells with the same configuration fingerprint are
   reused.
 - **Gold isolation:** `private_evaluation_path` is harness-side metadata. It is
@@ -158,13 +161,25 @@ one matched run-level budget.
 └── runs/<task>__<workflow>__<model>__rNNN/
     ├── run.json
     ├── events.jsonl
+    ├── agent_outputs.jsonl  # exact raw text from every returned agent call
     ├── artifacts.json
     ├── scratch/
     ├── workspaces/          # copied or central workspaces, when applicable
     └── calls/call_NNNN/
+        ├── request.json      # full prompt and call metadata
+        ├── raw_response.txt # exact adapter-independent response text
         ├── normalized_response.json
         └── runtime-specific logs
 ```
+
+Each successful agent return is appended immediately to `agent_outputs.jsonl`
+and checkpointed into `artifacts.json`; a later-stage failure therefore does
+not erase earlier agents' outputs. Runtime-specific logs preserve partial
+output from failed calls where the adapter exposes it (for example CLI
+stdout/stderr on timeout and Pi RPC events received before failure).
+Re-executing an incomplete or non-resumed matrix cell increments the recorded
+attempt number and continues call numbering, so prior outputs and per-call
+files are retained rather than overwritten.
 
 Scoring remains a separate trusted process. It should read `run.json` and
 `artifacts.json` alongside evaluator-only material that is never mounted into

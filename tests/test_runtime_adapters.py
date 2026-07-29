@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from onc_co_scientist.harness.experiment import ModelSpec, ResourceBudget
 from onc_co_scientist.harness.runtime import (
@@ -115,3 +118,52 @@ def test_pi_command_can_disable_all_tools() -> None:
 
     assert "--no-tools" in command
     assert "--tools" not in command
+
+
+def test_cli_json_adapter_preserves_captured_output_on_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    request = AgentRequest(
+        request_id="request-timeout",
+        experiment_id="experiment",
+        run_id="run",
+        task_id="task",
+        workflow_id="sequential",
+        model_profile="test",
+        model_id="test-model",
+        stage_id="analysis",
+        role="analyst",
+        agent_id="agent",
+        session_id="session",
+        prompt="Analyze.",
+        workspace=workspace,
+        scratch_dir=tmp_path / "scratch",
+        call_dir=tmp_path / "call",
+    )
+    runtime = CliJsonRuntime(
+        ModelSpec(
+            id="test",
+            model_id="test-model",
+            adapter="cli-json",
+            command=["agent-command"],
+        )
+    )
+
+    def time_out(*args: object, **kwargs: object) -> object:
+        raise subprocess.TimeoutExpired(
+            cmd="agent-command",
+            timeout=1,
+            output=b"partial stdout\n",
+            stderr=b"partial stderr\n",
+        )
+
+    monkeypatch.setattr(subprocess, "run", time_out)
+
+    with pytest.raises(TimeoutError):
+        runtime.run(request, ResourceBudget(max_runtime_seconds_per_call=1))
+
+    assert (request.call_dir / "stdout.log").read_text() == "partial stdout\n"
+    assert (request.call_dir / "stderr.log").read_text() == "partial stderr\n"
+    assert json.loads((request.call_dir / "command.json").read_text())[0] == "agent-command"
