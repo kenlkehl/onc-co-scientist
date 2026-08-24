@@ -54,6 +54,40 @@ def test_profile_generates_a_bundle(cancer_type: CancerType) -> None:
         )
 
 
+def test_breast_profile_is_approximately_99_percent_female() -> None:
+    cfg = GeneratorConfig(
+        dataset_id="breast_sex_distribution",
+        cancer_type=CancerType.breast_clinical.value,
+        patient_n=50_000,
+        seed=0,
+        n_buried_signatures=0,
+        n_extra_covariates=0,
+    )
+    sex_female = generate_dataset(cfg).frame["sex_female"]
+
+    assert set(sex_female.unique()) == {0, 1}
+    assert float(sex_female.mean()) == pytest.approx(0.99, abs=0.003)
+
+
+@pytest.mark.parametrize(("prevalence", "expected"), [(0.0, 0), (1.0, 1)])
+def test_breast_profile_honors_sex_prevalence_override(
+    prevalence: float,
+    expected: int,
+) -> None:
+    cfg = GeneratorConfig(
+        dataset_id=f"breast_sex_override_{expected}",
+        cancer_type=CancerType.breast_clinical.value,
+        patient_n=100,
+        seed=17,
+        n_buried_signatures=0,
+        n_extra_covariates=0,
+        covariate_prevalences={"sex_female": prevalence},
+    )
+    sex_female = generate_dataset(cfg).frame["sex_female"]
+
+    assert set(sex_female.unique()) == {expected}
+
+
 def test_profile_disjointness_invariant(cancer_type: CancerType) -> None:
     """Background-prognostic vars must not overlap any catalog's variables.
 
