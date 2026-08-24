@@ -67,11 +67,20 @@ class CancerProfile:
     id_columns: tuple[str, ...] = ("patient_id",)
 
 
-def sample_demographics(rng: np.random.Generator, n: int) -> dict[str, np.ndarray]:
-    """Universal demographic draws: age, sex, ECOG performance status."""
+def sample_demographics(
+    rng: np.random.Generator,
+    n: int,
+    *,
+    sex_female_prevalence: float = 0.45,
+) -> dict[str, np.ndarray]:
+    """Universal demographic draws: age, sex, ECOG performance status.
+
+    Profiles with a sex-specific source population can override the default
+    female prevalence while keeping the shared draw order deterministic.
+    """
     return {
         "age_years": np.clip(rng.normal(65, 10, size=n), 30, 90).round(1),
-        "sex_female": rng.binomial(1, 0.45, size=n),
+        "sex_female": rng.binomial(1, sex_female_prevalence, size=n),
         "ecog_ps": rng.choice(_ECOG_CATEGORIES, size=n, p=_ECOG_PROBS),
     }
 

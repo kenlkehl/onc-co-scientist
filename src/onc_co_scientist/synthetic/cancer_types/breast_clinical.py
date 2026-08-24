@@ -5,7 +5,8 @@ hormone-receptor status, HER2 expression, BRCA1/2, PIK3CA), proliferation
 index (Ki67), and menopausal/nodal context. Treatments span endocrine
 therapy, CDK4/6 inhibition, HER2-directed therapy, PARP inhibition, antibody-
 drug conjugates, and immune checkpoint blockade. Effect sizes are
-deliberately large for evaluator power, not literature estimates.
+deliberately large for evaluator power, not literature estimates. The
+clinical source population defaults to 99% female and 1% male.
 """
 
 from __future__ import annotations
@@ -234,6 +235,7 @@ def buried_signature_catalog() -> list[AssociationSpec]:
 # ---------------------------------------------------------------------------
 
 DEFAULT_PREVALENCES: dict[str, float] = {
+    "sex_female": 0.99,
     "er_positive": 0.70,
     "pr_positive": 0.60,  # mostly tracks ER but not perfectly
     "her2_positive": 0.18,
@@ -260,7 +262,11 @@ def base_frame_fn(config: GeneratorConfig) -> pd.DataFrame:
     overrides = config.covariate_prevalences
 
     patient_id = [f"P{i:05d}" for i in range(n)]
-    demographics = sample_demographics(rng, n)
+    demographics = sample_demographics(
+        rng,
+        n,
+        sex_female_prevalence=float(overrides.get("sex_female", DEFAULT_PREVALENCES["sex_female"])),
+    )
     labs = sample_disease_burden_labs(rng, n)
 
     # Hormone receptor status. PR positivity is enriched in ER-positive.
