@@ -6,7 +6,7 @@ The benchmark asks: when an agentic harness analyzes a synthetic oncology datase
 
 ## What's in the box
 
-- **Synthetic dataset generator (Aim 1.1).** Large datasets (50,000 records by default). Each supported cancer type - **NSCLC, CRC, breast, prostate, AML** - has a clinical cohort profile and a CRISPR/DepMap-style cell-line dependency profile. Each bundle contains a single buried multi-feature finding: a treatment exceptional only inside a 3-4 feature conjunction for clinical cohorts, or a gene dependency concentrated in a multi-feature cell-line subgroup for DepMap profiles. Each bundle ships in two parallel forms:
+- **Synthetic dataset generator (Aim 1.1).** Clinical profiles contain 50,000 patients by default; DepMap profiles contain 2,000 models each (10,000 model records across NSCLC, CRC, breast, prostate, and AML). The DepMap generator includes lineage-aware demographics, growth pattern, coherent omics and overlapping CRISPR-library profiles, and correlated screen-QC measures calibrated to DepMap Public 26Q1. Each bundle contains a single buried multi-feature finding: a treatment exceptional only inside a 3-4 feature conjunction for clinical cohorts, or a gene dependency concentrated in a multi-feature cell-line subgroup for DepMap profiles. Each bundle ships in two parallel forms:
   - `named/` — real clinical column names.
   - `anonymized/` — non-outcome columns renamed to `feature_NNN`.
 - **Harness-agnostic task builder (Aim 1.2).** Emits a generic data-mining brief that any external agent (Claude Code, Codex, custom ReAct, …) can execute against a parquet file.
@@ -96,6 +96,19 @@ Per dataset profile, this writes:
 ```
 
 Use `--cancer-types nsclc_clinical,crc_depmap` (etc.) to restrict the run, or `--variant named` / `--variant anonymized` to write a single twin instead of both.
+
+For a reproducible aggregate report across the five generated DepMap profiles,
+run `python scripts/summarize_depmap_metadata.py <synth-output-root>`.
+
+#### DepMap metadata calibration
+
+The DepMap sampler uses lineage-conditioned categorical draws for age, sex,
+and growth pattern; coherent RNA/WES/WGS profile combinations; overlapping
+CRISPR-library combinations; and a Gaussian-copula model for NNMD, ROC AUC,
+Cas9 activity, and doubling time. Cas9 and doubling-time observation masks
+depend on library and growth pattern rather than being missing completely at
+random. Calibration targets and source-file hashes are pinned in
+`synthetic/cancer_types/depmap_metadata.py` for DepMap Public 26Q1.
 
 ### 2. Build harness task bundles
 

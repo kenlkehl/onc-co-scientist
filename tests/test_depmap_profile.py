@@ -1,3 +1,6 @@
+import pandas as pd
+import pytest
+
 from onc_co_scientist.harness.task_spec import build_task
 from onc_co_scientist.harness.transcript import Transcript
 from onc_co_scientist.scoring import StubJudge, score_buried
@@ -42,6 +45,73 @@ def test_depmap_profile_generates_dependency_map_context():
     assert "more negative values indicate stronger dependency" in desc
     assert "commercial healthcare" not in desc
     assert "electronic health records" not in desc
+
+
+def test_depmap_profile_simulates_calibrated_model_and_screen_metadata():
+    frame = generate_dataset(_depmap_config(patient_n=10_000, n_buried_signatures=0)).frame
+    requested = {
+        "age_years",
+        "age_category",
+        "sex",
+        "growth_pattern",
+        "default_omics_profile",
+        "crispr_library",
+        "screen_nnmd",
+        "screen_roc_auc",
+        "cas9_activity_pct",
+        "screen_doubling_time_hours",
+    }
+    assert requested <= set(frame.columns)
+    assert not any(column.startswith("__internal_") for column in frame.columns)
+
+    assert frame["age_category"].value_counts(normalize=True)["adult"] == pytest.approx(
+        0.84, abs=0.03
+    )
+    assert set(frame["sex"].unique()) == {"female", "male", "unknown"}
+    assert set(frame["growth_pattern"].unique()) == {
+        "adherent",
+        "suspension",
+        "mixed/dome/spheroid",
+        "unknown",
+    }
+    assert frame["has_rna_omics"].mean() == pytest.approx(0.85, abs=0.05)
+    assert frame["has_dna_omics"].mean() == pytest.approx(0.90, abs=0.05)
+    assert frame["has_crispr_qc"].eq(1).all()
+    assert frame["has_rna_dna_crispr_qc"].equals(frame["has_matched_rna_dna"])
+    assert frame["crispr_library_avana"].mean() == pytest.approx(0.866, abs=0.02)
+    assert frame["crispr_library_ky"].mean() == pytest.approx(0.262, abs=0.02)
+
+    assert frame["screen_nnmd"].between(-22.50, -1.28).all()
+    assert frame["screen_roc_auc"].between(0.70, 0.994).all()
+    assert frame["cas9_activity_pct"].dropna().between(10.0, 99.6).all()
+    assert frame["screen_doubling_time_hours"].dropna().between(20, 938).all()
+    assert 0.80 < frame["cas9_activity_pct"].notna().mean() < 0.92
+    assert 0.77 < frame["screen_doubling_time_hours"].notna().mean() < 0.90
+
+    qc = frame[
+        ["screen_nnmd", "screen_roc_auc", "cas9_activity_pct", "screen_doubling_time_hours"]
+    ].corr(method="spearman")
+    assert qc.loc["screen_nnmd", "screen_roc_auc"] < -0.70
+    assert qc.loc["screen_nnmd", "cas9_activity_pct"] < -0.25
+    assert qc.loc["screen_roc_auc", "cas9_activity_pct"] > 0.15
+    assert qc.loc["screen_roc_auc", "screen_doubling_time_hours"] < -0.15
+
+
+def test_depmap_metadata_is_deterministic():
+    first = generate_dataset(_depmap_config(n_buried_signatures=0)).frame
+    second = generate_dataset(_depmap_config(n_buried_signatures=0)).frame
+    columns = [
+        "age_years",
+        "sex",
+        "growth_pattern",
+        "default_omics_profile",
+        "crispr_library",
+        "screen_nnmd",
+        "screen_roc_auc",
+        "cas9_activity_pct",
+        "screen_doubling_time_hours",
+    ]
+    pd.testing.assert_frame_equal(first[columns], second[columns])
 
 
 def test_depmap_anonymized_description_and_task_prompt_use_cell_line_context(tmp_path):

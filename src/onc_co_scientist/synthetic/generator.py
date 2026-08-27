@@ -24,7 +24,7 @@ Two backends are supported:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 import numpy as np
@@ -44,6 +44,7 @@ from .schemas import AssociationForm, AssociationSpec, DatasetManifest, Paradigm
 log = logging.getLogger(__name__)
 
 BackendName = Literal["builtin", "onc_causal_inference"]
+_INTERNAL_COLUMN_PREFIX = "__internal_"
 
 
 @dataclass
@@ -55,10 +56,11 @@ class GeneratorConfig:
     # paradigm catalogs. Defaults to NSCLC clinical for backward compatibility
     # with the pre-multi-cancer pipeline.
     cancer_type: str = "nsclc_clinical"
-    # Default cohort size is large enough that statistical power is not the
-    # bottleneck for recovering even multi-feature subgroup signals; the eval
-    # is then a question of whether the agent reaches the right analysis.
-    patient_n: int = 50_000
+    # Explicit single-size override. When omitted, modality-specific defaults
+    # keep clinical cohorts large while avoiding unrealistic DepMap expansion.
+    patient_n: int | None = None
+    clinical_patient_n: int = 50_000
+    depmap_patient_n: int = 2_000
     seed: int = 0
     # Legacy paradigm-mix counters. Off by default — the new evaluator config
     # injects a single multi-feature buried finding (see n_buried_signatures
@@ -78,7 +80,9 @@ class GeneratorConfig:
     # keeps selected buried findings statistically recoverable while still
     # leaving the agent to find the right multivariable candidate. Set to 0
     # for tiny smoke-test cohorts.
-    min_buried_treated_subgroup_n: int = 1000
+    min_buried_treated_subgroup_n: int | None = None
+    clinical_min_buried_treated_subgroup_n: int = 1000
+    depmap_min_buried_treated_subgroup_n: int = 25
     backend: BackendName = "builtin"
     continuous_outcome_sigma: float = 2.0
     # Per-covariate marginal-prevalence overrides for the builtin backend.
@@ -97,6 +101,29 @@ class GeneratorConfig:
 
 def _resolve_profile(config: GeneratorConfig) -> CancerProfile:
     return get_profile(config.cancer_type)
+
+
+def _resolve_modality_defaults(config: GeneratorConfig) -> GeneratorConfig:
+    """Return an internal config with concrete size and subgroup-floor values."""
+    profile = _resolve_profile(config)
+    is_depmap = profile.dataset_kind == "crispr_depmap"
+    patient_n = config.patient_n
+    if patient_n is None:
+        patient_n = config.depmap_patient_n if is_depmap else config.clinical_patient_n
+    threshold = config.min_buried_treated_subgroup_n
+    if threshold is None:
+        threshold = (
+            config.depmap_min_buried_treated_subgroup_n
+            if is_depmap
+            else config.clinical_min_buried_treated_subgroup_n
+        )
+    if patient_n <= 0:
+        raise ValueError(f"patient_n must be > 0, got {patient_n}.")
+    return replace(
+        config,
+        patient_n=patient_n,
+        min_buried_treated_subgroup_n=threshold,
+    )
 
 
 def _builtin_base_frame(config: GeneratorConfig) -> pd.DataFrame:
@@ -312,7 +339,9 @@ def _public_description(
             f"{feature_bullet}\n\n"
             "### Dependency outcomes\n"
             f"{outcome_bullet}\n\n"
-            "Each row represents one cancer cell line; no missing values are present."
+            "Each row represents one cancer cell line. Age, Cas9 activity, and "
+            "doubling time include calibrated missingness that mirrors source "
+            "metadata availability."
         )
     return (
         f"# Oncology patient cohort `{config.dataset_id}`\n\n"
@@ -348,6 +377,7 @@ class DatasetBundle:
 
 def generate_dataset(config: GeneratorConfig) -> DatasetBundle:
     """Produce a full dataset bundle: frame + ground-truth manifest + public description."""
+    config = _resolve_modality_defaults(config)
     profile = _resolve_profile(config)
     base_frame = _select_backend(config)
     buried_pool = _eligible_buried_pool(profile, base_frame, config)
@@ -377,6 +407,9 @@ def generate_dataset(config: GeneratorConfig) -> DatasetBundle:
         profile=profile,
     )
     frame = injection.frame
+    internal_columns = [c for c in frame.columns if c.startswith(_INTERNAL_COLUMN_PREFIX)]
+    if internal_columns:
+        frame = frame.drop(columns=internal_columns)
     outcome_set = set(injection.outcome_columns) | _profile_outcome_columns(profile, frame)
     outcome_columns = [c for c in frame.columns if c in outcome_set]
     id_columns = [c for c in profile.id_columns if c in frame.columns]
@@ -388,6 +421,11 @@ def generate_dataset(config: GeneratorConfig) -> DatasetBundle:
         if c not in id_columns and c not in outcome_columns and c not in treatment_columns
     ]
 
+    calibration_note = (
+        "Model and screen metadata calibrated to DepMap Public 26Q1. "
+        if profile.dataset_kind == "crispr_depmap"
+        else ""
+    )
     manifest = DatasetManifest(
         dataset_id=config.dataset_id,
         seed=config.seed,
@@ -403,6 +441,7 @@ def generate_dataset(config: GeneratorConfig) -> DatasetBundle:
         notes=(
             f"Cancer type: {profile.cancer_type}. "
             f"Dataset kind: {profile.dataset_kind}. "
+            f"{calibration_note}"
             f"Paradigm mix: concordant={counts[ParadigmClass.concordant]}, "
             f"discordant={counts[ParadigmClass.discordant]}, "
             f"hidden_novel={counts[ParadigmClass.hidden_novel]}."

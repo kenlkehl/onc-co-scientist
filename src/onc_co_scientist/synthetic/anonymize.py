@@ -110,7 +110,8 @@ def _anonymized_description(
             f"{bullet}\n\n"
             "### Dependency outcomes\n"
             f"{outcome_bullet}\n\n"
-            "Each row represents one cancer cell line; no missing values are present."
+            "Each row represents one cancer cell line. Selected metadata and "
+            "screen-QC fields include calibrated source-like missingness."
         )
     return (
         f"# Oncology patient cohort `{config.dataset_id}`\n\n"

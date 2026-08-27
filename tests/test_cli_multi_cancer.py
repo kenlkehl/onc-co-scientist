@@ -10,6 +10,8 @@ from typer.testing import CliRunner
 
 from onc_co_scientist.cli import _parse_cancer_types, app
 from onc_co_scientist.synthetic.cancer_types import CancerType, all_cancer_types
+from onc_co_scientist.synthetic.generator import GeneratorConfig
+from onc_co_scientist.synthetic.multi import generate_multi_dataset
 
 
 def _write_minimal_config(path: Path, patient_n: int = 80) -> Path:
@@ -46,6 +48,20 @@ def test_parse_cancer_types_rejects_unknown() -> None:
         assert "melanoma" in str(exc)
     else:
         raise AssertionError("expected BadParameter for unknown cancer type")
+
+
+def test_modality_defaults_produce_10_000_depmap_model_records() -> None:
+    depmap_types = [ct for ct in all_cancer_types() if ct.value.endswith("_depmap")]
+    bundles = generate_multi_dataset(
+        GeneratorConfig(dataset_id="depmap_default"),
+        depmap_types,
+    )
+
+    assert len(bundles) == 5
+    assert {bundle.manifest.patient_n for bundle in bundles.values()} == {2_000}
+    assert {bundle.config.min_buried_treated_subgroup_n for bundle in bundles.values()} == {25}
+    assert {len(bundle.manifest.associations) for bundle in bundles.values()} == {1}
+    assert sum(len(bundle.frame) for bundle in bundles.values()) == 10_000
 
 
 def test_default_cli_writes_all_registered_dataset_profiles(tmp_path: Path) -> None:

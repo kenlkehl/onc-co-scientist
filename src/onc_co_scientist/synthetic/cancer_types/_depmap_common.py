@@ -16,6 +16,7 @@ import pandas as pd
 
 from ..schemas import AssociationForm, AssociationSpec, ParadigmClass, SubgroupSpec
 from .base import CancerProfile, marginal_bernoulli
+from .depmap_metadata import simulate_depmap_metadata
 
 if TYPE_CHECKING:
     from ..generator import GeneratorConfig
@@ -132,9 +133,7 @@ def nsclc_buried_signature_catalog() -> list[AssociationSpec]:
                     "kras_mutation": 1,
                     "stk11_loss": 1,
                 },
-                description=(
-                    "Lung adenocarcinoma cell lines with KRAS mutation and STK11 loss."
-                ),
+                description=("Lung adenocarcinoma cell lines with KRAS mutation and STK11 loss."),
             ),
             natural_language_description=(
                 "RIT1 knockout produces a stronger dependency signal in lung "
@@ -244,9 +243,7 @@ def prostate_buried_signature_catalog() -> list[AssociationSpec]:
                     "pten_loss": 1,
                     "brca2_loss": 0,
                 },
-                description=(
-                    "Prostate adenocarcinoma cell lines with PTEN loss and intact BRCA2."
-                ),
+                description=("Prostate adenocarcinoma cell lines with PTEN loss and intact BRCA2."),
             ),
             natural_language_description=(
                 "POLR2A knockout produces a stronger dependency signal in "
@@ -393,10 +390,17 @@ def base_frame_fn(
     cell_line_id = [f"CL_{i:05d}" for i in range(n)]
     lineage = rng.choice(lineages, size=n, p=lineage_probs)
     lineage_subtype = _sample_lineage_subtype(rng, lineage)
-    culture_type = np.where(
-        lineage == "hematopoietic",
-        "suspension",
-        rng.choice(["adherent", "semi_adherent"], size=n, p=[0.88, 0.12]),
+    metadata_rng = np.random.default_rng(np.random.SeedSequence([config.seed, 2026, 1]))
+    metadata = simulate_depmap_metadata(metadata_rng, lineage)
+    growth_pattern = metadata.frame["growth_pattern"].to_numpy()
+    culture_type = np.select(
+        [
+            growth_pattern == "adherent",
+            growth_pattern == "suspension",
+            growth_pattern == "mixed/dome/spheroid",
+        ],
+        ["adherent", "suspension", "semi_adherent"],
+        default="unknown",
     )
 
     kras_mutation = _lineage_bernoulli(
@@ -517,16 +521,19 @@ def base_frame_fn(
         np.clip(rng.normal(0.35, 0.16, size=n) + 0.10 * (ploidy > 3.2), 0.0, 1.0),
         3,
     )
-    growth_rate_doublings_per_day = np.round(
-        np.clip(rng.normal(0.82, 0.20, size=n) + 0.05 * myc_amplification, 0.15, 1.6),
-        3,
-    )
-    cas9_activity_score = np.round(np.clip(rng.normal(1.0, 0.12, size=n), 0.5, 1.5), 3)
+    # Compatibility aliases retain the pre-calibration schema while the
+    # canonical fields use interpretable units. Missingness is kept in the
+    # aliases; complete latent values are used only within the outcome DGP.
+    cas9_activity_score = np.round(metadata.frame["cas9_activity_pct"] / 80.0, 3)
+    growth_rate_doublings_per_day = np.round(24.0 / metadata.frame["screen_doubling_time_hours"], 3)
     screen_batch = rng.choice(["batch_a", "batch_b", "batch_c", "batch_d"], size=n)
     media_serum_pct = np.round(rng.choice([2.0, 5.0, 10.0], size=n, p=[0.15, 0.25, 0.60]), 1)
 
+    latent_growth_rate = 24.0 / metadata.latent_doubling_time_hours
     dependency_base = (
-        -0.25 - 0.08 * (cas9_activity_score - 1.0) - 0.10 * (growth_rate_doublings_per_day - 0.8)
+        -0.25
+        - 0.04 * ((metadata.latent_cas9_activity_pct - 79.8) / 15.0)
+        - 0.05 * ((latent_growth_rate - (24.0 / 52.0)) / 0.20)
     )
     dependency_BRAF = _dependency(rng, n, dependency_base - 0.55 * braf_v600e)
     dependency_EGFR = _dependency(rng, n, dependency_base - 0.35 * egfr_amplification)
@@ -536,12 +543,14 @@ def base_frame_fn(
     dependency_KIF18A = _dependency(rng, n, dependency_base - 0.05 * aneuploidy_score)
     dependency_TMED10 = _dependency(rng, n, dependency_base)
     dependency_DHX9 = _dependency(rng, n, dependency_base - 0.10 * rnaseq_MYC_log2_tpm / 6.0)
-    dependency_POLR2A = _dependency(rng, n, dependency_base - 0.20 * growth_rate_doublings_per_day)
+    dependency_POLR2A = _dependency(rng, n, dependency_base - 0.20 * latent_growth_rate)
     dependency_RPL11 = _dependency(rng, n, dependency_base - 0.10 * copy_number_8q24)
 
-    return pd.DataFrame(
+    frame = pd.DataFrame(
         {
             "cell_line_id": cell_line_id,
+            "__internal_cas9_activity_pct": metadata.latent_cas9_activity_pct,
+            "__internal_screen_doubling_time_hours": (metadata.latent_doubling_time_hours),
             "lineage": lineage,
             "lineage_subtype": lineage_subtype,
             "culture_type": culture_type,
@@ -590,18 +599,27 @@ def base_frame_fn(
             "dependency_RPL11": dependency_RPL11,
         }
     )
+    metadata_frame = metadata.frame.reset_index(drop=True)
+    insert_at = frame.columns.get_loc("culture_type") + 1
+    return pd.concat([frame.iloc[:, :insert_at], metadata_frame, frame.iloc[:, insert_at:]], axis=1)
 
 
 DEPMAP_BACKGROUND_PROGNOSTIC_VARIABLES: frozenset[str] = frozenset(
-    {"cas9_activity_score", "growth_rate_doublings_per_day", "ploidy"}
+    {"cas9_activity_pct", "screen_doubling_time_hours", "ploidy"}
 )
 
 
 def prognostic_contribution(frame: pd.DataFrame, outcome: str) -> np.ndarray:
     contrib = np.zeros(len(frame), dtype=float)
     if outcome.startswith("dependency_"):
-        contrib += -0.08 * (frame["cas9_activity_score"].to_numpy() - 1.0)
-        contrib += -0.10 * (frame["growth_rate_doublings_per_day"].to_numpy() - 0.8)
+        if "__internal_cas9_activity_pct" in frame:
+            cas9 = frame["__internal_cas9_activity_pct"].to_numpy()
+            doubling = frame["__internal_screen_doubling_time_hours"].to_numpy()
+        else:
+            cas9 = frame["cas9_activity_pct"].fillna(79.8).to_numpy()
+            doubling = frame["screen_doubling_time_hours"].fillna(52.0).to_numpy()
+        contrib += -0.04 * ((cas9 - 79.8) / 15.0)
+        contrib += -0.05 * (((24.0 / doubling) - (24.0 / 52.0)) / 0.20)
         contrib += -0.02 * (frame["ploidy"].to_numpy() - 2.7)
     return contrib
 
