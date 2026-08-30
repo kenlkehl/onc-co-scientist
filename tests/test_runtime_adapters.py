@@ -4,10 +4,15 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from onc_co_scientist.harness.experiment import ModelSpec, ResourceBudget
 from onc_co_scientist.harness.runtime import (
     AgentRequest,
     CliJsonRuntime,
+    ScientificClaim,
+    SubgroupPredicate,
     build_pi_command,
     parse_agent_artifact,
 )
@@ -23,6 +28,66 @@ def test_parse_agent_artifact_accepts_fenced_or_plain_output() -> None:
     assert fenced.handoff == "next"
     assert plain.summary == "A narrative result"
     assert plain.handoff == plain.summary
+    assert plain.claims == []
+
+
+def test_parse_agent_artifact_accepts_strict_scientific_claims() -> None:
+    artifact = parse_agent_artifact(
+        json.dumps(
+            {
+                "summary": "supported subgroup",
+                "handoff": "carry forward",
+                "claims": [
+                    {
+                        "exposure": "treatment_sotorasib",
+                        "outcome": "pfs_months",
+                        "direction": "positive",
+                        "subgroup": [
+                            {"variable": "kras_g12c", "operator": "eq", "value": 1},
+                            {"variable": "sex_female", "operator": "eq", "value": 0},
+                        ],
+                        "comparator": "untreated patients in the same subgroup",
+                        "effect_estimate": 4.9,
+                        "effect_unit": "months",
+                        "p_value": 0.001,
+                        "subgroup_n": 3266,
+                        "exposed_n": 1154,
+                        "comparator_n": 2112,
+                        "supported": True,
+                        "confidence": 0.95,
+                        "evidence": ["adjusted subgroup contrast"],
+                    }
+                ],
+            }
+        )
+    )
+
+    assert artifact.claims[0].effect_estimate == 4.9
+    assert artifact.claims[0].subgroup == [
+        SubgroupPredicate(variable="kras_g12c", operator="eq", value=1),
+        SubgroupPredicate(variable="sex_female", operator="eq", value=0),
+    ]
+
+
+def test_scientific_claim_rejects_noncanonical_or_extra_fields() -> None:
+    with pytest.raises(ValidationError):
+        ScientificClaim.model_validate(
+            {
+                "exposure": "treatment_sotorasib",
+                "outcome": "pfs_months",
+                "direction": "benefit",
+                "unexpected": "not permitted",
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        SubgroupPredicate.model_validate(
+            {
+                "variable": "kras_g12c",
+                "operator": "equals",
+                "value": 1,
+            }
+        )
 
 
 def test_cli_json_adapter_uses_benchmark_style_file_contract(tmp_path: Path) -> None:

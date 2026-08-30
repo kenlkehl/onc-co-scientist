@@ -78,14 +78,14 @@ class RunPlan:
 def build_run_plans(spec: ExperimentSpec) -> list[RunPlan]:
     plans: list[RunPlan] = []
     for task in spec.tasks:
-        for workflow in spec.workflows:
-            if workflow.federated and not task.site_workspaces:
-                raise ValueError(
-                    f"Workflow {workflow.id!r} is federated but task {task.id!r} "
-                    "has no site_workspaces."
-                )
-            for model in spec.models:
-                for replicate in range(1, spec.replicates + 1):
+        for replicate in range(1, spec.replicates + 1):
+            for workflow in spec.workflows:
+                if workflow.federated and not task.site_workspaces:
+                    raise ValueError(
+                        f"Workflow {workflow.id!r} is federated but task {task.id!r} "
+                        "has no site_workspaces."
+                    )
+                for model in spec.models:
                     run_id = "__".join(
                         (
                             _slug(task.id),
@@ -205,19 +205,34 @@ class RunController:
             shutil.copytree(source, target)
         return target
 
-    def _central_workspace(self) -> Path:
-        path = self.run_dir / "workspaces" / "central"
+    def _session_workspace(self, source: Path, session_id: str) -> Path:
+        """Return the workspace visible to one conversational session.
+
+        Reference mode intentionally preserves the configured shared source.
+        Copy mode creates one snapshot per session, so persistent turns share a
+        snapshot while sequential stages and deliberative participants do not.
+        """
+
+        return self._workspace(source, f"session-{session_id}")
+
+    def _central_workspace(self, session_id: str) -> Path:
+        path = self.run_dir / "workspaces" / _slug(f"session-{session_id}")
         path.mkdir(parents=True, exist_ok=True)
         return path
+
+    def _scratch_dir(self, session_id: str) -> Path:
+        return self.run_dir / "scratch" / _slug(session_id)
 
     def _base_prompt(
         self,
         *,
         stage: StageSpec,
         workspace: Path,
+        scratch_dir: Path,
         context: str = "",
         peer_context: str = "",
         central: bool = False,
+        require_final_answer: bool = False,
     ) -> str:
         safeguards = self.plan.workflow.safeguards
         rules = [
@@ -225,7 +240,7 @@ class RunController:
             "Do not search parent directories or attempt to locate scoring keys or "
             "evaluator files.",
             "Preserve null and negative findings; do not manufacture agreement or significance.",
-            f"Write temporary analysis files only under {self.run_dir / 'scratch'}.",
+            f"Write temporary analysis files only under {scratch_dir}.",
         ]
         if central:
             rules.append(
@@ -265,7 +280,7 @@ class RunController:
             lines.extend(["", "AUTHORIZED WRITTEN HANDOFF", context])
         if peer_context:
             lines.extend(["", "AUTHORIZED PEER MATERIAL", peer_context])
-        lines.append(artifact_output_instructions())
+        lines.append(artifact_output_instructions(require_final_answer=require_final_answer))
         return "\n".join(lines)
 
     def _call(
@@ -297,7 +312,7 @@ class RunController:
             session_id=session_id,
             prompt=prompt,
             workspace=workspace,
-            scratch_dir=self.run_dir / "scratch" / _slug(agent_id),
+            scratch_dir=self._scratch_dir(session_id),
             call_dir=call_dir,
             metadata={
                 "replicate": self.plan.replicate,
@@ -345,6 +360,7 @@ class RunController:
         self.artifacts.append(record)
         self.recorder.emit("agent_response", record)
         _atomic_json(call_dir / "normalized_response.json", record)
+        _atomic_json(self.run_dir / "artifacts.json", self.artifacts)
         if budget_error is not None:
             raise budget_error
         return response.artifact
@@ -352,23 +368,26 @@ class RunController:
     def _run_linear(
         self,
         *,
-        workspace: Path,
+        source_workspace: Path,
         scope_id: str,
         site_id: str | None,
     ) -> AgentArtifact:
         previous: AgentArtifact | None = None
         persistent_session = f"{self.plan.run_id}:{scope_id}:persistent"
-        for stage in self.spec.stages:
+        for stage_index, stage in enumerate(self.spec.stages):
             if self.plan.workflow.mode == "persistent":
                 session_id = persistent_session
                 context = ""
             else:
                 session_id = f"{self.plan.run_id}:{scope_id}:{stage.id}"
                 context = previous.handoff if previous is not None else ""
+            workspace = self._session_workspace(source_workspace, session_id)
             prompt = self._base_prompt(
                 stage=stage,
                 workspace=workspace,
+                scratch_dir=self._scratch_dir(session_id),
                 context=context,
+                require_final_answer=stage_index == len(self.spec.stages) - 1,
             )
             previous = self._call(
                 stage_id=stage.id,
@@ -386,24 +405,28 @@ class RunController:
     def _run_deliberative(
         self,
         *,
-        workspace: Path,
+        source_workspace: Path,
         scope_id: str,
         site_id: str | None,
     ) -> AgentArtifact:
         prior_handoff = ""
         consensus: AgentArtifact | None = None
         workflow = self.plan.workflow
-        for stage in self.spec.stages:
+        for stage_index, stage in enumerate(self.spec.stages):
+            require_final_answer = stage_index == len(self.spec.stages) - 1
             current: list[AgentArtifact] = []
             session_ids = [
                 f"{self.plan.run_id}:{scope_id}:{stage.id}:peer{index:02d}"
                 for index in range(1, workflow.agents_per_stage + 1)
             ]
             for index, session_id in enumerate(session_ids, start=1):
+                workspace = self._session_workspace(source_workspace, session_id)
                 prompt = self._base_prompt(
                     stage=stage,
                     workspace=workspace,
+                    scratch_dir=self._scratch_dir(session_id),
                     context=prior_handoff,
+                    require_final_answer=require_final_answer,
                 )
                 current.append(
                     self._call(
@@ -421,10 +444,12 @@ class RunController:
             for round_index in range(2, workflow.deliberation_rounds + 1):
                 revised: list[AgentArtifact] = []
                 for index, session_id in enumerate(session_ids, start=1):
+                    workspace = self._session_workspace(source_workspace, session_id)
                     peer_payload = [
                         {
                             "peer": peer_index,
                             "handoff": artifact.handoff,
+                            "claims": [claim.model_dump(mode="json") for claim in artifact.claims],
                             "evidence": artifact.evidence,
                             "concerns": artifact.concerns,
                         }
@@ -434,12 +459,14 @@ class RunController:
                     prompt = self._base_prompt(
                         stage=stage,
                         workspace=workspace,
+                        scratch_dir=self._scratch_dir(session_id),
                         context=prior_handoff,
                         peer_context=(
                             "Review the other scientists' structured artifacts below, then revise "
                             "your own conclusion while retaining justified disagreement.\n"
                             + json.dumps(peer_payload, indent=2)
                         ),
+                        require_final_answer=require_final_answer,
                     )
                     revised.append(
                         self._call(
@@ -459,6 +486,7 @@ class RunController:
                 {
                     "peer": index,
                     "handoff": artifact.handoff,
+                    "claims": [claim.model_dump(mode="json") for claim in artifact.claims],
                     "evidence": artifact.evidence,
                     "concerns": artifact.concerns,
                     "minority_report": artifact.minority_report,
@@ -473,19 +501,23 @@ class RunController:
                     "than votes, identify unsupported convergence, and preserve material dissent."
                 ),
             )
+            consensus_session_id = f"{self.plan.run_id}:{scope_id}:{stage.id}:chair"
+            consensus_workspace = self._session_workspace(source_workspace, consensus_session_id)
             prompt = self._base_prompt(
                 stage=consensus_stage,
-                workspace=workspace,
+                workspace=consensus_workspace,
+                scratch_dir=self._scratch_dir(consensus_session_id),
                 context=prior_handoff,
                 peer_context=json.dumps(peer_payload, indent=2),
+                require_final_answer=require_final_answer,
             )
             consensus = self._call(
                 stage_id=consensus_stage.id,
                 role=consensus_stage.role,
                 agent_id=f"{scope_id}:{stage.id}:chair",
-                session_id=f"{self.plan.run_id}:{scope_id}:{stage.id}:chair",
+                session_id=consensus_session_id,
                 prompt=prompt,
-                workspace=workspace,
+                workspace=consensus_workspace,
                 site_id=site_id,
                 round_index=workflow.deliberation_rounds + 1,
             )
@@ -496,18 +528,18 @@ class RunController:
     def _run_site(
         self,
         *,
-        workspace: Path,
+        source_workspace: Path,
         scope_id: str,
         site_id: str | None,
     ) -> AgentArtifact:
         if self.plan.workflow.mode == "deliberative":
             return self._run_deliberative(
-                workspace=workspace,
+                source_workspace=source_workspace,
                 scope_id=scope_id,
                 site_id=site_id,
             )
         return self._run_linear(
-            workspace=workspace,
+            source_workspace=source_workspace,
             scope_id=scope_id,
             site_id=site_id,
         )
@@ -516,11 +548,19 @@ class RunController:
         self,
         *,
         final_artifact: AgentArtifact,
-        workspace: Path,
+        source_workspace: Path | None = None,
         peer_context: str = "",
+        central: bool = False,
     ) -> AgentArtifact | None:
         if not self.plan.workflow.safeguards.independent_rerun:
             return None
+        session_id = f"{self.plan.run_id}:independent-verifier"
+        if central:
+            workspace = self._central_workspace(session_id)
+        else:
+            if source_workspace is None:
+                raise ValueError("Non-central verification requires a source workspace.")
+            workspace = self._session_workspace(source_workspace, session_id)
         stage = StageSpec(
             id="independent_verification",
             role="independent verification scientist",
@@ -532,6 +572,7 @@ class RunController:
         prompt = self._base_prompt(
             stage=stage,
             workspace=workspace,
+            scratch_dir=self._scratch_dir(session_id),
             context=final_artifact.handoff,
             peer_context=peer_context,
         )
@@ -539,7 +580,7 @@ class RunController:
             stage_id=stage.id,
             role=stage.role,
             agent_id="independent-verifier",
-            session_id=f"{self.plan.run_id}:independent-verifier",
+            session_id=session_id,
             prompt=prompt,
             workspace=workspace,
             round_index=1,
@@ -551,16 +592,16 @@ class RunController:
         if self.plan.workflow.federated:
             site_reports: dict[str, AgentArtifact] = {}
             for site_id, source in sorted(self.plan.task.site_workspaces.items()):
-                workspace = self._workspace(source, f"site-{site_id}")
                 site_reports[site_id] = self._run_site(
-                    workspace=workspace,
+                    source_workspace=source,
                     scope_id=f"site-{site_id}",
                     site_id=site_id,
                 )
             authorized_reports = {
                 site_id: {"handoff": artifact.handoff} for site_id, artifact in site_reports.items()
             }
-            central_workspace = self._central_workspace()
+            central_session_id = f"{self.plan.run_id}:central-reviewer"
+            central_workspace = self._central_workspace(central_session_id)
             central_stage = StageSpec(
                 id="federated_synthesis",
                 role="federated synthesis scientist",
@@ -573,36 +614,37 @@ class RunController:
             central_prompt = self._base_prompt(
                 stage=central_stage,
                 workspace=central_workspace,
+                scratch_dir=self._scratch_dir(central_session_id),
                 peer_context=json.dumps(authorized_reports, indent=2),
                 central=True,
+                require_final_answer=True,
             )
             final_artifact = self._call(
                 stage_id=central_stage.id,
                 role=central_stage.role,
                 agent_id="central-reviewer",
-                session_id=f"{self.plan.run_id}:central-reviewer",
+                session_id=central_session_id,
                 prompt=central_prompt,
                 workspace=central_workspace,
                 round_index=1,
             )
             verification = self._independent_verification(
                 final_artifact=final_artifact,
-                workspace=central_workspace,
                 peer_context=json.dumps(authorized_reports, indent=2),
+                central=True,
             )
             site_handoffs = {
                 site_id: artifact.handoff for site_id, artifact in site_reports.items()
             }
         else:
-            workspace = self._workspace(self.plan.task.public_workspace, "single-site")
             final_artifact = self._run_site(
-                workspace=workspace,
+                source_workspace=self.plan.task.public_workspace,
                 scope_id="single-site",
                 site_id=None,
             )
             verification = self._independent_verification(
                 final_artifact=final_artifact,
-                workspace=workspace,
+                source_workspace=self.plan.task.public_workspace,
             )
             site_handoffs = {}
 

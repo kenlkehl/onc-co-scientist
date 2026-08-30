@@ -17,7 +17,14 @@ from .experiment import (
     load_experiment_spec,
 )
 from .orchestrator import build_run_plans, run_experiment
-from .runtime import AgentArtifact, AgentRequest, AgentResponse, AgentUsage
+from .runtime import (
+    AgentArtifact,
+    AgentRequest,
+    AgentResponse,
+    AgentUsage,
+    ScientificClaim,
+    SubgroupPredicate,
+)
 from .task_spec import TaskBundle, build_task
 from .transcript import (
     AnalysisRecord,
@@ -37,7 +44,9 @@ __all__ = [
     "IterationRecord",
     "ModelSpec",
     "ResourceBudget",
+    "ScientificClaim",
     "StageSpec",
+    "SubgroupPredicate",
     "TaskBundle",
     "TaskSpec",
     "Transcript",

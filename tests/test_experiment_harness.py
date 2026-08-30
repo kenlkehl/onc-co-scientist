@@ -16,7 +16,12 @@ from onc_co_scientist.harness.experiment import (
     import_clinical_benchmark_tasks,
     load_experiment_spec,
 )
-from onc_co_scientist.harness.orchestrator import RunController, RunPlan, run_experiment
+from onc_co_scientist.harness.orchestrator import (
+    RunController,
+    RunPlan,
+    build_run_plans,
+    run_experiment,
+)
 from onc_co_scientist.harness.runtime import (
     AgentArtifact,
     AgentRequest,
@@ -88,6 +93,33 @@ def test_stub_matrix_runs_all_three_workflow_policies(tmp_path: Path) -> None:
     assert len({item["session_id"] for item in sequential_artifacts}) == 4
 
 
+def test_run_plans_interleave_workflows_within_each_replicate(tmp_path: Path) -> None:
+    spec = _spec(
+        tmp_path,
+        [
+            WorkflowSpec(id="persistent", mode="persistent"),
+            WorkflowSpec(id="sequential", mode="sequential"),
+            WorkflowSpec(
+                id="deliberative",
+                mode="deliberative",
+                agents_per_stage=2,
+            ),
+        ],
+    )
+    spec.replicates = 2
+
+    plans = build_run_plans(spec)
+
+    assert [(plan.replicate, plan.workflow.id) for plan in plans] == [
+        (1, "persistent"),
+        (1, "sequential"),
+        (1, "deliberative"),
+        (2, "persistent"),
+        (2, "sequential"),
+        (2, "deliberative"),
+    ]
+
+
 def test_resume_reuses_completed_cells_with_same_fingerprint(tmp_path: Path) -> None:
     spec = _spec(tmp_path, [WorkflowSpec(id="sequential", mode="sequential")])
     first = run_experiment(spec)
@@ -108,6 +140,10 @@ def test_budget_failure_is_recorded_without_crashing_matrix(tmp_path: Path) -> N
     assert run["error_type"] == "BudgetExceeded"
     assert run["agent_calls"] == 2
     assert (tmp_path / "out" / "runs" / run["run_id"] / "events.jsonl").exists()
+    partial_artifacts = json.loads(
+        (tmp_path / "out" / "runs" / run["run_id"] / "artifacts.json").read_text()
+    )
+    assert len(partial_artifacts) == 2
 
 
 class _SensitiveRuntime:
@@ -132,6 +168,113 @@ class _SensitiveRuntime:
 
     def close(self) -> None:
         return
+
+
+class _RecordingRuntime:
+    def __init__(self) -> None:
+        self.requests: list[AgentRequest] = []
+
+    def run(self, request: AgentRequest, budget: ResourceBudget) -> AgentResponse:
+        self.requests.append(request)
+        return AgentResponse(
+            request_id=request.request_id,
+            artifact=AgentArtifact(
+                summary=f"completed {request.stage_id}",
+                handoff=f"handoff {request.stage_id}",
+            ),
+            usage=AgentUsage(input_tokens=1, output_tokens=1),
+        )
+
+    def close(self) -> None:
+        return
+
+
+def test_copy_strategy_isolates_workspace_and_scratch_by_session(tmp_path: Path) -> None:
+    workflows = [
+        WorkflowSpec(id="persistent", mode="persistent"),
+        WorkflowSpec(id="sequential", mode="sequential"),
+        WorkflowSpec(
+            id="deliberative",
+            mode="deliberative",
+            agents_per_stage=2,
+            deliberation_rounds=2,
+        ),
+    ]
+    expected_session_counts = {"persistent": 1, "sequential": 4, "deliberative": 12}
+
+    for workflow in workflows:
+        case_root = tmp_path / workflow.id
+        source = _workspace(case_root)
+        task = TaskSpec(id="task", prompt="Analyze.", public_workspace=source)
+        model = ModelSpec(id="model", model_id="stub", adapter="stub")
+        spec = ExperimentSpec(
+            experiment_id=f"isolation-{workflow.id}",
+            workspace_strategy="copy",
+            output_root=case_root / "out",
+            tasks=[task],
+            models=[model],
+            workflows=[workflow],
+        )
+        plan = RunPlan(
+            run_id=f"run-{workflow.id}",
+            task=task,
+            workflow=workflow,
+            model=model,
+            replicate=1,
+        )
+        runtime = _RecordingRuntime()
+        controller = RunController(
+            spec=spec,
+            plan=plan,
+            run_dir=case_root / "run",
+            runtime=runtime,
+            fingerprint=spec.fingerprint(),
+        )
+
+        controller.execute()
+
+        by_session: dict[str, list[AgentRequest]] = {}
+        for request in runtime.requests:
+            by_session.setdefault(request.session_id, []).append(request)
+        assert len(by_session) == expected_session_counts[workflow.id]
+        for session_requests in by_session.values():
+            assert len({request.workspace for request in session_requests}) == 1
+            assert len({request.scratch_dir for request in session_requests}) == 1
+            workspace = session_requests[0].workspace
+            assert workspace != source
+            assert (workspace / "public.txt").read_text() == "agent-safe evidence\n"
+        assert len({requests[0].workspace for requests in by_session.values()}) == len(by_session)
+        assert len({requests[0].scratch_dir for requests in by_session.values()}) == len(by_session)
+
+
+def test_only_final_synthesis_prompts_require_final_answer(tmp_path: Path) -> None:
+    workflow = WorkflowSpec(id="persistent", mode="persistent")
+    spec = _spec(tmp_path, [workflow])
+    plan = RunPlan(
+        run_id="final-contract",
+        task=spec.tasks[0],
+        workflow=workflow,
+        model=spec.models[0],
+        replicate=1,
+    )
+    runtime = _RecordingRuntime()
+    controller = RunController(
+        spec=spec,
+        plan=plan,
+        run_dir=tmp_path / "run",
+        runtime=runtime,
+        fingerprint=spec.fingerprint(),
+    )
+
+    controller.execute()
+
+    for request in runtime.requests:
+        if request.stage_id == "synthesis":
+            assert "final_answer MUST be non-null" in request.prompt
+            assert '"final_answer": {"conclusion"' in request.prompt
+        else:
+            assert "Set final_answer to null" in request.prompt
+            assert '"final_answer": null' in request.prompt
 
 
 def test_federated_reviewer_receives_only_site_handoffs(tmp_path: Path) -> None:

@@ -12,11 +12,42 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .experiment import ModelSpec, ResourceBudget
+
+
+class SubgroupPredicate(BaseModel):
+    """One strict, machine-readable predicate defining a subgroup."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    variable: str = Field(min_length=1)
+    operator: Literal["eq", "ne", "lt", "le", "gt", "ge", "in", "not_in"]
+    value: str | int | float | bool
+
+
+class ScientificClaim(BaseModel):
+    """One normalized, independently scoreable scientific claim."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    exposure: str = Field(min_length=1)
+    outcome: str = Field(min_length=1)
+    direction: Literal["positive", "negative", "null", "uncertain"]
+    subgroup: list[SubgroupPredicate] = Field(default_factory=list)
+    comparator: str = ""
+    effect_estimate: float | None = None
+    effect_unit: str = ""
+    p_value: float | None = Field(default=None, ge=0.0, le=1.0)
+    subgroup_n: int | None = Field(default=None, ge=0)
+    exposed_n: int | None = Field(default=None, ge=0)
+    comparator_n: int | None = Field(default=None, ge=0)
+    supported: bool = False
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    evidence: list[str] = Field(default_factory=list)
 
 
 class AgentArtifact(BaseModel):
@@ -28,6 +59,7 @@ class AgentArtifact(BaseModel):
     handoff: str = Field(min_length=1)
     hypotheses: list[str] = Field(default_factory=list)
     analyses: list[dict[str, Any]] = Field(default_factory=list)
+    claims: list[ScientificClaim] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
     concerns: list[str] = Field(default_factory=list)
     minority_report: str = ""
@@ -142,9 +174,20 @@ def parse_agent_artifact(text: str) -> AgentArtifact:
     return AgentArtifact(summary=fallback, handoff=fallback)
 
 
-def artifact_output_instructions() -> str:
+def artifact_output_instructions(*, require_final_answer: bool = False) -> str:
     """Stable output contract appended to every scientific stage prompt."""
 
+    final_answer_example = (
+        '{"conclusion": "final scientific conclusion", "supported_claim_indices": [0]}'
+        if require_final_answer
+        else "null"
+    )
+    final_answer_rule = (
+        "This is a final synthesis stage. final_answer MUST be non-null and state the final "
+        "scientific conclusion, referring to supported claims by their zero-based indices."
+        if require_final_answer
+        else "This is not a final synthesis stage. Set final_answer to null."
+    )
     return (
         "\n\nReturn only one JSON object with this shape:\n"
         "{\n"
@@ -152,11 +195,36 @@ def artifact_output_instructions() -> str:
         '  "handoff": "self-contained written handoff for the next scientist",\n'
         '  "hypotheses": ["specific hypothesis"],\n'
         '  "analyses": [{"method": "...", "result": "..."}],\n'
+        '  "claims": [{\n'
+        '    "exposure": "treatment or biomarker",\n'
+        '    "outcome": "outcome column",\n'
+        '    "direction": "positive|negative|null|uncertain",\n'
+        '    "subgroup": [{"variable": "column", "operator": "eq", "value": 1}],\n'
+        '    "comparator": "comparison group",\n'
+        '    "effect_estimate": 0.0,\n'
+        '    "effect_unit": "outcome units",\n'
+        '    "p_value": 0.05,\n'
+        '    "subgroup_n": 0,\n'
+        '    "exposed_n": 0,\n'
+        '    "comparator_n": 0,\n'
+        '    "supported": true,\n'
+        '    "confidence": 0.0,\n'
+        '    "evidence": ["analysis or statistic supporting this claim"]\n'
+        "  }],\n"
         '  "evidence": ["file, statistic, or observation supporting the result"],\n'
         '  "concerns": ["limitation or competing explanation"],\n'
         '  "minority_report": "material unresolved disagreement, or empty string",\n'
-        '  "final_answer": null\n'
+        f'  "final_answer": {final_answer_example}\n'
         "}\n"
+        "For each material relationship, emit one claim. Use direction='positive' when the "
+        "exposure increases the named outcome, 'negative' when it decreases it, 'null' for a "
+        "supported null result, and 'uncertain' otherwise. Encode every defining subgroup "
+        "predicate as a separate {variable, operator, value} item, using only eq, ne, lt, le, "
+        "gt, ge, in, or not_in. Values must be scalar strings, numbers, or booleans. Use an empty "
+        "subgroup list only for a population-wide claim. Use null for unavailable numeric values "
+        "rather than inventing them. Confidence and p_value must be between 0 and 1; sample-size "
+        "fields must be nonnegative integers.\n"
+        f"{final_answer_rule}\n"
         "Do not include Markdown fences or text outside the JSON object."
     )
 
