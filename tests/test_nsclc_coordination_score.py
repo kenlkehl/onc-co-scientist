@@ -8,6 +8,7 @@ EXPERIMENT = Path(__file__).resolve().parents[1] / "experiments" / "nsclc_coordi
 sys.path.insert(0, str(EXPERIMENT))
 
 from score_experiment import (  # noqa: E402
+    load_truth,
     score_artifact,
     score_experiment,
     score_run,
@@ -41,6 +42,8 @@ def _analysis(claim_id: str) -> dict:
         "p_value": 0.001,
         "significant": True,
         "subgroup_n": 3266,
+        "exposed_n": 1154,
+        "comparator_n": 2112,
         "evidence": ["analysis.csv#sotorasib-subgroup"],
     }
 
@@ -53,7 +56,21 @@ EXACT_PREDICATES = {
 }
 
 
-def _record(call: int, stage: str, artifact: dict, *, round_index: int = 1) -> dict:
+def _record(
+    call: int,
+    stage: str,
+    artifact: dict,
+    *,
+    round_index: int = 1,
+    iteration_index: int = 1,
+) -> dict:
+    artifact = dict(artifact)
+    artifact.setdefault(
+        "final_answer",
+        ({"conclusion": "final", "supported_claim_indices": [0]}
+         if stage.removesuffix("_consensus") == "synthesis"
+         else None),
+    )
     return {
         "request_id": f"run:c{call:04d}",
         "stage_id": stage,
@@ -61,6 +78,8 @@ def _record(call: int, stage: str, artifact: dict, *, round_index: int = 1) -> d
         "session_id": f"session-{call}",
         "site_id": None,
         "round": round_index,
+        "iteration_index": iteration_index,
+        "max_iterations": iteration_index,
         "artifact": artifact,
         "usage": {
             "input_tokens": 100,
@@ -168,8 +187,9 @@ def test_positive_binary_exposure_encoding_is_canonicalized() -> None:
 
 def test_text_fallback_is_conservative() -> None:
     statement = (
-        "Sotorasib produced 4.985 months longer PFS (p<0.001; n=3266) in KRAS G12C-mutant, "
-        "ALK-wild-type, BRCA2-wild-type male patients; this finding was supported."
+        "Sotorasib produced 4.985 months longer PFS (p<0.001; n=3266; exposed_n=1154; "
+        "comparator_n=2112) in KRAS G12C-mutant, ALK-wild-type, BRCA2-wild-type male "
+        "patients; this finding was supported."
     )
     exact = score_artifact(
         {
@@ -177,7 +197,10 @@ def test_text_fallback_is_conservative() -> None:
             "handoff": statement,
             "hypotheses": [],
             "analyses": [],
-            "evidence": ["analysis.csv: mean difference +4.985 months; p<0.001; n=3266"],
+            "evidence": [
+                "analysis.csv: mean difference +4.985 months; p<0.001; n=3266; "
+                "exposed_n=1154; comparator_n=2112"
+            ],
         }
     )
     unsupported = score_artifact(
@@ -348,4 +371,234 @@ def test_experiment_writes_deterministic_json_csv_and_markdown(tmp_path: Path) -
     assert first["by_workflow"][0]["final_supported_exact_rate"] == 1.0
     assert first["by_workflow"][0]["supported_final_exact_per_1k_tokens"] > 0
     assert (out / "aggregate.csv").is_file()
+    assert (out / "run_scores.csv").is_file()
+    assert (out / "iteration_scores.csv").is_file()
+    assert (out / "cell_summary.csv").is_file()
+    assert (out / "resource_summary.csv").is_file()
     assert "No model judge was used" in (out / "report.md").read_text(encoding="utf-8")
+
+
+def test_masked_truth_scores_opaque_exact_near_component_contradiction_and_text() -> None:
+    root = (
+        Path(__file__).resolve().parents[1]
+        / "example_data_clinical_all_claude"
+        / "ds001"
+        / "nsclc"
+    )
+    truth = load_truth(
+        root / "anonymized" / "manifest.json",
+        semantic_condition="masked",
+        column_mapping_path=root / "anonymized" / "column_mapping.json",
+    )
+    exact_predicates = {
+        "feature_016": 1,
+        "feature_028": 0,
+        "feature_005": 0,
+        "feature_031": 0,
+    }
+
+    def masked_artifact(predicates: dict[str, int]) -> dict:
+        return {
+            "summary": "opaque result",
+            "handoff": "opaque handoff",
+            "claims": [
+                {
+                    "exposure": "feature_018",
+                    "outcome": "pfs_months",
+                    "direction": "positive",
+                    "subgroup": [
+                        {"variable": variable, "operator": "eq", "value": value}
+                        for variable, value in predicates.items()
+                    ],
+                    "effect_estimate": 4.985,
+                    "p_value": 0.001,
+                    "subgroup_n": 3266,
+                    "exposed_n": 1154,
+                    "comparator_n": 2112,
+                    "supported": True,
+                    "evidence": ["opaque-analysis.csv"],
+                }
+            ],
+        }
+
+    exact = score_artifact(masked_artifact(exact_predicates), truth=truth)
+    near = score_artifact(
+        masked_artifact(
+            {
+                key: value
+                for key, value in exact_predicates.items()
+                if key != "feature_031"
+            }
+        ),
+        truth=truth,
+    )
+    component = score_artifact(masked_artifact({"feature_016": 1}), truth=truth)
+    contradiction = score_artifact(
+        masked_artifact({**exact_predicates, "feature_028": 1}), truth=truth
+    )
+    statement = (
+        "feature_018 increases pfs_months by +4.985 months (p<0.001; n=3266; "
+        "exposed_n=1154; comparator_n=2112) when feature_016=1, feature_028=0, "
+        "feature_005=0, and feature_031=0; supported."
+    )
+    text_score = score_artifact(
+        {
+            "summary": statement,
+            "handoff": statement,
+            "evidence": [statement],
+        },
+        truth=truth,
+    )
+
+    assert exact["supported_recovery_level"] == "exact"
+    assert near["supported_recovery_level"] == "near"
+    assert component["supported_recovery_level"] == "component"
+    assert contradiction["recovery_level"] == "none"
+    assert text_score["supported_recovery_level"] == "exact"
+    assert truth.exposure == "feature_018"
+    assert set(truth.subgroup_predicates) == set(exact_predicates)
+
+
+def test_ever_recovery_is_not_substituted_for_terminal_iteration() -> None:
+    null = {"summary": "none", "handoff": "none"}
+    artifacts = [
+        _record(1, "hypothesis_generation", null, iteration_index=1),
+        _record(2, "analysis", null, iteration_index=1),
+        _record(3, "critique", null, iteration_index=1),
+        _record(4, "synthesis", _artifact("found", EXACT_PREDICATES), iteration_index=1),
+        _record(5, "hypothesis_generation", null, iteration_index=2),
+        _record(6, "analysis", null, iteration_index=2),
+        _record(7, "critique", null, iteration_index=2),
+        _record(8, "synthesis", null, iteration_index=2),
+    ]
+    score = score_run(
+        {
+            "run_id": "trajectory",
+            "workflow_id": "sequential",
+            "workflow_mode": "sequential",
+            "semantic_condition": "named",
+            "iteration_policy": {"iterations": 2, "completion_mode": "fixed"},
+            "iterations_completed": 2,
+            "terminal_iteration": 2,
+            "status": "completed",
+        },
+        artifacts,
+    )
+
+    assert score["ever_supported_exact_synthesis"] is True
+    assert score["terminal_supported_exact"] is False
+    assert score["final_supported_recovery_level"] == "none"
+    assert score["first_supported_exact_synthesis_iteration"] == 1
+    assert score["later_exact_loss"] is True
+    assert score["exact_persisted_to_terminal"] is False
+
+
+def test_aggregation_keeps_all_six_semantic_workflow_cells_separate(tmp_path: Path) -> None:
+    source_root = (
+        Path(__file__).resolve().parents[1]
+        / "example_data_clinical_all_claude"
+        / "ds001"
+        / "nsclc"
+    )
+    result_root = tmp_path / "main-results"
+    index = {
+        "schema_version": "1",
+        "tasks": {
+            "named-task": {
+                "semantic_condition": "named",
+                "path": str(source_root / "named" / "manifest.json"),
+                "sha256": "a844619fceb456a5ef4d9b5ba3dff5e7f07363eb83554226601f845ed22ce064",
+            },
+            "masked-task": {
+                "semantic_condition": "masked",
+                "path": str(source_root / "anonymized" / "manifest.json"),
+                "sha256": "e78bb273b53647fdc41af4d0e7b34ffbb0d0dec86b0e09b78e689be764ca0409",
+            },
+        },
+        "assets": {
+            "column_mapping": {
+                "path": str(source_root / "anonymized" / "column_mapping.json"),
+                "sha256": "6d291a3d653803b12ad150654635201b079c6dd37e09fd7037fd0bcbf08d9cd7",
+            }
+        },
+    }
+    result_root.mkdir(parents=True)
+    (result_root / "private_evaluation_index.json").write_text(
+        json.dumps(index), encoding="utf-8"
+    )
+    workflows = ("persistent", "sequential", "deliberative")
+    for condition, task_id in (("named", "named-task"), ("masked", "masked-task")):
+        truth = load_truth(
+            Path(index["tasks"][task_id]["path"]),
+            semantic_condition=condition,
+            column_mapping_path=Path(index["assets"]["column_mapping"]["path"]),
+        )
+        predicates = truth.subgroup_predicates
+        for workflow in workflows:
+            run_id = f"{condition}-{workflow}"
+            run_dir = result_root / "runs" / run_id
+            run_dir.mkdir(parents=True)
+            run = {
+                "run_id": run_id,
+                "task_id": task_id,
+                "semantic_condition": condition,
+                "workflow_id": workflow,
+                "workflow_mode": workflow,
+                "replicate": 1,
+                "agent_calls": 4,
+                "status": "completed",
+            }
+            claim = {
+                "summary": "result",
+                "handoff": "handoff",
+                "claims": [
+                    {
+                        "exposure": truth.exposure,
+                        "outcome": truth.outcome,
+                        "direction": "positive",
+                        "subgroup": [
+                            {"variable": key, "operator": "eq", "value": value}
+                            for key, value in predicates.items()
+                        ],
+                        "effect_estimate": 4.9,
+                        "p_value": 0.001,
+                        "subgroup_n": 3266,
+                        "exposed_n": 1154,
+                        "comparator_n": 2112,
+                        "supported": True,
+                        "evidence": ["analysis.csv"],
+                    }
+                ],
+            }
+            stages = ["hypothesis_generation", "analysis", "critique", "synthesis"]
+            artifacts = [
+                _record(
+                    call,
+                    stage,
+                    (
+                        claim
+                        if stage == "synthesis"
+                        else {"summary": "none", "handoff": "none"}
+                    ),
+                )
+                for call, stage in enumerate(stages, start=1)
+            ]
+            if workflow == "deliberative":
+                for artifact in artifacts:
+                    artifact["stage_id"] += "_consensus"
+            (run_dir / "run.json").write_text(json.dumps(run), encoding="utf-8")
+            (run_dir / "artifacts.json").write_text(json.dumps(artifacts), encoding="utf-8")
+
+    out = tmp_path / "scored"
+    aggregate = score_experiment([result_root], out_dir=out)
+
+    assert aggregate["n_runs"] == 6
+    assert {
+        (row["semantic_condition"], row["workflow_id"]) for row in aggregate["by_cell"]
+    } == {
+        (condition, workflow)
+        for condition in ("named", "masked")
+        for workflow in workflows
+    }
+    assert all(row["n_runs"] == 1 for row in aggregate["by_cell"])
+    assert len((out / "cell_summary.csv").read_text(encoding="utf-8").splitlines()) == 7

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
@@ -14,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .experiment import ModelSpec, ResourceBudget
 
@@ -100,6 +101,11 @@ class AgentRequest(BaseModel):
     model_profile: str
     model_id: str
     stage_id: str
+    iteration_index: int = Field(default=1, ge=1, le=20)
+    max_iterations: int = Field(default=1, ge=1, le=20)
+    stage_index: int = Field(default=0, ge=0)
+    stage_position: int = Field(default=1, ge=1)
+    terminal: bool = False
     role: str
     agent_id: str
     session_id: str
@@ -108,6 +114,16 @@ class AgentRequest(BaseModel):
     scratch_dir: Path
     call_dir: Path
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_positions(self) -> AgentRequest:
+        if self.iteration_index > self.max_iterations:
+            raise ValueError("iteration_index may not exceed max_iterations.")
+        if self.stage_position != self.stage_index + 1:
+            raise ValueError("stage_position must equal stage_index + 1.")
+        if self.terminal and self.iteration_index != self.max_iterations:
+            raise ValueError("A terminal request must occur in the final iteration.")
+        return self
 
 
 class AgentResponse(BaseModel):
@@ -134,6 +150,28 @@ def _runtime_environment(model: ModelSpec) -> dict[str, str]:
     inherited = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")
     keys = {*inherited, *model.env_passthrough}
     return {key: value for key in keys if (value := os.environ.get(key)) is not None}
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
+def _persist_runtime_success(request: AgentRequest, response: AgentResponse) -> None:
+    """Leave an adoption marker before returning control to the orchestrator."""
+
+    _write_json_atomic(
+        request.call_dir / "runtime_success.json",
+        {
+            "schema_version": "1",
+            "request_id": request.request_id,
+            "prompt_sha256": hashlib.sha256(request.prompt.encode("utf-8")).hexdigest(),
+            "call_slot": request.metadata.get("call_slot"),
+            "response": response.model_dump(mode="json"),
+        },
+    )
 
 
 def _strip_json_fence(text: str) -> str:
@@ -322,15 +360,18 @@ class CliJsonRuntime:
         if isinstance(payload, dict) and "request_id" in payload and "artifact" in payload:
             response = AgentResponse.model_validate(payload)
             response.usage.duration_seconds = duration
+            _persist_runtime_success(request, response)
             return response
         artifact = AgentArtifact.model_validate(payload)
-        return AgentResponse(
+        response = AgentResponse(
             request_id=request.request_id,
             artifact=artifact,
             usage=AgentUsage(duration_seconds=duration),
             raw_text=output_path.read_text(encoding="utf-8"),
             runtime_metadata={"adapter": "cli-json", "command": command[0]},
         )
+        _persist_runtime_success(request, response)
+        return response
 
     def close(self) -> None:
         return
@@ -558,6 +599,11 @@ class StubRuntime:
             handoff=f"Stub handoff from {request.stage_id}.",
             evidence=[f"workspace={request.workspace.name}"],
             minority_report="" if "minority" not in request.prompt.lower() else "No minority view.",
+            final_answer=(
+                {"conclusion": "Stub synthesis.", "supported_claim_indices": []}
+                if "final_answer MUST be non-null" in request.prompt
+                else None
+            ),
         )
         request.call_dir.mkdir(parents=True, exist_ok=True)
         (request.call_dir / "response.json").write_text(

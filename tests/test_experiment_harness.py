@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
+import pytest
 import yaml
+from pydantic import ValidationError
 
 from onc_co_scientist.harness.experiment import (
     ClinicalBenchmarkSource,
     ExperimentSpec,
+    IterationPolicy,
     ModelSpec,
     ResourceBudget,
     SafeguardSpec,
@@ -15,6 +19,7 @@ from onc_co_scientist.harness.experiment import (
     WorkflowSpec,
     import_clinical_benchmark_tasks,
     load_experiment_spec,
+    required_agent_calls,
 )
 from onc_co_scientist.harness.orchestrator import (
     RunController,
@@ -27,6 +32,7 @@ from onc_co_scientist.harness.runtime import (
     AgentRequest,
     AgentResponse,
     AgentUsage,
+    CliJsonRuntime,
 )
 
 
@@ -157,9 +163,22 @@ class _SensitiveRuntime:
             artifact = AgentArtifact(
                 summary=f"RAW_PRIVATE_TRANSCRIPT_{site_id}",
                 handoff=f"SAFE_STRUCTURED_REPORT_{site_id}",
+                final_answer=(
+                    {"conclusion": "site synthesis", "supported_claim_indices": []}
+                    if "final_answer MUST be non-null" in request.prompt
+                    else None
+                ),
             )
         else:
-            artifact = AgentArtifact(summary="central synthesis", handoff="central synthesis")
+            artifact = AgentArtifact(
+                summary="central synthesis",
+                handoff="central synthesis",
+                final_answer=(
+                    {"conclusion": "central synthesis", "supported_claim_indices": []}
+                    if "final_answer MUST be non-null" in request.prompt
+                    else None
+                ),
+            )
         return AgentResponse(
             request_id=request.request_id,
             artifact=artifact,
@@ -181,6 +200,11 @@ class _RecordingRuntime:
             artifact=AgentArtifact(
                 summary=f"completed {request.stage_id}",
                 handoff=f"handoff {request.stage_id}",
+                final_answer=(
+                    {"conclusion": "synthesis", "supported_claim_indices": []}
+                    if "final_answer MUST be non-null" in request.prompt
+                    else None
+                ),
             ),
             usage=AgentUsage(input_tokens=1, output_tokens=1),
         )
@@ -441,10 +465,12 @@ def test_dry_run_redacts_private_evaluation_path(tmp_path: Path) -> None:
                 prompt="Analyze.",
                 public_workspace=public,
                 private_evaluation_path=private,
+                metadata={"never_expose": "PRIVATE_TARGET_DETAIL"},
             )
         ],
         models=[ModelSpec(id="stub", model_id="stub", adapter="stub")],
         workflows=[WorkflowSpec(id="sequential", mode="sequential")],
+        private_evaluator_assets={"mapping": private},
     )
 
     run_experiment(spec, dry_run=True)
@@ -452,3 +478,456 @@ def test_dry_run_redacts_private_evaluation_path(tmp_path: Path) -> None:
 
     assert str(private) not in resolved_text
     assert "private_evaluation_path" not in resolved_text
+    assert "private_evaluator_assets" not in resolved_text
+    assert "PRIVATE_TARGET_DETAIL" not in resolved_text
+
+
+def test_twenty_iteration_call_graph_order_sessions_and_final_contract(tmp_path: Path) -> None:
+    workflows = [
+        WorkflowSpec(id="persistent", mode="persistent"),
+        WorkflowSpec(id="sequential", mode="sequential"),
+        WorkflowSpec(
+            id="deliberative", mode="deliberative", agents_per_stage=2, deliberation_rounds=1
+        ),
+    ]
+    spec = _spec(tmp_path, workflows)
+    spec.iteration_policy = IterationPolicy(iterations=20, completion_mode="fixed")
+    spec.budget = ResourceBudget(max_agent_calls=240)
+
+    summary = run_experiment(spec)
+
+    assert summary["planned_agent_calls"] == 400
+    runs = {run["workflow_id"]: run for run in summary["runs"]}
+    assert {key: runs[key]["agent_calls"] for key in runs} == {
+        "persistent": 80,
+        "sequential": 80,
+        "deliberative": 240,
+    }
+    assert all(run["iterations_completed"] == 20 for run in runs.values())
+    assert all(run["terminal_iteration"] == 20 for run in runs.values())
+
+    for workflow_id, expected_sessions in {
+        "persistent": 1,
+        "sequential": 80,
+        "deliberative": 240,
+    }.items():
+        artifacts = json.loads(
+            (
+                tmp_path
+                / "out"
+                / "runs"
+                / runs[workflow_id]["run_id"]
+                / "artifacts.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert len({item["session_id"] for item in artifacts}) == expected_sessions
+        checkpoints = [
+            item
+            for item in artifacts
+            if item["position_kind"] in ({"chair"} if workflow_id == "deliberative" else {"linear"})
+        ]
+        assert [item["canonical_stage"] for item in checkpoints[:4]] == [
+            "hypothesis_generation",
+            "analysis",
+            "critique",
+            "synthesis",
+        ]
+        for item in artifacts:
+            if item["canonical_stage"] == "synthesis":
+                assert item["artifact"]["final_answer"] is not None
+            else:
+                assert item["artifact"]["final_answer"] is None
+
+
+def test_iteration_validation_and_exact_call_ceiling(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    task = TaskSpec(id="task", prompt="Analyze.", public_workspace=workspace)
+    model = ModelSpec(id="stub", model_id="stub", adapter="stub")
+    workflows = [
+        WorkflowSpec(id="persistent", mode="persistent"),
+        WorkflowSpec(id="sequential", mode="sequential"),
+        WorkflowSpec(id="deliberative", mode="deliberative", agents_per_stage=2),
+    ]
+    spec = ExperimentSpec(
+        experiment_id="call-ceilings",
+        tasks=[task],
+        models=[model],
+        workflows=workflows,
+        iteration_policy=IterationPolicy(iterations=20),
+        budget=ResourceBudget(max_agent_calls=240),
+    )
+    assert [required_agent_calls(spec, task, workflow) for workflow in workflows] == [80, 80, 240]
+
+    with pytest.raises(ValidationError, match="below the 240 calls required"):
+        ExperimentSpec(
+            experiment_id="too-small",
+            tasks=[task],
+            models=[model],
+            workflows=workflows,
+            iteration_policy=IterationPolicy(iterations=20),
+            budget=ResourceBudget(max_agent_calls=239),
+        )
+    with pytest.raises(ValidationError):
+        IterationPolicy(iterations=21)
+
+
+class _InterruptAfterRuntime(_RecordingRuntime):
+    def __init__(self, successful_calls: int) -> None:
+        super().__init__()
+        self.successful_calls = successful_calls
+
+    def run(self, request: AgentRequest, budget: ResourceBudget) -> AgentResponse:
+        if len(self.requests) >= self.successful_calls:
+            raise RuntimeError("deliberate interruption")
+        return super().run(request, budget)
+
+
+class _UniqueHandoffRuntime(_RecordingRuntime):
+    def run(self, request: AgentRequest, budget: ResourceBudget) -> AgentResponse:
+        self.requests.append(request)
+        handoff = (
+            f"HANDOFF::{request.iteration_index}::{request.stage_id}::"
+            f"{request.metadata['position_kind']}::{request.metadata.get('peer_index')}"
+        )
+        return AgentResponse(
+            request_id=request.request_id,
+            artifact=AgentArtifact(
+                summary=handoff,
+                handoff=handoff,
+                final_answer=(
+                    {"conclusion": handoff, "supported_claim_indices": []}
+                    if "final_answer MUST be non-null" in request.prompt
+                    else None
+                ),
+            ),
+            usage=AgentUsage(input_tokens=1, output_tokens=1),
+        )
+
+
+def _canonical_artifacts(path: Path) -> list[tuple[str, dict, dict]]:
+    artifacts = json.loads((path / "artifacts.json").read_text(encoding="utf-8"))
+    return [
+        (item["call_slot"], item["artifact"], item["usage"])
+        for item in artifacts
+    ]
+
+
+def test_cross_iteration_handoffs_match_each_workflow_contract(tmp_path: Path) -> None:
+    for workflow in (
+        WorkflowSpec(id="persistent", mode="persistent"),
+        WorkflowSpec(id="sequential", mode="sequential"),
+        WorkflowSpec(id="deliberative", mode="deliberative", agents_per_stage=2),
+    ):
+        case = tmp_path / workflow.id
+        task = TaskSpec(
+            id="task", prompt="Analyze.", public_workspace=_workspace(case)
+        )
+        model = ModelSpec(id="stub", model_id="stub", adapter="stub")
+        spec = ExperimentSpec(
+            experiment_id=f"handoff-{workflow.id}",
+            tasks=[task],
+            models=[model],
+            workflows=[workflow],
+            iteration_policy=IterationPolicy(iterations=2),
+            budget=ResourceBudget(max_agent_calls=24),
+        )
+        runtime = _UniqueHandoffRuntime()
+        RunController(
+            spec=spec,
+            plan=RunPlan(
+                run_id="run", task=task, workflow=workflow, model=model, replicate=1
+            ),
+            run_dir=case / "run",
+            runtime=runtime,
+            fingerprint=spec.fingerprint(),
+        ).execute()
+
+        if workflow.mode == "persistent":
+            assert len({request.session_id for request in runtime.requests}) == 1
+            assert all(
+                "AUTHORIZED WRITTEN HANDOFF" not in request.prompt
+                for request in runtime.requests
+            )
+        elif workflow.mode == "sequential":
+            handoffs = [
+                f"HANDOFF::{request.iteration_index}::{request.stage_id}::linear::None"
+                for request in runtime.requests
+            ]
+            assert "AUTHORIZED WRITTEN HANDOFF" not in runtime.requests[0].prompt
+            for index, request in enumerate(runtime.requests[1:], start=1):
+                assert handoffs[index - 1] in request.prompt
+                assert all(
+                    older not in request.prompt for older in handoffs[: max(0, index - 1)]
+                )
+        else:
+            prior_chair = ""
+            requests = runtime.requests
+            for offset in range(0, len(requests), 3):
+                peer_one, peer_two, chair = requests[offset : offset + 3]
+                peer_one_handoff = (
+                    f"HANDOFF::{peer_one.iteration_index}::{peer_one.stage_id}::peer::1"
+                )
+                peer_two_handoff = (
+                    f"HANDOFF::{peer_two.iteration_index}::{peer_two.stage_id}::peer::2"
+                )
+                if prior_chair:
+                    assert prior_chair in peer_one.prompt
+                    assert prior_chair in peer_two.prompt
+                    assert prior_chair in chair.prompt
+                assert peer_two_handoff not in peer_one.prompt
+                assert peer_one_handoff not in peer_two.prompt
+                assert peer_one_handoff in chair.prompt
+                assert peer_two_handoff in chair.prompt
+                prior_chair = (
+                    f"HANDOFF::{chair.iteration_index}::{chair.stage_id}::chair::None"
+                )
+
+
+@pytest.mark.parametrize(
+    ("workflow", "total_calls"),
+    [
+        (WorkflowSpec(id="persistent", mode="persistent"), 8),
+        (WorkflowSpec(id="sequential", mode="sequential"), 8),
+        (
+            WorkflowSpec(id="deliberative", mode="deliberative", agents_per_stage=2),
+            24,
+        ),
+    ],
+)
+def test_resume_after_every_call_position_matches_uninterrupted(
+    tmp_path: Path, workflow: WorkflowSpec, total_calls: int
+) -> None:
+    for completed_before_interrupt in range(1, total_calls):
+        case = tmp_path / f"{workflow.id}-{completed_before_interrupt}"
+        source = _workspace(case)
+        task = TaskSpec(id="task", prompt="Analyze.", public_workspace=source)
+        model = ModelSpec(id="stub", model_id="stub", adapter="stub")
+        spec = ExperimentSpec(
+            experiment_id=f"resume-{workflow.id}",
+            output_root=case / "out",
+            tasks=[task],
+            models=[model],
+            workflows=[workflow],
+            iteration_policy=IterationPolicy(iterations=2),
+            budget=ResourceBudget(max_agent_calls=total_calls),
+        )
+        plan = RunPlan(
+            run_id="run", task=task, workflow=workflow, model=model, replicate=1
+        )
+        interrupted_dir = case / "interrupted"
+        first_runtime = _InterruptAfterRuntime(completed_before_interrupt)
+        first = RunController(
+            spec=spec,
+            plan=plan,
+            run_dir=interrupted_dir,
+            runtime=first_runtime,
+            fingerprint=spec.fingerprint(),
+        )
+        with pytest.raises(RuntimeError, match="deliberate interruption"):
+            first.execute()
+        resumed_runtime = _RecordingRuntime()
+        resumed = RunController(
+            spec=spec,
+            plan=plan,
+            run_dir=interrupted_dir,
+            runtime=resumed_runtime,
+            fingerprint=spec.fingerprint(),
+            resume=True,
+        )
+        result = resumed.execute()
+        assert result["agent_calls"] == total_calls
+        assert len(resumed_runtime.requests) == total_calls - completed_before_interrupt
+        if workflow.mode == "persistent":
+            assert len(
+                {
+                    request.session_id
+                    for request in [*first_runtime.requests, *resumed_runtime.requests]
+                }
+            ) == 1
+        assert len({item[0] for item in _canonical_artifacts(interrupted_dir)}) == total_calls
+
+        reference_dir = case / "reference"
+        reference = RunController(
+            spec=spec,
+            plan=plan,
+            run_dir=reference_dir,
+            runtime=_RecordingRuntime(),
+            fingerprint=spec.fingerprint(),
+        )
+        reference.execute()
+        assert _canonical_artifacts(interrupted_dir) == _canonical_artifacts(reference_dir)
+
+
+def test_resume_rejects_changed_fingerprint_or_substrate(tmp_path: Path) -> None:
+    workflow = WorkflowSpec(id="sequential", mode="sequential")
+    spec = _spec(tmp_path, [workflow])
+    plan = RunPlan(
+        run_id="run",
+        task=spec.tasks[0],
+        workflow=workflow,
+        model=spec.models[0],
+        replicate=1,
+    )
+    run_dir = tmp_path / "partial"
+    controller = RunController(
+        spec=spec,
+        plan=plan,
+        run_dir=run_dir,
+        runtime=_InterruptAfterRuntime(1),
+        fingerprint=spec.fingerprint(),
+    )
+    with pytest.raises(RuntimeError, match="deliberate interruption"):
+        controller.execute()
+
+    with pytest.raises(RuntimeError, match="spec_fingerprint changed"):
+        RunController(
+            spec=spec,
+            plan=plan,
+            run_dir=run_dir,
+            runtime=_RecordingRuntime(),
+            fingerprint="changed",
+            resume=True,
+        )
+    (spec.tasks[0].public_workspace / "public.txt").write_text(
+        "changed evidence\n", encoding="utf-8"
+    )
+    with pytest.raises(RuntimeError, match="substrate_hashes changed"):
+        RunController(
+            spec=spec,
+            plan=plan,
+            run_dir=run_dir,
+            runtime=_RecordingRuntime(),
+            fingerprint=spec.fingerprint(),
+            resume=True,
+        )
+
+
+def test_resume_adopts_runtime_success_before_controller_checkpoint(tmp_path: Path) -> None:
+    adapter = tmp_path / "adapter.py"
+    adapter.write_text(
+        "\n".join(
+            [
+                "import argparse, json",
+                "from pathlib import Path",
+                "p=argparse.ArgumentParser()",
+                "p.add_argument('--request-file', type=Path, required=True)",
+                "p.add_argument('--output', type=Path, required=True)",
+                "a=p.parse_args()",
+                "r=json.loads(a.request_file.read_text())",
+                "final={'conclusion':'done','supported_claim_indices':[]} if "
+                "'final_answer MUST be non-null' in r['prompt'] else None",
+                "a.output.write_text(json.dumps({'summary':'done','handoff':'next',"
+                "'final_answer':final}))",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    workspace = _workspace(tmp_path, "public")
+    task = TaskSpec(id="task", prompt="Analyze.", public_workspace=workspace)
+    model = ModelSpec(
+        id="cli", model_id="test", adapter="cli-json", command=[sys.executable, str(adapter)]
+    )
+    workflow = WorkflowSpec(id="sequential", mode="sequential")
+    spec = ExperimentSpec(
+        experiment_id="adopt-success",
+        tasks=[task],
+        models=[model],
+        workflows=[workflow],
+        budget=ResourceBudget(max_agent_calls=4, max_runtime_seconds_per_call=30),
+    )
+    plan = RunPlan(run_id="run", task=task, workflow=workflow, model=model, replicate=1)
+
+    class CrashAfterSuccess:
+        def __init__(self) -> None:
+            self.inner = CliJsonRuntime(model)
+
+        def run(self, request: AgentRequest, budget: ResourceBudget) -> AgentResponse:
+            self.inner.run(request, budget)
+            raise RuntimeError("process died after runtime success")
+
+        def close(self) -> None:
+            return
+
+    run_dir = tmp_path / "run"
+    first = RunController(
+        spec=spec,
+        plan=plan,
+        run_dir=run_dir,
+        runtime=CrashAfterSuccess(),
+        fingerprint=spec.fingerprint(),
+    )
+    with pytest.raises(RuntimeError, match="process died after runtime success"):
+        first.execute()
+    assert (run_dir / "calls" / "call_0001" / "runtime_success.json").is_file()
+
+    class CountingRuntime:
+        def __init__(self) -> None:
+            self.inner = CliJsonRuntime(model)
+            self.calls = 0
+
+        def run(self, request: AgentRequest, budget: ResourceBudget) -> AgentResponse:
+            self.calls += 1
+            return self.inner.run(request, budget)
+
+        def close(self) -> None:
+            return
+
+    runtime = CountingRuntime()
+    resumed = RunController(
+        spec=spec,
+        plan=plan,
+        run_dir=run_dir,
+        runtime=runtime,
+        fingerprint=spec.fingerprint(),
+        resume=True,
+    )
+    result = resumed.execute()
+
+    assert result["agent_calls"] == 4
+    assert result["call_attempts"] == 4
+    assert runtime.calls == 3
+    assert len(_canonical_artifacts(run_dir)) == 4
+
+
+def test_seeded_schedule_is_consumed_and_validated(tmp_path: Path) -> None:
+    workspace = _workspace(tmp_path)
+    tasks = [
+        TaskSpec(
+            id="named",
+            semantic_condition="named",
+            prompt="Analyze.",
+            public_workspace=workspace,
+        ),
+        TaskSpec(
+            id="masked",
+            semantic_condition="masked",
+            prompt="Analyze.",
+            public_workspace=workspace,
+        ),
+    ]
+    spec = ExperimentSpec(
+        experiment_id="schedule-test",
+        output_root=tmp_path / "scheduled",
+        tasks=tasks,
+        models=[ModelSpec(id="stub", model_id="stub", adapter="stub")],
+        workflows=[
+            WorkflowSpec(id="persistent", mode="persistent"),
+            WorkflowSpec(id="sequential", mode="sequential"),
+            WorkflowSpec(id="deliberative", mode="deliberative", agents_per_stage=2),
+        ],
+        replicates=2,
+        schedule_seed=123,
+    )
+    first = run_experiment(spec, dry_run=True)
+    schedule_path = Path(first["schedule_path"])
+    frozen = schedule_path.read_text(encoding="utf-8")
+    payload = json.loads(frozen)
+    assert [len(block["run_ids"]) for block in payload["blocks"]] == [6, 6]
+    assert run_experiment(spec, dry_run=True)["n_runs"] == 12
+    assert schedule_path.read_text(encoding="utf-8") == frozen
+
+    payload["run_ids"][0] = "not-a-real-run"
+    schedule_path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="run IDs do not match"):
+        run_experiment(spec, dry_run=True)

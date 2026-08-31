@@ -1,133 +1,111 @@
-# NSCLC coordination-architecture pilot
+# NSCLC semantic masking × workflow grid protocol
 
-## Purpose
+## Status and frozen objective
 
-This experiment tests whether the repository's persistent, sequential, and
-deliberative co-scientist workflows can independently analyze the same clean
-synthetic NSCLC cohort and recover a deliberately buried treatment-effect
-heterogeneity signal. It is a functionality and exploratory native-resource
-pilot, not a resource-matched causal comparison of coordination policies.
+This prospective experiment tests a 2 × 3 factorial grid on the synthetic
+50,000-row NSCLC cohort. The semantic factor is `named` versus `masked`; the
+coordination factor is `persistent`, `sequential`, or `deliberative`. Five
+replicates are planned in each of the six cells. Every healthy run completes
+exactly 20 ordered iterations of:
 
-## Locked substrate
+`hypothesis_generation → analysis → critique → synthesis`.
 
-- Dataset: named `ds001_nsclc`, 50,000 rows.
-- Public files: `dataset.parquet` and `dataset_description.md` only.
-- Public Parquet SHA-256:
-  `c93065845b99676904f8ec902b0c1c24fb0ab98579e084c706bcdf804d025fbb`.
-- Private manifest SHA-256:
-  `a844619fceb456a5ef4d9b5ba3dff5e7f07363eb83554226601f845ed22ce064`.
-- Model profile: `gpt-5.6-luna`, low reasoning, Codex CLI
-  `0.151.0-alpha.7.1`.
-- Codex executable SHA-256:
-  `a5976fd714dc0801a6f40e0e2b3051f64f1e0468f6c0f279b7d2a7afb7623f43`.
+The repository implementation baseline is commit
+`4a8fd25f104869d9209ec010bac504b8a91a4964`. The execution-plan documentation
+commit and the final implementation commit are recorded separately in the
+machine manifest. The model is `gpt-5.6-luna` at low reasoning effort. The
+outer per-call timeout is 3,600 seconds and the Codex adapter timeout is 3,580
+seconds.
 
-The private manifest is used only by the deterministic scorer and is not
-included in agent requests, copied workspaces, or the resolved public
-experiment specification.
+## Conditions and scientific task
 
-## Workflow arms
+The named task exposes the four candidate indicators
+`treatment_pembrolizumab`, `treatment_sotorasib`, `treatment_olaparib`, and
+`treatment_osimertinib`. The masked task exposes the corresponding candidates
+only as `feature_012`, `feature_018`, `feature_020`, and `feature_027`. Both
+conditions identify `pfs_months` as the outcome and all remaining features as
+possible modifiers or covariates. Agents search systematically for one- and
+multi-feature treatment-effect heterogeneity without being told the number of
+signals, target exposure, or target subgroup.
 
-Each run has four scientific stages: hypothesis generation, analysis,
-critique, and synthesis.
+The masked agent is never given a clinical mapping. Recovery is evaluated in
+the masked manifest's opaque namespace; evaluator-only mappings may be used for
+clearly labeled cross-condition display after scoring.
 
-1. **Persistent:** one resumable Codex session performs all four stages.
-2. **Sequential:** each stage uses a fresh Codex session and receives only the
-   preceding structured handoff.
-3. **Deliberative:** two independent peers work at each stage; a fresh chair
-   synthesizes their structured artifacts. One peer round is used.
+## Workflow semantics and resources
 
-With the implemented native architecture, these arms consume 4, 4, and 12
-model calls per run, respectively. Realized calls, tokens, tool calls, and
-duration must therefore be reported with scientific outcomes. Recovery per
-1,000 output tokens is an efficiency endpoint. A common resource ceiling is
-not described as resource matching.
+- Persistent uses one Codex session and one copied workspace for all 80 calls.
+- Sequential uses one fresh session/workspace for every iteration-stage pair.
+  Each receives only the immediately preceding authoritative handoff; the next
+  iteration's hypothesis stage receives the previous synthesis.
+- Deliberative uses two fresh peers and one fresh chair for every
+  iteration-stage pair. Peers receive only the prior authoritative handoff;
+  the chair receives that handoff plus both peer artifacts. Chairs are the
+  scientific checkpoints.
 
-For copied workspaces, a persistent session keeps one workspace. Every fresh
-sequential session and every deliberative peer or chair receives a separate
-clean snapshot and separate writable scratch root. A custom Codex permission
-profile grants model tools read/write access only to that session's public
-workspace and scratch root, read-only access to the pinned Python executable
-and libraries, and minimal operating-system runtime access. Model subprocesses
-inherit no host environment variables and receive only a fixed executable path,
-Python package path, and session-local temporary directory. Network access,
-login shells, global
-temporary directories, the source repository, sibling workspaces, the grant
-draft, and the private manifest are denied by the operating-system sandbox.
+Persistent and sequential runs have 80 planned calls; deliberative runs have
+240. Across 30 runs the maximum healthy call graph contains 4,000 model calls,
+2,400 logical stage checkpoints, and 600 synthesis checkpoints. This is a
+native-resource comparison, not a resource-matched comparison. Calls, input
+and output tokens, tool calls, duration, timeout status, and efficiency
+endpoints are reported.
 
-## Execution sequence
+## Isolation and reproducibility
 
-1. Run all repository tests and a no-model stub matrix.
-2. Run one live replicate of each workflow (20 total model calls).
-3. Confirm the 4/4/12 call graph, true session resumption, data access,
-   structured-output validity, usage accounting, and deterministic scoring.
-4. Only after the smoke test passes, run eight replicates per workflow (24
-   cells; 160 total model calls) in replicate-interleaved order.
+Tracked source hashes, Parquet shape, and exact row/value/dtype parity after
+evaluator-side inverse rename must pass before execution. Each agent workspace
+contains only `dataset.parquet` and its matched `dataset_description.md`.
+Private manifests, the column mapping, repository parents, sibling
+workspaces/runs, network access, and grant material are denied to agents. A
+fresh nonpersistent session receives a clean copied workspace and scratch
+root. No private path or task target is included in model requests, prompts, or
+the resolved public specification.
 
-The eight-replicate run is an exploratory preliminary-data pilot. Its sample
-size is operational, not power-derived; report counts and run-level intervals,
-not confirmatory p-values for arm comparisons.
+The run planner freezes a seeded replicate-block schedule before any model
+call. Within each replicate block, the six condition-workflow cells are
+shuffled with seed `20260831`. Dry run, execution, and resume consume the same
+`schedule.json` and reject a changed fingerprint or run set. Atomic
+`run_state.json` checkpoints are written after every successful call and bind
+the state to the spec fingerprint and public-substrate hashes.
 
-The adapter timeout is set to 1,180 seconds, just below the harness's locked
-1,200-second per-call ceiling, so timeout failures retain their audit artifacts
-instead of being terminated first by the outer controller.
+## Preregistered endpoints
 
-## Locked target and scoring
+Primary endpoint:
 
-The private target is a beneficial association between sotorasib and
-progression-free survival in the conjunction of:
+- Evidence-supported exact recovery at a synthesis checkpoint on or before
+  iteration 20.
 
-- `kras_g12c = 1`
-- `alk_fusion = 0`
-- `brca2_mutation = 0`
-- `sex_female = 0`
+Key secondary endpoint:
 
-The planted effect is +5.0 months. In the locked seed-0 data, the subgroup has
-3,266 patients (1,154 exposed and 2,112 comparators) and the unadjusted observed
-mean difference is approximately +4.985 months. These values are never placed
-in an agent prompt.
+- Evidence-supported exact recovery retained in the iteration-20 terminal
+  synthesis.
 
-Semantic recovery levels are mutually exclusive:
+Other prespecified endpoints are first supported exact recovery iteration
+(right-censored at 20), first recovery call, near/component recovery, critique
+rescue, later loss, persistence to terminal synthesis, unsupported
+convergence, malformed output, technical failure, timeout, recovery per model
+call, recovery per 1,000 output tokens, and recovery per wall-clock hour.
 
-- **Exact:** correct exposure, outcome, beneficial direction, and all four
-  noncontradictory predicates.
-- **Near:** correct exposure, outcome, and direction with exactly three of the
-  four predicates and no contradiction.
-- **Component:** correct exposure and outcome with one or two correct
-  predicates and no contradiction.
-- **None/contradictory:** anything else.
+Exact recovery requires the condition-native exposure, outcome, planted
+direction, and all subgroup predicates without contradiction. Near recovery
+omits exactly one predicate; component recovery includes one or more correct
+predicates. Supported recovery additionally requires a directionally
+compatible quantitative effect, a p-value or uncertainty interval, and
+subgroup, exposed, and comparator sample sizes linked to evidence.
 
-Evidence-supported exact or near recovery additionally requires a linked
-quantitative claim with a positive effect estimate, a p-value or confidence
-interval, and a reported subgroup sample size. Free-text assertion alone does
-not receive supported-recovery credit.
+## Analysis and interpretation
 
-## Endpoints
+Every logical checkpoint is scored by iteration. Deliberative peer artifacts
+are retained as diagnostics but are not substituted for chair checkpoints.
+Terminal results always use the final synthesis; a historically best analysis
+is never presented as terminal.
 
-Primary functionality endpoint:
+Results are summarized separately for all six `semantic_condition × workflow`
+cells with counts, rates, descriptive Wilson intervals, trajectories, resource
+use, and replicate-paired descriptive contrasts. With five replicates per
+cell, no confirmatory workflow-superiority p-values are reported. Technical
+failures and truncated runs remain in denominators and reports.
 
-- Evidence-supported exact recovery in the final synthesis artifact.
-
-Exploratory Aim 2 endpoints:
-
-- Semantic and evidence-supported recovery at each stage.
-- Survival of an analysis-stage supported near/exact finding into synthesis.
-- Critique rescue: unsupported/none before critique becoming supported
-  near/exact after critique or by synthesis.
-- Loss: supported near/exact at analysis but not at synthesis.
-- First stage/call of supported near/exact recovery, with nonrecovery treated
-  as censored.
-- Final recovery per 1,000 output tokens and per model call.
-- Unsupported convergence and malformed-output rates.
-
-For deliberative runs, stage-level checkpoints are the chair artifacts named
-`<stage>_consensus`; peer-level results are retained as secondary diagnostics.
-
-## Interpretation constraints
-
-The named dataset makes feature interpretation available to agents and tests
-clinical-analysis behavior, not blinded feature discovery. The synthetic PFS
-outcome is an observed continuous endpoint rather than a censored survival
-record. Results may show that the machinery runs and generate preliminary
-hypotheses about coordination, but cannot establish superiority of one
-architecture without a prospectively enforced resource-matched design and a
-larger task panel.
+One-iteration live smoke runs are stored under a distinct `smoke` root and are
+excluded from the main analysis. Scientific results are not inspected to
+change prompts, schedules, iteration count, retry policy, or concurrency.

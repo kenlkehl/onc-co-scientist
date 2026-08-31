@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 AdapterKind = Literal["cli-json", "pi-rpc", "stub"]
 WorkflowMode = Literal["persistent", "sequential", "deliberative"]
 WorkspaceStrategy = Literal["reference", "copy"]
+CompletionMode = Literal["fixed"]
 
 DEFAULT_PI_SYSTEM_PROMPT = (
     "You are a scientific analysis agent participating in a controlled experiment. "
@@ -37,6 +38,15 @@ class ResourceBudget(BaseModel):
     max_tool_calls: int | None = Field(default=None, ge=0)
     max_cost_usd: float | None = Field(default=None, ge=0)
     max_runtime_seconds_per_call: int = Field(default=900, ge=1)
+
+
+class IterationPolicy(BaseModel):
+    """Ordered scientific-cycle policy for every planned run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    iterations: int = Field(default=1, ge=1, le=20)
+    completion_mode: CompletionMode = "fixed"
 
 
 class StageSpec(BaseModel):
@@ -177,6 +187,11 @@ class TaskSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str = Field(min_length=1)
+    semantic_condition: str = Field(
+        default="unspecified",
+        min_length=1,
+        description="Explicit experimental condition; never inferred from a filename.",
+    )
     prompt: str = Field(min_length=1)
     public_workspace: Path
     site_workspaces: dict[str, Path] = Field(default_factory=dict)
@@ -215,8 +230,14 @@ class ExperimentSpec(BaseModel):
     models: list[ModelSpec] = Field(min_length=1)
     workflows: list[WorkflowSpec] = Field(min_length=1)
     stages: list[StageSpec] = Field(default_factory=default_stages, min_length=1)
+    iteration_policy: IterationPolicy = Field(default_factory=IterationPolicy)
     replicates: int = Field(default=1, ge=1)
     max_parallel: int = Field(default=1, ge=1)
+    schedule_seed: int = 20260831
+    private_evaluator_assets: dict[str, Path] = Field(
+        default_factory=dict,
+        description="Evaluator-only files. These are excluded from all public resolved specs.",
+    )
     budget: ResourceBudget = Field(default_factory=ResourceBudget)
 
     @model_validator(mode="after")
@@ -224,12 +245,23 @@ class ExperimentSpec(BaseModel):
         if not self.tasks and self.clinical_benchmark is None:
             raise ValueError("Provide at least one task or a clinical_benchmark source.")
         for label, values in (
+            ("task", [item.id for item in self.tasks]),
             ("model", [item.id for item in self.models]),
             ("workflow", [item.id for item in self.workflows]),
             ("stage", [item.id for item in self.stages]),
         ):
             if len(values) != len(set(values)):
                 raise ValueError(f"Duplicate {label} IDs are not allowed.")
+        for task in self.tasks:
+            for workflow in self.workflows:
+                required = required_agent_calls(self, task, workflow)
+                if self.budget.max_agent_calls < required:
+                    raise ValueError(
+                        f"max_agent_calls={self.budget.max_agent_calls} is below the "
+                        f"{required} calls required by task {task.id!r}, workflow "
+                        f"{workflow.id!r}, {len(self.stages)} stages, and "
+                        f"{self.iteration_policy.iterations} iteration(s)."
+                    )
         return self
 
     def fingerprint(self) -> str:
@@ -263,7 +295,32 @@ def _resolve_paths(spec: ExperimentSpec, config_dir: Path) -> ExperimentSpec:
         source.cohort_data_root = (
             _resolve_path(source.cohort_data_root, config_dir) or source.cohort_data_root
         )
+    spec.private_evaluator_assets = {
+        label: _resolve_path(path, config_dir) or path
+        for label, path in spec.private_evaluator_assets.items()
+    }
     return spec
+
+
+def required_agent_calls(
+    spec: ExperimentSpec,
+    task: TaskSpec,
+    workflow: WorkflowSpec,
+) -> int:
+    """Return the exact healthy-run call count implied by a matrix cell."""
+
+    calls_per_stage = 1
+    if workflow.mode == "deliberative":
+        calls_per_stage = workflow.agents_per_stage * workflow.deliberation_rounds + 1
+    scientific_calls = (
+        spec.iteration_policy.iterations * len(spec.stages) * calls_per_stage
+    )
+    if workflow.federated:
+        scientific_calls *= len(task.site_workspaces)
+        scientific_calls += 1  # one evaluator-blind central synthesis
+    if workflow.safeguards.independent_rerun:
+        scientific_calls += 1
+    return scientific_calls
 
 
 def import_clinical_benchmark_tasks(source: ClinicalBenchmarkSource) -> list[TaskSpec]:

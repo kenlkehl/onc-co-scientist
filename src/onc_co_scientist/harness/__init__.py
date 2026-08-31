@@ -9,12 +9,14 @@ workflows without coupling the benchmark to one model provider.
 
 from .experiment import (
     ExperimentSpec,
+    IterationPolicy,
     ModelSpec,
     ResourceBudget,
     StageSpec,
     TaskSpec,
     WorkflowSpec,
     load_experiment_spec,
+    required_agent_calls,
 )
 from .orchestrator import build_run_plans, run_experiment
 from .runtime import (
@@ -42,6 +44,7 @@ __all__ = [
     "ExperimentSpec",
     "HypothesisRecord",
     "IterationRecord",
+    "IterationPolicy",
     "ModelSpec",
     "ResourceBudget",
     "ScientificClaim",
@@ -55,4 +58,5 @@ __all__ = [
     "build_run_plans",
     "load_experiment_spec",
     "run_experiment",
+    "required_agent_calls",
 ]

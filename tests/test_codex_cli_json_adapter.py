@@ -168,7 +168,9 @@ def test_codex_adapter_starts_then_resumes_and_accounts_usage(tmp_path: Path, mo
             env_passthrough=["FAKE_CODEX_LOG"],
         )
     )
-    budget = ResourceBudget(max_runtime_seconds_per_call=30)
+    # Python startup can be slow on the shared execution filesystem; this is
+    # only an outer test-process guard, not the experiment's locked timeout.
+    budget = ResourceBudget(max_runtime_seconds_per_call=60)
 
     first_prompt = "FIRST_SECRET_PROMPT"
     first = runtime.run(_request(tmp_path, index=1, prompt=first_prompt), budget)
