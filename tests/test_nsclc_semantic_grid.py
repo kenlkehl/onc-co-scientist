@@ -4,11 +4,13 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 EXPERIMENT = Path(__file__).resolve().parents[1] / "experiments" / "nsclc_coordination"
 sys.path.insert(0, str(EXPERIMENT))
 
+import freeze_provenance as freeze_module  # noqa: E402
 from prepare_experiment import (  # noqa: E402
     EXPECTED_HASHES,
     EXPECTED_SHAPE,
@@ -72,3 +74,67 @@ def test_tracked_grid_template_locks_calls_timeouts_and_parallelism() -> None:
     assert args[args.index("--timeout-seconds") + 1] == "3580"
     assert template["models"][0]["model_id"] == "gpt-5.6-luna"
     assert template["models"][0]["reasoning_effort"] == "low"
+
+
+def test_provenance_freeze_is_hash_locked_and_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "results"
+    output.mkdir()
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "experiment_id": "freeze-test",
+                "output_root": str(output),
+                "schedule_seed": 7,
+            }
+        ),
+        encoding="utf-8",
+    )
+    machine = tmp_path / "machine.yaml"
+    machine.write_text(
+        yaml.safe_dump({"git": {"clean": True, "commit": "abc"}}), encoding="utf-8"
+    )
+    preparation = tmp_path / "preparation.json"
+    preparation.write_text("{}\n", encoding="utf-8")
+    for name, payload in {
+        "schedule.json": {"spec_fingerprint": "fingerprint"},
+        "plan.json": [],
+        "resolved_spec.json": {},
+        "private_evaluation_index.json": {},
+    }.items():
+        (output / name).write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(freeze_module, "_git_status", lambda repo: "")
+    monkeypatch.setattr(freeze_module, "_git_commit", lambda repo: "abc")
+
+    first = freeze_module.freeze(
+        repo=tmp_path,
+        config=config,
+        output_root=output,
+        machine_manifest=machine,
+        preparation_manifest=preparation,
+    )
+    first_payload = first.read_text(encoding="utf-8")
+    second = freeze_module.freeze(
+        repo=tmp_path,
+        config=config,
+        output_root=output,
+        machine_manifest=machine,
+        preparation_manifest=preparation,
+    )
+
+    assert second == first
+    assert second.read_text(encoding="utf-8") == first_payload
+    assert (output / "provenance" / "scorer.py").is_file()
+    (output / "schedule.json").write_text(
+        json.dumps({"spec_fingerprint": "changed"}), encoding="utf-8"
+    )
+    with pytest.raises(RuntimeError, match="Frozen provenance differs"):
+        freeze_module.freeze(
+            repo=tmp_path,
+            config=config,
+            output_root=output,
+            machine_manifest=machine,
+            preparation_manifest=preparation,
+        )
