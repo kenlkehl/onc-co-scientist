@@ -11,6 +11,7 @@ EXPERIMENT = Path(__file__).resolve().parents[1] / "experiments" / "nsclc_coordi
 sys.path.insert(0, str(EXPERIMENT))
 
 import freeze_provenance as freeze_module  # noqa: E402
+import prepare_experiment as prepare_module  # noqa: E402
 from prepare_experiment import (  # noqa: E402
     EXPECTED_HASHES,
     EXPECTED_SHAPE,
@@ -19,6 +20,23 @@ from prepare_experiment import (  # noqa: E402
     _sha256,
     _source_paths,
 )
+
+
+def test_active_python_preserves_virtualenv_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    venv_python = tmp_path / ".venv" / "bin" / "python"
+    base_python = tmp_path / "base" / "bin" / "python3.13"
+    base_python.parent.mkdir(parents=True)
+    base_python.touch()
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(base_python)
+    monkeypatch.setattr(prepare_module.sys, "executable", str(venv_python))
+
+    selected = prepare_module._active_python_executable()
+
+    assert selected == venv_python
+    assert selected.resolve() == base_python
 
 
 def test_pinned_nsclc_parity_and_public_gold_isolation(tmp_path: Path) -> None:

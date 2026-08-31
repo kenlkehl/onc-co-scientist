@@ -195,6 +195,20 @@ def _write_yaml(path: Path, payload: Any) -> None:
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
+def _active_python_executable() -> Path:
+    """Return the invoked Python path without dereferencing a virtualenv shim.
+
+    Resolving ``sys.executable`` crosses the virtualenv symlink and silently
+    drops its site-packages when the adapter is launched from an isolated run
+    workspace.  An absolute, non-resolved path preserves the active environment.
+    """
+
+    executable = Path(sys.executable).expanduser().absolute()
+    if not executable.is_file():
+        raise ValueError(f"Active Python executable does not exist: {executable}")
+    return executable
+
+
 def _machine_manifest(
     *,
     repo: Path,
@@ -226,7 +240,7 @@ def _machine_manifest(
             "operating_system": platform.platform(),
             "architecture": platform.machine(),
             "python": sys.version,
-            "python_executable": str(Path(sys.executable).resolve()),
+            "python_executable": str(_active_python_executable()),
             "packages": dict(sorted(packages.items(), key=lambda item: item[0].lower())),
         },
         "codex": {
@@ -262,7 +276,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     if codex_raw is None:
         raise ValueError(f"Codex executable not found: {args.codex}")
     codex = Path(codex_raw).resolve(strict=True)
-    python = Path(sys.executable).resolve(strict=True)
+    python = _active_python_executable()
     adapter = (repo / "scripts" / "codex_cli_json_adapter.py").resolve(strict=True)
     template = yaml.safe_load(args.template.read_text(encoding="utf-8"))
     replacements = {
