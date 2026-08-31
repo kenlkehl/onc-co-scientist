@@ -13,6 +13,7 @@ from onc_co_scientist.harness.experiment import (
 from onc_co_scientist.harness.runtime import AgentRequest, CliJsonRuntime
 from scripts.codex_cli_json_adapter import (
     ARTIFACT_SCHEMA,
+    _codex_runtime_root,
     extract_codex_thread_id,
     parse_codex_events,
 )
@@ -283,7 +284,19 @@ def test_codex_adapter_adds_only_explicit_read_roots(tmp_path: Path, monkeypatch
     argv = json.loads(invocation_log.read_text().splitlines()[0])["argv"]
     profile = next(value for value in argv if value.startswith("permissions.nsclc_eval="))
     assert f'{json.dumps(str(read_root.resolve()))}="read"' in profile
+    assert f'{json.dumps(str(fake_codex.parent.resolve()))}="read"' in profile
     assert '"/"="read"' not in profile
+    assert ".codex/auth.json" not in profile
+
+
+def test_codex_runtime_root_selects_package_not_user_state(tmp_path: Path) -> None:
+    package = tmp_path / ".local" / "lib" / "node_modules" / "@openai" / "codex"
+    launcher = package / "bin" / "codex.js"
+    launcher.parent.mkdir(parents=True)
+    launcher.touch()
+
+    assert _codex_runtime_root(str(launcher)) == package.resolve()
+    assert _codex_runtime_root(str(launcher)) != tmp_path / ".codex"
 
 
 def test_codex_adapter_configures_isolated_python_runtime(tmp_path: Path, monkeypatch) -> None:

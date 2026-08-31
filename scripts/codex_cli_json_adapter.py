@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -411,6 +412,21 @@ def _analysis_python_runtime(source: Path) -> tuple[Path, Path, Path]:
     return executable, python_home, site_packages
 
 
+def _codex_runtime_root(source: str) -> Path:
+    """Return the non-secret installation root needed by Codex's sandbox helper."""
+
+    candidate = Path(source).expanduser()
+    if not candidate.is_absolute():
+        discovered = shutil.which(source)
+        if discovered is None:
+            raise ValueError(f"Codex executable not found: {source}")
+        candidate = Path(discovered)
+    executable = candidate.absolute().resolve(strict=True)
+    if executable.name == "codex.js" and executable.parent.name == "bin":
+        return executable.parent.parent
+    return executable.parent
+
+
 def _codex_command(
     *,
     codex: str,
@@ -517,6 +533,10 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
     scratch_dir = Path(_required_string(request, "scratch_dir")).resolve()
     scratch_dir.mkdir(parents=True, exist_ok=True)
     read_roots = [path.resolve(strict=True) for path in args.read_root]
+    # Codex launches its packaged native binary again inside bubblewrap when a
+    # shell tool runs.  The user auth/config directory remains denied; only the
+    # immutable installation tree is exposed to the model sandbox.
+    read_roots.append(_codex_runtime_root(args.codex))
     python_executable: Path | None = None
     python_home: Path | None = None
     python_site_packages: Path | None = None
