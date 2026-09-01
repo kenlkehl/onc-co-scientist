@@ -2,10 +2,13 @@
 
 ## Status and frozen objective
 
-This is a new prospective experiment replacing—but never resuming or pooling
-with—the stopped Luna-low run. The predecessor was stopped because technical
-timeouts and malformed synthesis artifacts caused excessive attrition. Its
-partial artifacts and score remain under the original result root.
+This is a new prospective v2 experiment replacing—but never resuming or pooling
+with—the stopped Luna-low run or the failed Luna-medium v1 technical smoke. The
+low predecessor was stopped because technical timeouts and malformed synthesis
+artifacts caused excessive attrition. The v1 medium main experiment never
+launched: its live smoke reached synthesis and then the API rejected the
+model-facing schema because `uniqueItems` is outside the supported Structured
+Outputs subset. Both prior roots remain immutable.
 
 The replacement tests the same 2 × 3 factorial grid on the synthetic
 50,000-row NSCLC cohort. The semantic factor is `named` versus `masked`; the
@@ -27,7 +30,9 @@ produce a final answer. The adapter rejects a reasoning mismatch before model
 execution. It supplies a closed, stage-specific JSON schema to Codex: synthesis
 requires a non-empty structured final-answer object; every other stage requires
 JSON null. The adapter validates that contract again after generation and saves
-the schema hash and effective model settings in the per-call audit.
+the schema hash and effective model settings in the per-call audit. Duplicate
+supported-claim indices are rejected after generation rather than expressed
+with the unsupported model-facing `uniqueItems` keyword.
 
 ## Conditions and scientific task
 
@@ -118,6 +123,6 @@ use, and replicate-paired descriptive contrasts. With five replicates per cell,
 no confirmatory workflow-superiority p-values are reported. Technical failures
 and truncated runs remain in denominators and reports.
 
-One-iteration live smoke runs are stored under a distinct medium-smoke root and
+One-iteration live smoke runs are stored under a distinct medium-v2-smoke root and
 are excluded from the main analysis. Scientific results are not inspected to
 change prompts, schedules, iteration count, retry policy, or concurrency.

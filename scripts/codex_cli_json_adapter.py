@@ -36,7 +36,6 @@ SYNTHESIS_FINAL_ANSWER_SCHEMA: dict[str, Any] = {
         "supported_claim_indices": {
             "type": "array",
             "items": {"type": "integer", "minimum": 0},
-            "uniqueItems": True,
         },
     },
     "required": ["conclusion", "supported_claim_indices"],

@@ -12,11 +12,12 @@ from onc_co_scientist.harness.experiment import (
     ResourceBudget,
     load_experiment_spec,
 )
-from onc_co_scientist.harness.runtime import AgentRequest, CliJsonRuntime
+from onc_co_scientist.harness.runtime import AgentArtifact, AgentRequest, CliJsonRuntime
 from scripts.codex_cli_json_adapter import (
     ARTIFACT_SCHEMA,
     _artifact_from_text,
     _codex_runtime_root,
+    _validate_artifact_contract,
     artifact_schema,
     extract_codex_thread_id,
     parse_codex_events,
@@ -71,8 +72,23 @@ def test_artifact_schema_locks_final_answer_to_the_stage_contract() -> None:
     assert answer["type"] == "object"
     assert answer["additionalProperties"] is False
     assert answer["properties"]["conclusion"]["minLength"] == 1
-    assert answer["properties"]["supported_claim_indices"]["uniqueItems"] is True
+    assert "uniqueItems" not in answer["properties"]["supported_claim_indices"]
+    assert "uniqueItems" not in json.dumps(synthesis)
     assert answer["required"] == ["conclusion", "supported_claim_indices"]
+
+
+def test_post_generation_contract_rejects_duplicate_supported_claim_indices() -> None:
+    artifact = AgentArtifact(
+        summary="synthesis",
+        handoff="handoff",
+        final_answer={
+            "conclusion": "conclusion",
+            "supported_claim_indices": [0, 0],
+        },
+    )
+
+    with pytest.raises(ValueError, match="must not contain duplicates"):
+        _validate_artifact_contract(artifact, require_final_answer=True)
 
 
 def test_artifact_parser_rejects_fields_outside_closed_stage_schema() -> None:

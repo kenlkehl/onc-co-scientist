@@ -104,7 +104,7 @@ def test_medium_replacement_template_locks_model_reasoning_and_four_hour_ceiling
 
     model = _locked_model_manifest(template)
 
-    assert template["experiment_id"] == "nsclc-semantic-workflow-grid-luna-medium-4h-20x5"
+    assert template["experiment_id"] == "nsclc-semantic-workflow-grid-luna-medium-4h-v2-20x5"
     assert model == {
         "profile": "codex-luna-medium",
         "id": "gpt-5.6-luna",
