@@ -11,6 +11,7 @@ Repeated calls use ``codex exec resume``; new calls intentionally omit
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -23,7 +24,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft202012Validator
+
 from onc_co_scientist.harness.runtime import AgentArtifact, AgentResponse, AgentUsage
+
+SYNTHESIS_FINAL_ANSWER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "conclusion": {"type": "string", "minLength": 1},
+        "supported_claim_indices": {
+            "type": "array",
+            "items": {"type": "integer", "minimum": 0},
+            "uniqueItems": True,
+        },
+    },
+    "required": ["conclusion", "supported_claim_indices"],
+}
 
 ARTIFACT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -149,19 +166,8 @@ ARTIFACT_SCHEMA: dict[str, Any] = {
         "minority_report": {"type": "string"},
         "final_answer": {
             "anyOf": [
-                {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {
-                        "conclusion": {"type": "string"},
-                        "supported_claim_indices": {
-                            "type": "array",
-                            "items": {"type": "integer", "minimum": 0},
-                        },
-                    },
-                    "required": ["conclusion", "supported_claim_indices"],
-                },
-                {"type": "string"},
+                SYNTHESIS_FINAL_ANSWER_SCHEMA,
+                {"type": "string", "minLength": 1},
                 {"type": "null"},
             ]
         },
@@ -178,6 +184,23 @@ ARTIFACT_SCHEMA: dict[str, Any] = {
         "final_answer",
     ],
 }
+
+
+def artifact_schema(*, require_final_answer: bool) -> dict[str, Any]:
+    """Return the exact generation contract for one harness stage."""
+
+    schema = copy.deepcopy(ARTIFACT_SCHEMA)
+    schema["title"] = (
+        "Oncology co-scientist synthesis artifact"
+        if require_final_answer
+        else "Oncology co-scientist intermediate-stage artifact"
+    )
+    schema["properties"]["final_answer"] = (
+        copy.deepcopy(SYNTHESIS_FINAL_ANSWER_SCHEMA)
+        if require_final_answer
+        else {"type": "null"}
+    )
+    return schema
 
 TOOL_ITEM_TYPES = {
     "apply_patch",
@@ -315,6 +338,13 @@ def _required_string(request: dict[str, Any], key: str) -> str:
     return value
 
 
+def _required_bool(request: dict[str, Any], key: str) -> bool:
+    value = request.get(key)
+    if type(value) is not bool:
+        raise ValueError(f"Request field {key!r} must be a boolean.")
+    return value
+
+
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -376,7 +406,7 @@ def _save_session(
     )
 
 
-def _artifact_from_text(raw: str) -> AgentArtifact:
+def _artifact_from_text(raw: str, *, schema: dict[str, Any]) -> AgentArtifact:
     stripped = raw.strip()
     if stripped.startswith("```"):
         lines = stripped.splitlines()[1:]
@@ -389,7 +419,59 @@ def _artifact_from_text(raw: str) -> AgentArtifact:
         raise ValueError("Codex final response was not valid JSON.") from exc
     if not isinstance(payload, dict):
         raise ValueError("Codex final response must be one JSON object.")
+    errors = sorted(
+        Draft202012Validator(schema).iter_errors(payload),
+        key=lambda error: tuple(str(part) for part in error.absolute_path),
+    )
+    if errors:
+        error = errors[0]
+        location = ".".join(str(part) for part in error.absolute_path) or "$"
+        raise ValueError(
+            f"Codex final response violated the stage schema at {location}: {error.message}"
+        )
     return AgentArtifact.model_validate(payload)
+
+
+def _validate_artifact_contract(
+    artifact: AgentArtifact,
+    *,
+    require_final_answer: bool,
+) -> None:
+    """Defend the stage contract even if a runtime ignores its output schema."""
+
+    final_answer = artifact.final_answer
+    if not require_final_answer:
+        if final_answer is not None:
+            raise ValueError("An intermediate-stage artifact must set final_answer to null.")
+        return
+
+    if not isinstance(final_answer, dict):
+        raise ValueError("A synthesis artifact must return final_answer as an object.")
+    expected_keys = {"conclusion", "supported_claim_indices"}
+    if set(final_answer) != expected_keys:
+        raise ValueError(
+            "A synthesis final_answer must contain exactly conclusion and "
+            "supported_claim_indices."
+        )
+    conclusion = final_answer["conclusion"]
+    if not isinstance(conclusion, str) or not conclusion.strip():
+        raise ValueError("A synthesis final_answer conclusion must be non-empty.")
+    indices = final_answer["supported_claim_indices"]
+    if not isinstance(indices, list):
+        raise ValueError("supported_claim_indices must be an array.")
+    if any(type(index) is not int or index < 0 for index in indices):
+        raise ValueError("supported_claim_indices must contain non-negative integers.")
+    if len(indices) != len(set(indices)):
+        raise ValueError("supported_claim_indices must not contain duplicates.")
+    for index in indices:
+        if index >= len(artifact.claims):
+            raise ValueError(
+                f"supported_claim_indices references absent claim index {index}."
+            )
+        if not artifact.claims[index].supported:
+            raise ValueError(
+                f"supported_claim_indices references unsupported claim index {index}."
+            )
 
 
 def _analysis_python_runtime(source: Path) -> tuple[Path, Path, Path]:
@@ -512,6 +594,7 @@ def _audit_payload(
         "prompt_sha256": _sha256(_required_string(request, "prompt")),
         "model_id": model_id,
         "reasoning_effort": reasoning_effort,
+        "require_final_answer": _required_bool(request, "require_final_answer"),
         "session_action": session_action,
         "command": command,
         "stdin": "<PROMPT_ON_STDIN>",
@@ -526,6 +609,13 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
     request_id = _required_string(request, "request_id")
     session_id = _required_string(request, "session_id")
     model_id = _required_string(request, "model_id")
+    request_reasoning_effort = _required_string(request, "reasoning_effort")
+    if request_reasoning_effort != args.reasoning_effort:
+        raise RuntimeError(
+            "Refusing a reasoning-effort mismatch between the harness request "
+            f"({request_reasoning_effort}) and adapter CLI ({args.reasoning_effort})."
+        )
+    require_final_answer = _required_bool(request, "require_final_answer")
     prompt = _required_string(request, "prompt")
     workspace = Path(_required_string(request, "workspace")).resolve(strict=True)
     if not workspace.is_dir():
@@ -566,7 +656,8 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
     events_path = call_dir / "codex_events.jsonl"
     stderr_path = call_dir / "codex_stderr.log"
     audit_path = call_dir / "codex_call.json"
-    _write_json_atomic(schema_path, ARTIFACT_SCHEMA)
+    stage_schema = artifact_schema(require_final_answer=require_final_answer)
+    _write_json_atomic(schema_path, stage_schema)
     last_message_path.unlink(missing_ok=True)
 
     session_path = _session_record_path(request)
@@ -595,6 +686,9 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
         model_id=model_id,
         reasoning_effort=args.reasoning_effort,
         session_action=session_action,
+    )
+    audit["output_schema_sha256"] = _sha256(
+        json.dumps(stage_schema, sort_keys=True, separators=(",", ":"))
     )
     _write_json_atomic(audit_path, audit)
 
@@ -645,7 +739,11 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
         raise RuntimeError("Codex completed without writing --output-last-message.")
 
     raw_text = last_message_path.read_text(encoding="utf-8")
-    artifact = _artifact_from_text(raw_text)
+    artifact = _artifact_from_text(raw_text, schema=stage_schema)
+    _validate_artifact_contract(
+        artifact,
+        require_final_answer=require_final_answer,
+    )
     observed_thread_id = extract_codex_thread_id(completed.stdout)
     if thread_id is None:
         if observed_thread_id is None:

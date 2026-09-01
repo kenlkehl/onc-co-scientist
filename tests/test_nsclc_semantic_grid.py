@@ -16,6 +16,7 @@ from prepare_experiment import (  # noqa: E402
     EXPECTED_HASHES,
     EXPECTED_SHAPE,
     MASKED_FORBIDDEN_TERMS,
+    _locked_model_manifest,
     _prepare_public_workspaces,
     _sha256,
     _source_paths,
@@ -94,6 +95,34 @@ def test_tracked_grid_template_locks_calls_timeouts_and_parallelism() -> None:
     assert template["models"][0]["reasoning_effort"] == "low"
 
 
+def test_medium_replacement_template_locks_model_reasoning_and_four_hour_ceiling() -> None:
+    template = yaml.safe_load(
+        (EXPERIMENT / "nsclc_semantic_workflow_grid_medium.template.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    model = _locked_model_manifest(template)
+
+    assert template["experiment_id"] == "nsclc-semantic-workflow-grid-luna-medium-4h-20x5"
+    assert model == {
+        "profile": "codex-luna-medium",
+        "id": "gpt-5.6-luna",
+        "adapter": "cli-json",
+        "reasoning_effort": "medium",
+        "adapter_timeout_seconds": 14_380,
+        "harness_timeout_seconds": 14_400,
+    }
+    assert template["iteration_policy"] == {"iterations": 20, "completion_mode": "fixed"}
+    assert template["replicates"] == 5
+    assert template["max_parallel"] == 2
+
+    mismatched = json.loads(json.dumps(template))
+    mismatched["models"][0]["reasoning_effort"] = "low"
+    with pytest.raises(ValueError, match="does not match"):
+        _locked_model_manifest(mismatched)
+
+
 def test_provenance_freeze_is_hash_locked_and_idempotent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -116,6 +145,10 @@ def test_provenance_freeze_is_hash_locked_and_idempotent(
     )
     preparation = tmp_path / "preparation.json"
     preparation.write_text("{}\n", encoding="utf-8")
+    template = tmp_path / "medium.template.yaml"
+    template.write_text("model: medium\n", encoding="utf-8")
+    protocol = tmp_path / "protocol.medium.md"
+    protocol.write_text("# Medium protocol\n", encoding="utf-8")
     for name, payload in {
         "schedule.json": {"spec_fingerprint": "fingerprint"},
         "plan.json": [],
@@ -132,6 +165,8 @@ def test_provenance_freeze_is_hash_locked_and_idempotent(
         output_root=output,
         machine_manifest=machine,
         preparation_manifest=preparation,
+        template=template,
+        protocol=protocol,
     )
     first_payload = first.read_text(encoding="utf-8")
     second = freeze_module.freeze(
@@ -140,11 +175,15 @@ def test_provenance_freeze_is_hash_locked_and_idempotent(
         output_root=output,
         machine_manifest=machine,
         preparation_manifest=preparation,
+        template=template,
+        protocol=protocol,
     )
 
     assert second == first
     assert second.read_text(encoding="utf-8") == first_payload
     assert (output / "provenance" / "scorer.py").is_file()
+    assert (output / "provenance" / "template.yaml").read_text() == "model: medium\n"
+    assert (output / "provenance" / "protocol.md").read_text() == "# Medium protocol\n"
     (output / "schedule.json").write_text(
         json.dumps({"spec_fingerprint": "changed"}), encoding="utf-8"
     )
@@ -155,4 +194,6 @@ def test_provenance_freeze_is_hash_locked_and_idempotent(
             output_root=output,
             machine_manifest=machine,
             preparation_manifest=preparation,
+            template=template,
+            protocol=protocol,
         )

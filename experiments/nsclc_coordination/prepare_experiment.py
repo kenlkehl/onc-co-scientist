@@ -209,6 +209,53 @@ def _active_python_executable() -> Path:
     return executable
 
 
+def _one_flag_value(arguments: list[str], flag: str) -> str:
+    positions = [index for index, value in enumerate(arguments) if value == flag]
+    if len(positions) != 1:
+        raise ValueError(f"Expected exactly one {flag} argument; found {len(positions)}.")
+    position = positions[0]
+    if position + 1 >= len(arguments):
+        raise ValueError(f"Argument {flag} has no value.")
+    return str(arguments[position + 1])
+
+
+def _locked_model_manifest(config: dict[str, Any]) -> dict[str, Any]:
+    """Verify and summarize the model, reasoning, and nested timeout locks."""
+
+    models = config.get("models")
+    if not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict):
+        raise ValueError("The NSCLC grid requires exactly one model profile.")
+    model = models[0]
+    if model.get("adapter") != "cli-json":
+        raise ValueError("The NSCLC live grid requires the cli-json adapter.")
+    reasoning_effort = model.get("reasoning_effort")
+    if not isinstance(reasoning_effort, str) or not reasoning_effort:
+        raise ValueError("The model profile must set reasoning_effort explicitly.")
+    extra_args = model.get("extra_args")
+    if not isinstance(extra_args, list) or not all(isinstance(item, str) for item in extra_args):
+        raise ValueError("The cli-json model profile must provide string extra_args.")
+    cli_reasoning_effort = _one_flag_value(extra_args, "--reasoning-effort")
+    if cli_reasoning_effort != reasoning_effort:
+        raise ValueError(
+            "Model reasoning_effort does not match the adapter --reasoning-effort value."
+        )
+    try:
+        adapter_timeout = int(_one_flag_value(extra_args, "--timeout-seconds"))
+        harness_timeout = int(config["budget"]["max_runtime_seconds_per_call"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("The live model must have integer adapter and harness timeouts.") from exc
+    if not 0 < adapter_timeout < harness_timeout:
+        raise ValueError("The adapter timeout must be positive and precede the harness timeout.")
+    return {
+        "profile": str(model.get("id", "")),
+        "id": str(model.get("model_id", "")),
+        "adapter": str(model["adapter"]),
+        "reasoning_effort": reasoning_effort,
+        "adapter_timeout_seconds": adapter_timeout,
+        "harness_timeout_seconds": harness_timeout,
+    }
+
+
 def _machine_manifest(
     *,
     repo: Path,
@@ -216,6 +263,7 @@ def _machine_manifest(
     configs: dict[str, Path],
     source_paths: dict[str, Path],
     schedule_seed: int,
+    model: dict[str, Any],
 ) -> dict[str, Any]:
     git_status = _run(
         ["git", "-c", f"safe.directory={repo}", "status", "--short"], cwd=repo
@@ -248,7 +296,7 @@ def _machine_manifest(
             "version": _run([str(codex), "--version"], cwd=repo),
             "sha256": _sha256(codex),
         },
-        "model": {"id": "gpt-5.6-luna", "reasoning_effort": "low"},
+        "model": model,
         "schedule_seed": schedule_seed,
         "config_sha256": {label: _sha256(path) for label, path in configs.items()},
         "substrate_sha256": {
@@ -294,14 +342,15 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     unresolved = re.findall(r"__[A-Z0-9_]+__", json.dumps(main))
     if unresolved:
         raise ValueError(f"Unresolved template tokens: {sorted(set(unresolved))}")
+    model_manifest = _locked_model_manifest(main)
     smoke = json.loads(json.dumps(main))
-    smoke["experiment_id"] = "nsclc-semantic-workflow-grid-live-smoke"
+    smoke["experiment_id"] = args.smoke_experiment_id
     smoke["output_root"] = str(args.smoke_output_root.resolve())
     smoke["iteration_policy"]["iterations"] = 1
     smoke["replicates"] = 1
     smoke["budget"]["max_agent_calls"] = 12
     stub = json.loads(json.dumps(main))
-    stub["experiment_id"] = "nsclc-semantic-workflow-grid-stub-gate"
+    stub["experiment_id"] = args.stub_experiment_id
     stub["output_root"] = str(args.stub_output_root.resolve())
     stub["iteration_policy"]["iterations"] = 2
     stub["replicates"] = 1
@@ -322,6 +371,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         configs=configs,
         source_paths=source_paths,
         schedule_seed=int(main["schedule_seed"]),
+        model=model_manifest,
     )
     _write_yaml(args.machine_manifest.resolve(), manifest)
     preparation = {
@@ -339,6 +389,10 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
             for condition, path in workspaces.items()
         },
         "configs": {label: str(path) for label, path in configs.items()},
+        "template": {
+            "path": str(args.template.resolve()),
+            "sha256": _sha256(args.template.resolve()),
+        },
         "machine_manifest": str(args.machine_manifest.resolve()),
     }
     preparation_path = args.public_root.resolve() / "preparation_manifest.json"
@@ -374,6 +428,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Path(__file__).with_name("nsclc_semantic_workflow_grid.stub.local.yaml"),
     )
     parser.add_argument("--machine-manifest", type=Path, default=local / "machine_manifest.yaml")
+    parser.add_argument(
+        "--smoke-experiment-id",
+        default="nsclc-semantic-workflow-grid-live-smoke",
+    )
+    parser.add_argument(
+        "--stub-experiment-id",
+        default="nsclc-semantic-workflow-grid-stub-gate",
+    )
     parser.add_argument(
         "--main-output-root", type=Path, default=results / "semantic-workflow-grid-main"
     )

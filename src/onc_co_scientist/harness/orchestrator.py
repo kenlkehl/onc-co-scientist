@@ -669,6 +669,7 @@ class RunController:
             call_dir = self.run_dir / "calls" / f"call_{self.call_index:04d}"
             if call_dir.exists():
                 raise RuntimeError(f"Refusing to overwrite existing call directory: {call_dir}")
+            scoped_model = self.plan.model.for_scope(self._runtime_scope(site_id))
             request = AgentRequest(
                 request_id=f"{self.plan.run_id}:c{self.call_index:04d}",
                 experiment_id=self.spec.experiment_id,
@@ -676,8 +677,10 @@ class RunController:
                 task_id=self.plan.task.id,
                 workflow_id=self.plan.workflow.id,
                 model_profile=self.plan.model.id,
-                model_id=self.plan.model.for_scope(self._runtime_scope(site_id)).model_id,
+                model_id=scoped_model.model_id,
+                reasoning_effort=scoped_model.reasoning_effort,
                 stage_id=stage_id,
+                require_final_answer=require_final_answer,
                 iteration_index=iteration_index,
                 max_iterations=self.spec.iteration_policy.iterations,
                 stage_index=stage_index,

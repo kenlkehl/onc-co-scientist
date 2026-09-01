@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 from onc_co_scientist.harness.experiment import (
     ModelSpec,
     ResourceBudget,
@@ -13,7 +15,9 @@ from onc_co_scientist.harness.experiment import (
 from onc_co_scientist.harness.runtime import AgentRequest, CliJsonRuntime
 from scripts.codex_cli_json_adapter import (
     ARTIFACT_SCHEMA,
+    _artifact_from_text,
     _codex_runtime_root,
+    artifact_schema,
     extract_codex_thread_id,
     parse_codex_events,
 )
@@ -58,6 +62,40 @@ def test_artifact_schema_uses_closed_subgroup_predicate_objects() -> None:
     ]
 
 
+def test_artifact_schema_locks_final_answer_to_the_stage_contract() -> None:
+    intermediate = artifact_schema(require_final_answer=False)
+    synthesis = artifact_schema(require_final_answer=True)
+
+    assert intermediate["properties"]["final_answer"] == {"type": "null"}
+    answer = synthesis["properties"]["final_answer"]
+    assert answer["type"] == "object"
+    assert answer["additionalProperties"] is False
+    assert answer["properties"]["conclusion"]["minLength"] == 1
+    assert answer["properties"]["supported_claim_indices"]["uniqueItems"] is True
+    assert answer["required"] == ["conclusion", "supported_claim_indices"]
+
+
+def test_artifact_parser_rejects_fields_outside_closed_stage_schema() -> None:
+    payload = {
+        "summary": "result",
+        "handoff": "handoff",
+        "hypotheses": [],
+        "analyses": [],
+        "claims": [],
+        "evidence": [],
+        "concerns": [],
+        "minority_report": "",
+        "final_answer": None,
+        "unexpected": "must fail",
+    }
+
+    with pytest.raises(ValueError, match="violated the stage schema"):
+        _artifact_from_text(
+            json.dumps(payload),
+            schema=artifact_schema(require_final_answer=False),
+        )
+
+
 def _write_fake_codex(path: Path) -> None:
     path.write_text(
         r"""#!/usr/bin/env python3
@@ -73,12 +111,14 @@ last_message = pathlib.Path(argv[argv.index("--output-last-message") + 1])
 schema_path = pathlib.Path(argv[argv.index("--output-schema") + 1])
 if not schema_path.is_file():
     raise SystemExit("schema missing")
+schema = json.loads(schema_path.read_text())
 
 prompt = sys.stdin.read()
 entry = {
     "argv": argv,
     "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
-    "schema_additional_properties": json.loads(schema_path.read_text())["additionalProperties"],
+    "schema_additional_properties": schema["additionalProperties"],
+    "final_answer_schema": schema["properties"]["final_answer"],
     "tmpdir": os.environ.get("TMPDIR"),
     "pythonhome": os.environ.get("PYTHONHOME"),
     "pythonpath": os.environ.get("PYTHONPATH"),
@@ -96,7 +136,11 @@ artifact = {
     "evidence": ["dataset.parquet"],
     "concerns": [],
     "minority_report": "",
-    "final_answer": None,
+    "final_answer": (
+        {"conclusion": "synthesis result", "supported_claim_indices": []}
+        if schema["properties"]["final_answer"].get("type") == "object"
+        else None
+    ),
 }
 last_message.write_text(json.dumps(artifact), encoding="utf-8")
 
@@ -123,6 +167,8 @@ def _request(
     index: int,
     prompt: str,
     session_id: str = "shared-persistent-session",
+    require_final_answer: bool = False,
+    reasoning_effort: str = "low",
 ) -> AgentRequest:
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
@@ -135,7 +181,9 @@ def _request(
         workflow_id="persistent",
         model_profile="luna-low",
         model_id="gpt-5.6-luna",
+        reasoning_effort=reasoning_effort,
         stage_id=f"stage-{index}",
+        require_final_answer=require_final_answer,
         role="scientist",
         agent_id=f"agent-{index}",
         session_id=session_id,
@@ -176,7 +224,15 @@ def test_codex_adapter_starts_then_resumes_and_accounts_usage(tmp_path: Path, mo
     first_prompt = "FIRST_SECRET_PROMPT"
     first = runtime.run(_request(tmp_path, index=1, prompt=first_prompt), budget)
     second_prompt = "SECOND_SECRET_PROMPT"
-    second = runtime.run(_request(tmp_path, index=2, prompt=second_prompt), budget)
+    second = runtime.run(
+        _request(
+            tmp_path,
+            index=2,
+            prompt=second_prompt,
+            require_final_answer=True,
+        ),
+        budget,
+    )
 
     assert first.artifact.summary == "initial result"
     assert first.usage.input_tokens == 120
@@ -189,6 +245,10 @@ def test_codex_adapter_starts_then_resumes_and_accounts_usage(tmp_path: Path, mo
     assert second.usage.tool_calls == 1
     assert second.runtime_metadata["session_action"] == "resumed"
     assert second.runtime_metadata["codex_thread_id"] == "thread-test-001"
+    assert second.artifact.final_answer == {
+        "conclusion": "synthesis result",
+        "supported_claim_indices": [],
+    }
 
     invocations = [json.loads(line) for line in invocation_log.read_text().splitlines()]
     assert len(invocations) == 2
@@ -230,6 +290,8 @@ def test_codex_adapter_starts_then_resumes_and_accounts_usage(tmp_path: Path, mo
     assert invocations[0]["prompt_sha256"] == hashlib.sha256(first_prompt.encode()).hexdigest()
     assert invocations[1]["prompt_sha256"] == hashlib.sha256(second_prompt.encode()).hexdigest()
     assert invocations[0]["schema_additional_properties"] is False
+    assert invocations[0]["final_answer_schema"] == {"type": "null"}
+    assert invocations[1]["final_answer_schema"]["type"] == "object"
     assert invocations[0]["tmpdir"] == str((tmp_path / "run" / "scratch" / "agent-1").resolve())
     assert invocations[1]["tmpdir"] == str((tmp_path / "run" / "scratch" / "agent-2").resolve())
     schema = json.loads(
@@ -253,6 +315,44 @@ def test_codex_adapter_starts_then_resumes_and_accounts_usage(tmp_path: Path, mo
         audit = json.loads(audit_text)
         assert audit["stdin"] == "<PROMPT_ON_STDIN>"
         assert audit["tool_calls"] == 1
+        assert audit["require_final_answer"] is (index == 2)
+        assert len(audit["output_schema_sha256"]) == 64
+
+
+def test_codex_adapter_rejects_reasoning_effort_mismatch_before_launch(
+    tmp_path: Path, monkeypatch
+) -> None:
+    fake_codex = tmp_path / "fake-codex"
+    invocation_log = tmp_path / "fake_invocations.jsonl"
+    _write_fake_codex(fake_codex)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(invocation_log))
+    runtime = CliJsonRuntime(
+        ModelSpec(
+            id="luna-medium",
+            model_id="gpt-5.6-luna",
+            adapter="cli-json",
+            command=[sys.executable, str(ADAPTER)],
+            extra_args=[
+                "--codex",
+                str(fake_codex),
+                "--reasoning-effort",
+                "medium",
+            ],
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="reasoning-effort mismatch"):
+        runtime.run(
+            _request(
+                tmp_path,
+                index=1,
+                prompt="must not launch",
+                reasoning_effort="low",
+            ),
+            ResourceBudget(max_runtime_seconds_per_call=60),
+        )
+
+    assert not invocation_log.exists()
 
 
 def test_codex_adapter_adds_only_explicit_read_roots(tmp_path: Path, monkeypatch) -> None:

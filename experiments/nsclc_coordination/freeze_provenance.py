@@ -50,12 +50,25 @@ def freeze(
     output_root: Path,
     machine_manifest: Path,
     preparation_manifest: Path,
+    template: Path | None = None,
+    protocol: Path | None = None,
 ) -> Path:
     repo = repo.resolve(strict=True)
     config = config.resolve(strict=True)
     output_root = output_root.resolve(strict=True)
     machine_manifest = machine_manifest.resolve(strict=True)
     preparation_manifest = preparation_manifest.resolve(strict=True)
+    experiment_dir = Path(__file__).resolve().parent
+    template = (
+        template.resolve(strict=True)
+        if template is not None
+        else experiment_dir / "nsclc_semantic_workflow_grid.template.yaml"
+    )
+    protocol = (
+        protocol.resolve(strict=True)
+        if protocol is not None
+        else experiment_dir / "protocol.md"
+    )
     configured = yaml.safe_load(config.read_text(encoding="utf-8"))
     if Path(str(configured.get("output_root", ""))).resolve() != output_root:
         raise ValueError("Config output_root does not match the root being frozen.")
@@ -68,13 +81,12 @@ def freeze(
     if manifest.get("git", {}).get("commit") != current_commit:
         raise ValueError("Machine manifest commit does not match the current implementation.")
 
-    experiment_dir = Path(__file__).resolve().parent
     sources = {
         "experiment_config.yaml": config,
         "machine_manifest.yaml": machine_manifest,
         "preparation_manifest.json": preparation_manifest,
-        "protocol.md": experiment_dir / "protocol.md",
-        "template.yaml": experiment_dir / "nsclc_semantic_workflow_grid.template.yaml",
+        "protocol.md": protocol,
+        "template.yaml": template,
         "scorer.py": experiment_dir / "score_experiment.py",
         "schedule.json": output_root / "schedule.json",
         "plan.json": output_root / "plan.json",
@@ -138,6 +150,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=local / "public" / "preparation_manifest.json",
     )
+    parser.add_argument("--template", type=Path)
+    parser.add_argument("--protocol", type=Path)
     return parser.parse_args(argv)
 
 
@@ -149,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
         output_root=args.output_root,
         machine_manifest=args.machine_manifest,
         preparation_manifest=args.preparation_manifest,
+        template=args.template,
+        protocol=args.protocol,
     )
     print(path)
     return 0
