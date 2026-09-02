@@ -140,11 +140,11 @@ def test_medium_v4_template_locks_fast_repair_reasoning_and_four_hour_ceiling() 
         _locked_model_manifest(invalid_repairs)
 
 
-def test_qwen38_vllm_template_locks_controller_sampling_and_isolation() -> None:
+def test_qwen38_vllm_v2_template_locks_controller_sampling_and_isolation() -> None:
     template = yaml.safe_load(
         (
             EXPERIMENT
-            / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v1.template.yaml"
+            / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v2.template.yaml"
         ).read_text(encoding="utf-8")
     )
     python = Path("/home/klkehl/thisenv/bin/python")
@@ -176,7 +176,7 @@ def test_qwen38_vllm_template_locks_controller_sampling_and_isolation() -> None:
     )
 
     assert resolved["experiment_id"] == (
-        "nsclc-semantic-workflow-grid-qwen38-27b-vllm-v1-20x5"
+        "nsclc-semantic-workflow-grid-qwen38-27b-vllm-v2-20x5"
     )
     assert resolved["replicates"] == 5
     assert resolved["max_parallel"] == 6

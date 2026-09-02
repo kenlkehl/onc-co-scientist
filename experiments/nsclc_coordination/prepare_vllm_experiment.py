@@ -295,53 +295,53 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--template",
         type=Path,
-        default=experiment / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v1.template.yaml",
+        default=experiment / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v2.template.yaml",
     )
     parser.add_argument(
-        "--public-root", type=Path, default=local / "public-qwen38-27b-vllm-v1"
+        "--public-root", type=Path, default=local / "public-qwen38-27b-vllm-v2"
     )
     parser.add_argument(
         "--main-config",
         type=Path,
-        default=experiment / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v1.local.yaml",
+        default=experiment / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v2.local.yaml",
     )
     parser.add_argument(
         "--smoke-config",
         type=Path,
-        default=experiment / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v1.smoke.local.yaml",
+        default=experiment / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v2.smoke.local.yaml",
     )
     parser.add_argument(
         "--stub-config",
         type=Path,
-        default=experiment / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v1.stub.local.yaml",
+        default=experiment / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v2.stub.local.yaml",
     )
     parser.add_argument(
         "--machine-manifest",
         type=Path,
-        default=local / "machine_manifest.qwen38_27b_vllm_v1.yaml",
+        default=local / "machine_manifest.qwen38_27b_vllm_v2.yaml",
     )
     parser.add_argument(
         "--smoke-experiment-id",
-        default="nsclc-semantic-workflow-grid-qwen38-27b-vllm-v1-live-smoke",
+        default="nsclc-semantic-workflow-grid-qwen38-27b-vllm-v2-live-smoke",
     )
     parser.add_argument(
         "--stub-experiment-id",
-        default="nsclc-semantic-workflow-grid-qwen38-27b-vllm-v1-stub-gate",
+        default="nsclc-semantic-workflow-grid-qwen38-27b-vllm-v2-stub-gate",
     )
     parser.add_argument(
         "--main-output-root",
         type=Path,
-        default=results / "semantic-workflow-grid-qwen38-27b-vllm-v1-main",
+        default=results / "semantic-workflow-grid-qwen38-27b-vllm-v2-main",
     )
     parser.add_argument(
         "--smoke-output-root",
         type=Path,
-        default=results / "semantic-workflow-grid-qwen38-27b-vllm-v1-smoke",
+        default=results / "semantic-workflow-grid-qwen38-27b-vllm-v2-smoke",
     )
     parser.add_argument(
         "--stub-output-root",
         type=Path,
-        default=results / "semantic-workflow-grid-qwen38-27b-vllm-v1-stub",
+        default=results / "semantic-workflow-grid-qwen38-27b-vllm-v2-stub",
     )
     parser.add_argument("--base-url", default="http://camus.dfci.harvard.edu:8060/v1")
     parser.add_argument("--model-id", default="Qwen/Qwen3.8-27B")

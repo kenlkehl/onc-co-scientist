@@ -1,15 +1,20 @@
-# NSCLC semantic masking × workflow grid: Qwen3.8-27B vLLM v1 protocol
+# NSCLC semantic masking × workflow grid: Qwen3.8-27B vLLM v2 protocol
 
 ## Status and independent objective
 
-This is a new prospective experiment using `Qwen/Qwen3.8-27B` at the
-OpenAI-compatible endpoint `http://camus.dfci.harvard.edu:8060/v1`. It neither
-interrupts nor modifies the concurrent Luna-medium local-env v4 experiment,
-and its smoke or main results will not be pooled with Luna results. A preflight
-on 2026-09-02 observed vLLM `0.27.1`, a 262,144-token advertised model context,
-working chat completions, and working JSON-schema response formatting. Native
-tool calls were unavailable because the server was not launched with a tool-call
-parser, so tool use is controlled by the client adapter described below.
+This is a fresh prospective successor to the stopped v1 smoke, using
+`Qwen/Qwen3.8-27B` at the OpenAI-compatible endpoint
+`http://camus.dfci.harvard.edu:8060/v1`. Three v1 smoke runs exhausted their
+16,384-token completion ceilings entirely in reasoning and returned no visible
+controller decision; those failed artifacts remain isolated under the v1 result
+root. V2 raises the shared reasoning-plus-response ceiling to 100,000 tokens and
+the per-request client timeout to 7,200 seconds. It neither interrupts nor
+modifies the concurrent Luna-medium local-env v4 experiment, and its results
+will not be pooled with v1 or Luna results. A preflight on 2026-09-02 observed
+vLLM `0.27.1`, a 262,144-token advertised model context, working chat
+completions, and working JSON-schema response formatting. Native tool calls
+were unavailable because the server was not launched with a tool-call parser,
+so tool use is controlled by the client adapter described below.
 
 The scientific task, datasets, semantic conditions, workflow conditions,
 stages, iteration count, replicates, schedule seed, and scorer are held equal to
