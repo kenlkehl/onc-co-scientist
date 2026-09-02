@@ -95,7 +95,7 @@ def test_tracked_grid_template_locks_calls_timeouts_and_parallelism() -> None:
     assert template["models"][0]["reasoning_effort"] == "low"
 
 
-def test_medium_replacement_template_locks_model_reasoning_and_four_hour_ceiling() -> None:
+def test_medium_v3_template_locks_fast_repair_reasoning_and_four_hour_ceiling() -> None:
     template = yaml.safe_load(
         (EXPERIMENT / "nsclc_semantic_workflow_grid_medium.template.yaml").read_text(
             encoding="utf-8"
@@ -104,23 +104,39 @@ def test_medium_replacement_template_locks_model_reasoning_and_four_hour_ceiling
 
     model = _locked_model_manifest(template)
 
-    assert template["experiment_id"] == "nsclc-semantic-workflow-grid-luna-medium-4h-v2-20x5"
+    assert template["experiment_id"] == (
+        "nsclc-semantic-workflow-grid-luna-medium-fast-repair-v3-20x5"
+    )
     assert model == {
-        "profile": "codex-luna-medium",
+        "profile": "codex-luna-medium-fast-repair",
         "id": "gpt-5.6-luna",
         "adapter": "cli-json",
         "reasoning_effort": "medium",
+        "service_tier": "fast",
+        "max_contract_repairs": 2,
         "adapter_timeout_seconds": 14_380,
         "harness_timeout_seconds": 14_400,
     }
     assert template["iteration_policy"] == {"iterations": 20, "completion_mode": "fixed"}
     assert template["replicates"] == 5
-    assert template["max_parallel"] == 2
+    assert template["max_parallel"] == 6
 
     mismatched = json.loads(json.dumps(template))
     mismatched["models"][0]["reasoning_effort"] = "low"
     with pytest.raises(ValueError, match="does not match"):
         _locked_model_manifest(mismatched)
+
+    invalid_tier = json.loads(json.dumps(template))
+    args = invalid_tier["models"][0]["extra_args"]
+    args[args.index("--service-tier") + 1] = "slow"
+    with pytest.raises(ValueError, match="service tier"):
+        _locked_model_manifest(invalid_tier)
+
+    invalid_repairs = json.loads(json.dumps(template))
+    args = invalid_repairs["models"][0]["extra_args"]
+    args[args.index("--max-contract-repairs") + 1] = "-1"
+    with pytest.raises(ValueError, match="repair limit"):
+        _locked_model_manifest(invalid_repairs)
 
 
 def test_provenance_freeze_is_hash_locked_and_idempotent(

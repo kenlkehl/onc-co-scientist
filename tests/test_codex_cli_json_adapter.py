@@ -177,6 +177,96 @@ print(json.dumps({"type": "turn.completed", "usage": usage}))
     path.chmod(0o755)
 
 
+def _write_contract_repair_fake_codex(path: Path) -> None:
+    path.write_text(
+        r'''#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+argv = sys.argv[1:]
+is_resume = argv[:2] == ["exec", "resume"]
+last_message = pathlib.Path(argv[argv.index("--output-last-message") + 1])
+prompt = sys.stdin.read()
+with pathlib.Path(os.environ["FAKE_CODEX_LOG"]).open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps({
+        "argv": argv,
+        "is_resume": is_resume,
+        "has_exact_error": (
+            "supported_claim_indices references unsupported claim index 0" in prompt
+        ),
+        "asks_to_avoid_new_analysis": "do not rerun tools" in prompt,
+    }) + "\n")
+
+claim = {
+    "exposure": "treatment",
+    "outcome": "pfs_months",
+    "direction": "positive",
+    "subgroup": [],
+    "comparator": "unexposed",
+    "effect_estimate": 1.0,
+    "effect_unit": "months",
+    "p_value": 0.01,
+    "subgroup_n": 100,
+    "exposed_n": 50,
+    "comparator_n": 50,
+    "supported": False,
+    "confidence": 0.8,
+    "evidence": ["analysis"],
+}
+artifact = {
+    "summary": "corrected" if is_resume else "invalid cross-reference",
+    "handoff": "handoff",
+    "hypotheses": [],
+    "analyses": [],
+    "claims": [claim],
+    "evidence": [],
+    "concerns": [],
+    "minority_report": "",
+    "final_answer": {
+        "conclusion": "result",
+        "supported_claim_indices": [] if is_resume else [0],
+    },
+}
+last_message.write_text(json.dumps(artifact), encoding="utf-8")
+if not is_resume:
+    print(json.dumps({"type": "thread.started", "thread_id": "thread-repair-001"}))
+print(json.dumps({
+    "type": "item.completed",
+    "item": {"id": "answer", "type": "agent_message"},
+}))
+print(json.dumps({
+    "type": "turn.completed",
+    "usage": {
+        "input_tokens": 80 if is_resume else 120,
+        "output_tokens": 20 if is_resume else 30,
+    },
+}))
+''',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def _write_failing_fake_codex(path: Path) -> None:
+    path.write_text(
+        r'''#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+with pathlib.Path(os.environ["FAKE_CODEX_LOG"]).open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps({"argv": sys.argv[1:]}) + "\n")
+print("simulated provider failure", file=sys.stderr)
+raise SystemExit(7)
+''',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
 def _request(
     tmp_path: Path,
     *,
@@ -333,6 +423,151 @@ def test_codex_adapter_starts_then_resumes_and_accounts_usage(tmp_path: Path, mo
         assert audit["tool_calls"] == 1
         assert audit["require_final_answer"] is (index == 2)
         assert len(audit["output_schema_sha256"]) == 64
+
+
+def test_codex_adapter_repairs_semantic_contract_in_same_session_and_preserves_attempts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    fake_codex = tmp_path / "fake-codex"
+    invocation_log = tmp_path / "fake_invocations.jsonl"
+    _write_contract_repair_fake_codex(fake_codex)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(invocation_log))
+    runtime = CliJsonRuntime(
+        ModelSpec(
+            id="luna-medium-fast",
+            model_id="gpt-5.6-luna",
+            adapter="cli-json",
+            command=[sys.executable, str(ADAPTER)],
+            extra_args=[
+                "--codex",
+                str(fake_codex),
+                "--reasoning-effort",
+                "medium",
+                "--service-tier",
+                "fast",
+                "--max-contract-repairs",
+                "2",
+                "--timeout-seconds",
+                "10",
+            ],
+            env_passthrough=["FAKE_CODEX_LOG"],
+        )
+    )
+
+    response = runtime.run(
+        _request(
+            tmp_path,
+            index=1,
+            prompt="ORIGINAL_SECRET_PROMPT",
+            require_final_answer=True,
+            reasoning_effort="medium",
+        ),
+        ResourceBudget(max_runtime_seconds_per_call=60),
+    )
+
+    assert response.artifact.summary == "corrected"
+    assert response.artifact.final_answer["supported_claim_indices"] == []
+    assert response.usage.input_tokens == 200
+    assert response.usage.output_tokens == 50
+    assert response.runtime_metadata["attempt_count"] == 2
+    assert response.runtime_metadata["contract_repair_count"] == 1
+    assert response.runtime_metadata["service_tier"] == "fast"
+
+    invocations = [json.loads(line) for line in invocation_log.read_text().splitlines()]
+    assert len(invocations) == 2
+    assert invocations[0]["is_resume"] is False
+    assert invocations[1]["is_resume"] is True
+    assert invocations[0]["has_exact_error"] is False
+    assert invocations[1]["has_exact_error"] is True
+    assert invocations[1]["asks_to_avoid_new_analysis"] is True
+    assert "thread-repair-001" in invocations[1]["argv"]
+    for invocation in invocations:
+        assert "model_reasoning_effort=medium" in invocation["argv"]
+        assert 'service_tier="fast"' in invocation["argv"]
+
+    call_dir = tmp_path / "run" / "calls" / "call_0001"
+    first_dir = call_dir / "attempts" / "attempt_0001"
+    second_dir = call_dir / "attempts" / "attempt_0002"
+    for attempt_dir in (first_dir, second_dir):
+        assert (attempt_dir / "codex_last_message.json").is_file()
+        assert (attempt_dir / "codex_events.jsonl").is_file()
+        assert (attempt_dir / "codex_stderr.log").is_file()
+        assert (attempt_dir / "codex_call.json").is_file()
+        assert (attempt_dir / "codex_agent_artifact.schema.json").is_file()
+    first_artifact = json.loads((first_dir / "codex_last_message.json").read_text())
+    second_artifact = json.loads((second_dir / "codex_last_message.json").read_text())
+    assert first_artifact["final_answer"]["supported_claim_indices"] == [0]
+    assert second_artifact["final_answer"]["supported_claim_indices"] == []
+
+    root_audit_text = (call_dir / "codex_call.json").read_text()
+    assert "ORIGINAL_SECRET_PROMPT" not in root_audit_text
+    root_audit = json.loads(root_audit_text)
+    assert root_audit["status"] == "accepted"
+    assert root_audit["attempt_count"] == 2
+    assert root_audit["contract_repair_count"] == 1
+    assert root_audit["max_contract_repairs"] == 2
+    assert root_audit["service_tier"] == "fast"
+    assert [attempt["status"] for attempt in root_audit["attempts"]] == [
+        "contract_rejected",
+        "accepted",
+    ]
+    first_audit = json.loads((first_dir / "codex_call.json").read_text())
+    second_audit = json.loads((second_dir / "codex_call.json").read_text())
+    assert first_audit["session_action"] == "started"
+    assert "unsupported claim index 0" in first_audit["validation_error"]
+    assert second_audit["session_action"] == "resumed"
+    assert "unsupported claim index 0" in second_audit["repair_for_error"]
+
+    session_file = next((tmp_path / "run" / "scratch" / ".codex_sessions").glob("*.json"))
+    session = json.loads(session_file.read_text())
+    assert session["codex_thread_id"] == "thread-repair-001"
+    assert session["service_tier"] == "fast"
+
+
+def test_codex_adapter_does_not_retry_nonzero_runtime_exit(tmp_path: Path, monkeypatch) -> None:
+    fake_codex = tmp_path / "fake-codex"
+    invocation_log = tmp_path / "fake_invocations.jsonl"
+    _write_failing_fake_codex(fake_codex)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(invocation_log))
+    runtime = CliJsonRuntime(
+        ModelSpec(
+            id="luna-medium-fast",
+            model_id="gpt-5.6-luna",
+            adapter="cli-json",
+            command=[sys.executable, str(ADAPTER)],
+            extra_args=[
+                "--codex",
+                str(fake_codex),
+                "--reasoning-effort",
+                "medium",
+                "--service-tier",
+                "fast",
+                "--max-contract-repairs",
+                "2",
+            ],
+            env_passthrough=["FAKE_CODEX_LOG"],
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="Agent command exited"):
+        runtime.run(
+            _request(
+                tmp_path,
+                index=1,
+                prompt="probe",
+                reasoning_effort="medium",
+            ),
+            ResourceBudget(max_runtime_seconds_per_call=60),
+        )
+
+    assert len(invocation_log.read_text().splitlines()) == 1
+    call_dir = tmp_path / "run" / "calls" / "call_0001"
+    assert not (call_dir / "attempts" / "attempt_0002").exists()
+    audit = json.loads((call_dir / "codex_call.json").read_text())
+    assert audit["status"] == "runtime_error"
+    assert audit["attempt_count"] == 1
+    assert audit["contract_repair_count"] == 0
+    assert audit["returncode"] == 7
 
 
 def test_codex_adapter_rejects_reasoning_effort_mismatch_before_launch(

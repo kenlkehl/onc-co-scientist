@@ -367,6 +367,7 @@ def _load_session(
     session_id: str,
     model_id: str,
     reasoning_effort: str,
+    service_tier: str,
 ) -> str | None:
     if not path.exists():
         return None
@@ -375,6 +376,7 @@ def _load_session(
         "harness_session_sha256": _sha256(session_id),
         "model_id": model_id,
         "reasoning_effort": reasoning_effort,
+        "service_tier": service_tier,
     }
     for key, value in expected.items():
         if payload.get(key) != value:
@@ -392,6 +394,7 @@ def _save_session(
     thread_id: str,
     model_id: str,
     reasoning_effort: str,
+    service_tier: str,
 ) -> None:
     _write_json_atomic(
         path,
@@ -401,6 +404,7 @@ def _save_session(
             "codex_thread_id": thread_id,
             "model_id": model_id,
             "reasoning_effort": reasoning_effort,
+            "service_tier": service_tier,
         },
     )
 
@@ -513,6 +517,7 @@ def _codex_command(
     codex: str,
     model_id: str,
     reasoning_effort: str,
+    service_tier: str,
     workspace: Path,
     scratch_dir: Path,
     schema_path: Path,
@@ -543,6 +548,8 @@ def _codex_command(
         model_id,
         "-c",
         f"model_reasoning_effort={reasoning_effort}",
+        "-c",
+        f'service_tier="{service_tier}"',
         "-c",
         "approval_policy=never",
         "-c",
@@ -585,19 +592,59 @@ def _audit_payload(
     command: list[str],
     model_id: str,
     reasoning_effort: str,
+    service_tier: str,
     session_action: str,
+    prompt: str,
+    prompt_kind: str,
+    attempt_number: int,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "request_id": _required_string(request, "request_id"),
-        "prompt_sha256": _sha256(_required_string(request, "prompt")),
+        "original_prompt_sha256": _sha256(_required_string(request, "prompt")),
+        "prompt_sha256": _sha256(prompt),
+        "prompt_kind": prompt_kind,
+        "attempt_number": attempt_number,
         "model_id": model_id,
         "reasoning_effort": reasoning_effort,
+        "service_tier": service_tier,
         "require_final_answer": _required_bool(request, "require_final_answer"),
         "session_action": session_action,
         "command": command,
         "stdin": "<PROMPT_ON_STDIN>",
     }
+
+
+def _contract_repair_prompt(error: ValueError) -> str:
+    """Ask the same Codex thread to correct only its rejected artifact."""
+
+    return (
+        "The controller rejected your previous structured artifact. Correct that artifact "
+        "in this same session and return one complete replacement matching the supplied "
+        "output schema. Reuse the analysis already completed; do not rerun tools or perform "
+        "new scientific analysis unless correction is impossible without it.\n\n"
+        f"Controller validation error: {type(error).__name__}: {error}\n\n"
+        "In particular, rebuild supported_claim_indices so every entry is a unique "
+        "non-negative integer, is less than len(claims), and refers only to a claim whose "
+        "supported field is true. Return only the corrected structured artifact."
+    )
+
+
+def _copy_attempt_outputs(attempt_dir: Path, call_dir: Path) -> None:
+    """Expose the latest attempt at the legacy call-root paths without losing history."""
+
+    for name in (
+        "codex_agent_artifact.schema.json",
+        "codex_last_message.json",
+        "codex_events.jsonl",
+        "codex_stderr.log",
+    ):
+        source = attempt_dir / name
+        destination = call_dir / name
+        if source.exists():
+            shutil.copy2(source, destination)
+        else:
+            destination.unlink(missing_ok=True)
 
 
 def run_adapter(args: argparse.Namespace) -> AgentResponse:
@@ -650,14 +697,13 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
 
     call_dir = args.output.parent
     call_dir.mkdir(parents=True, exist_ok=True)
-    schema_path = call_dir / "codex_agent_artifact.schema.json"
-    last_message_path = call_dir / "codex_last_message.json"
-    events_path = call_dir / "codex_events.jsonl"
-    stderr_path = call_dir / "codex_stderr.log"
+    attempts_dir = call_dir / "attempts"
+    attempts_dir.mkdir(parents=True, exist_ok=True)
     audit_path = call_dir / "codex_call.json"
     stage_schema = artifact_schema(require_final_answer=require_final_answer)
-    _write_json_atomic(schema_path, stage_schema)
-    last_message_path.unlink(missing_ok=True)
+    output_schema_sha256 = _sha256(
+        json.dumps(stage_schema, sort_keys=True, separators=(",", ":"))
+    )
 
     session_path = _session_record_path(request)
     thread_id = _load_session(
@@ -665,108 +711,400 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
         session_id=session_id,
         model_id=model_id,
         reasoning_effort=args.reasoning_effort,
+        service_tier=args.service_tier,
     )
-    session_action = "resumed" if thread_id is not None else "started"
-    command = _codex_command(
-        codex=args.codex,
-        model_id=model_id,
-        reasoning_effort=args.reasoning_effort,
-        workspace=workspace,
-        scratch_dir=scratch_dir,
-        schema_path=schema_path,
-        last_message_path=last_message_path,
-        read_roots=tuple(dict.fromkeys(read_roots)),
-        shell_environment=shell_environment,
-        thread_id=thread_id,
-    )
-    audit = _audit_payload(
-        request=request,
-        command=command,
-        model_id=model_id,
-        reasoning_effort=args.reasoning_effort,
-        session_action=session_action,
-    )
-    audit["output_schema_sha256"] = _sha256(
-        json.dumps(stage_schema, sort_keys=True, separators=(",", ":"))
-    )
-    _write_json_atomic(audit_path, audit)
+    initial_session_action = "resumed" if thread_id is not None else "started"
+    root_audit: dict[str, Any] = {
+        "schema_version": 2,
+        "request_id": request_id,
+        "prompt_sha256": _sha256(prompt),
+        "model_id": model_id,
+        "reasoning_effort": args.reasoning_effort,
+        "service_tier": args.service_tier,
+        "require_final_answer": require_final_answer,
+        "session_action": initial_session_action,
+        "stdin": "<PROMPT_ON_STDIN>",
+        "output_schema_sha256": output_schema_sha256,
+        "max_contract_repairs": args.max_contract_repairs,
+        "attempt_count": 0,
+        "contract_repair_count": 0,
+        "attempts": [],
+        "status": "starting",
+    }
+    _write_json_atomic(audit_path, root_audit)
 
-    started = time.monotonic()
+    overall_started = time.monotonic()
+    deadline = overall_started + args.timeout_seconds
     child_env = os.environ.copy()
     child_env["TMPDIR"] = str(scratch_dir)
-    try:
-        completed = subprocess.run(
-            command,
-            input=prompt,
-            cwd=workspace,
-            env=child_env,
-            capture_output=True,
-            text=True,
-            timeout=args.timeout_seconds,
-            check=False,
+    total_input_tokens = 0
+    total_output_tokens = 0
+    total_tool_calls = 0
+    all_item_types: set[str] = set()
+    attempt_records: list[dict[str, Any]] = []
+    current_prompt = prompt
+    prior_validation_error: str | None = None
+    artifact: AgentArtifact | None = None
+    raw_text = ""
+    final_command: list[str] = []
+
+    def update_root_audit(status: str, **details: Any) -> None:
+        root_audit.update(
+            {
+                "status": status,
+                "attempt_count": len(attempt_records),
+                "contract_repair_count": sum(
+                    record["prompt_kind"] == "contract_repair"
+                    for record in attempt_records
+                ),
+                "attempts": attempt_records,
+                "command": final_command,
+                "duration_seconds": time.monotonic() - overall_started,
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "tool_calls": total_tool_calls,
+                "item_types": sorted(all_item_types),
+            }
         )
-    except subprocess.TimeoutExpired as exc:
-        duration = time.monotonic() - started
-        stdout = exc.stdout.decode() if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-        stderr = exc.stderr.decode() if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-        events_path.write_text(stdout, encoding="utf-8")
-        stderr_path.write_text(stderr, encoding="utf-8")
-        audit.update({"duration_seconds": duration, "error": "timeout"})
-        _write_json_atomic(audit_path, audit)
-        raise TimeoutError(f"Codex call exceeded {args.timeout_seconds}s.") from exc
+        if thread_id is not None:
+            root_audit["codex_thread_id"] = thread_id
+        root_audit.update(details)
+        _write_json_atomic(audit_path, root_audit)
 
-    duration = time.monotonic() - started
-    events_path.write_text(completed.stdout, encoding="utf-8")
-    stderr_path.write_text(completed.stderr, encoding="utf-8")
-    stats = parse_codex_events(completed.stdout)
-    audit.update(
-        {
-            "returncode": completed.returncode,
-            "duration_seconds": duration,
-            "input_tokens": stats.input_tokens,
-            "output_tokens": stats.output_tokens,
-            "tool_calls": stats.tool_calls,
-            "item_types": list(stats.item_types),
-        }
-    )
-    _write_json_atomic(audit_path, audit)
+    for attempt_number in range(1, args.max_contract_repairs + 2):
+        prompt_kind = "original" if attempt_number == 1 else "contract_repair"
+        attempt_dir = attempts_dir / f"attempt_{attempt_number:04d}"
+        attempt_dir.mkdir(parents=True, exist_ok=True)
+        schema_path = attempt_dir / "codex_agent_artifact.schema.json"
+        last_message_path = attempt_dir / "codex_last_message.json"
+        events_path = attempt_dir / "codex_events.jsonl"
+        stderr_path = attempt_dir / "codex_stderr.log"
+        attempt_audit_path = attempt_dir / "codex_call.json"
+        _write_json_atomic(schema_path, stage_schema)
+        last_message_path.unlink(missing_ok=True)
 
-    if completed.returncode != 0:
-        diagnostic = completed.stderr[-1000:] or completed.stdout[-1000:]
-        raise RuntimeError(f"Codex exited {completed.returncode}: {diagnostic}")
-    if not last_message_path.exists():
-        raise RuntimeError("Codex completed without writing --output-last-message.")
-
-    raw_text = last_message_path.read_text(encoding="utf-8")
-    artifact = _artifact_from_text(raw_text, schema=stage_schema)
-    _validate_artifact_contract(
-        artifact,
-        require_final_answer=require_final_answer,
-    )
-    observed_thread_id = extract_codex_thread_id(completed.stdout)
-    if thread_id is None:
-        if observed_thread_id is None:
-            raise RuntimeError("New Codex call did not emit a persisted thread ID.")
-        thread_id = observed_thread_id
-        _save_session(
-            session_path,
-            session_id=session_id,
-            thread_id=thread_id,
+        attempt_session_action = "resumed" if thread_id is not None else "started"
+        command = _codex_command(
+            codex=args.codex,
             model_id=model_id,
             reasoning_effort=args.reasoning_effort,
+            service_tier=args.service_tier,
+            workspace=workspace,
+            scratch_dir=scratch_dir,
+            schema_path=schema_path,
+            last_message_path=last_message_path,
+            read_roots=tuple(dict.fromkeys(read_roots)),
+            shell_environment=shell_environment,
+            thread_id=thread_id,
         )
-    elif observed_thread_id is not None and observed_thread_id != thread_id:
-        raise RuntimeError("Resumed Codex call emitted a different thread ID.")
+        final_command = command
+        attempt_audit = _audit_payload(
+            request=request,
+            command=command,
+            model_id=model_id,
+            reasoning_effort=args.reasoning_effort,
+            service_tier=args.service_tier,
+            session_action=attempt_session_action,
+            prompt=current_prompt,
+            prompt_kind=prompt_kind,
+            attempt_number=attempt_number,
+        )
+        attempt_audit["output_schema_sha256"] = output_schema_sha256
+        if prior_validation_error is not None:
+            attempt_audit["repair_for_error"] = prior_validation_error
+        attempt_audit["status"] = "running"
+        _write_json_atomic(attempt_audit_path, attempt_audit)
+        _copy_attempt_outputs(attempt_dir, call_dir)
+        update_root_audit("running")
 
-    audit["codex_thread_id"] = thread_id
-    _write_json_atomic(audit_path, audit)
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            events_path.write_text("", encoding="utf-8")
+            stderr_path.write_text("", encoding="utf-8")
+            attempt_audit.update(
+                {
+                    "status": "timeout",
+                    "duration_seconds": 0.0,
+                    "error": "total_timeout_before_launch",
+                }
+            )
+            _write_json_atomic(attempt_audit_path, attempt_audit)
+            _copy_attempt_outputs(attempt_dir, call_dir)
+            attempt_records.append(
+                {
+                    "attempt_number": attempt_number,
+                    "prompt_kind": prompt_kind,
+                    "status": "timeout",
+                    "audit_file": str(attempt_audit_path.relative_to(call_dir)),
+                }
+            )
+            update_root_audit("timeout", error="total_timeout_before_launch")
+            raise TimeoutError(
+                f"Codex call exhausted its total {args.timeout_seconds}s deadline."
+            )
+
+        attempt_started = time.monotonic()
+        try:
+            completed = subprocess.run(
+                command,
+                input=current_prompt,
+                cwd=workspace,
+                env=child_env,
+                capture_output=True,
+                text=True,
+                timeout=remaining_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            attempt_duration = time.monotonic() - attempt_started
+            stdout = (
+                exc.stdout.decode()
+                if isinstance(exc.stdout, bytes)
+                else (exc.stdout or "")
+            )
+            stderr = (
+                exc.stderr.decode()
+                if isinstance(exc.stderr, bytes)
+                else (exc.stderr or "")
+            )
+            events_path.write_text(stdout, encoding="utf-8")
+            stderr_path.write_text(stderr, encoding="utf-8")
+            stats = parse_codex_events(stdout)
+            total_input_tokens += stats.input_tokens
+            total_output_tokens += stats.output_tokens
+            total_tool_calls += stats.tool_calls
+            all_item_types.update(stats.item_types)
+            attempt_audit.update(
+                {
+                    "status": "timeout",
+                    "duration_seconds": attempt_duration,
+                    "input_tokens": stats.input_tokens,
+                    "output_tokens": stats.output_tokens,
+                    "tool_calls": stats.tool_calls,
+                    "item_types": list(stats.item_types),
+                    "error": "timeout",
+                }
+            )
+            _write_json_atomic(attempt_audit_path, attempt_audit)
+            _copy_attempt_outputs(attempt_dir, call_dir)
+            attempt_records.append(
+                {
+                    "attempt_number": attempt_number,
+                    "prompt_kind": prompt_kind,
+                    "status": "timeout",
+                    "duration_seconds": attempt_duration,
+                    "input_tokens": stats.input_tokens,
+                    "output_tokens": stats.output_tokens,
+                    "tool_calls": stats.tool_calls,
+                    "audit_file": str(attempt_audit_path.relative_to(call_dir)),
+                }
+            )
+            update_root_audit("timeout", error="timeout")
+            raise TimeoutError(
+                f"Codex call exceeded its total {args.timeout_seconds}s deadline."
+            ) from exc
+
+        attempt_duration = time.monotonic() - attempt_started
+        events_path.write_text(completed.stdout, encoding="utf-8")
+        stderr_path.write_text(completed.stderr, encoding="utf-8")
+        stats = parse_codex_events(completed.stdout)
+        total_input_tokens += stats.input_tokens
+        total_output_tokens += stats.output_tokens
+        total_tool_calls += stats.tool_calls
+        all_item_types.update(stats.item_types)
+        attempt_audit.update(
+            {
+                "returncode": completed.returncode,
+                "duration_seconds": attempt_duration,
+                "input_tokens": stats.input_tokens,
+                "output_tokens": stats.output_tokens,
+                "tool_calls": stats.tool_calls,
+                "item_types": list(stats.item_types),
+            }
+        )
+
+        if completed.returncode != 0:
+            attempt_audit.update({"status": "runtime_error", "error": "nonzero_exit"})
+            _write_json_atomic(attempt_audit_path, attempt_audit)
+            _copy_attempt_outputs(attempt_dir, call_dir)
+            attempt_records.append(
+                {
+                    "attempt_number": attempt_number,
+                    "prompt_kind": prompt_kind,
+                    "status": "runtime_error",
+                    "returncode": completed.returncode,
+                    "duration_seconds": attempt_duration,
+                    "input_tokens": stats.input_tokens,
+                    "output_tokens": stats.output_tokens,
+                    "tool_calls": stats.tool_calls,
+                    "audit_file": str(attempt_audit_path.relative_to(call_dir)),
+                }
+            )
+            update_root_audit(
+                "runtime_error",
+                returncode=completed.returncode,
+                error="nonzero_exit",
+            )
+            diagnostic = completed.stderr[-1000:] or completed.stdout[-1000:]
+            raise RuntimeError(f"Codex exited {completed.returncode}: {diagnostic}")
+
+        observed_thread_id = extract_codex_thread_id(completed.stdout)
+        if thread_id is None:
+            if observed_thread_id is None:
+                attempt_audit.update(
+                    {"status": "runtime_error", "error": "missing_thread_id"}
+                )
+                _write_json_atomic(attempt_audit_path, attempt_audit)
+                _copy_attempt_outputs(attempt_dir, call_dir)
+                attempt_records.append(
+                    {
+                        "attempt_number": attempt_number,
+                        "prompt_kind": prompt_kind,
+                        "status": "runtime_error",
+                        "returncode": completed.returncode,
+                        "duration_seconds": attempt_duration,
+                        "input_tokens": stats.input_tokens,
+                        "output_tokens": stats.output_tokens,
+                        "tool_calls": stats.tool_calls,
+                        "audit_file": str(attempt_audit_path.relative_to(call_dir)),
+                    }
+                )
+                update_root_audit("runtime_error", error="missing_thread_id")
+                raise RuntimeError("New Codex call did not emit a persisted thread ID.")
+            thread_id = observed_thread_id
+            _save_session(
+                session_path,
+                session_id=session_id,
+                thread_id=thread_id,
+                model_id=model_id,
+                reasoning_effort=args.reasoning_effort,
+                service_tier=args.service_tier,
+            )
+        elif observed_thread_id is not None and observed_thread_id != thread_id:
+            attempt_audit.update(
+                {"status": "runtime_error", "error": "thread_id_mismatch"}
+            )
+            _write_json_atomic(attempt_audit_path, attempt_audit)
+            _copy_attempt_outputs(attempt_dir, call_dir)
+            attempt_records.append(
+                {
+                    "attempt_number": attempt_number,
+                    "prompt_kind": prompt_kind,
+                    "status": "runtime_error",
+                    "returncode": completed.returncode,
+                    "duration_seconds": attempt_duration,
+                    "input_tokens": stats.input_tokens,
+                    "output_tokens": stats.output_tokens,
+                    "tool_calls": stats.tool_calls,
+                    "audit_file": str(attempt_audit_path.relative_to(call_dir)),
+                }
+            )
+            update_root_audit("runtime_error", error="thread_id_mismatch")
+            raise RuntimeError("Resumed Codex call emitted a different thread ID.")
+
+        attempt_audit["codex_thread_id"] = thread_id
+        if not last_message_path.exists():
+            attempt_audit.update(
+                {"status": "runtime_error", "error": "missing_last_message"}
+            )
+            _write_json_atomic(attempt_audit_path, attempt_audit)
+            _copy_attempt_outputs(attempt_dir, call_dir)
+            attempt_records.append(
+                {
+                    "attempt_number": attempt_number,
+                    "prompt_kind": prompt_kind,
+                    "status": "runtime_error",
+                    "returncode": completed.returncode,
+                    "duration_seconds": attempt_duration,
+                    "input_tokens": stats.input_tokens,
+                    "output_tokens": stats.output_tokens,
+                    "tool_calls": stats.tool_calls,
+                    "audit_file": str(attempt_audit_path.relative_to(call_dir)),
+                }
+            )
+            update_root_audit("runtime_error", error="missing_last_message")
+            raise RuntimeError("Codex completed without writing --output-last-message.")
+
+        raw_text = last_message_path.read_text(encoding="utf-8")
+        try:
+            artifact = _artifact_from_text(raw_text, schema=stage_schema)
+            _validate_artifact_contract(
+                artifact,
+                require_final_answer=require_final_answer,
+            )
+        except ValueError as exc:
+            prior_validation_error = f"{type(exc).__name__}: {exc}"
+            attempt_audit.update(
+                {
+                    "status": "contract_rejected",
+                    "validation_error": prior_validation_error,
+                }
+            )
+            _write_json_atomic(attempt_audit_path, attempt_audit)
+            _copy_attempt_outputs(attempt_dir, call_dir)
+            attempt_records.append(
+                {
+                    "attempt_number": attempt_number,
+                    "prompt_kind": prompt_kind,
+                    "status": "contract_rejected",
+                    "returncode": completed.returncode,
+                    "duration_seconds": attempt_duration,
+                    "input_tokens": stats.input_tokens,
+                    "output_tokens": stats.output_tokens,
+                    "tool_calls": stats.tool_calls,
+                    "validation_error": prior_validation_error,
+                    "audit_file": str(attempt_audit_path.relative_to(call_dir)),
+                }
+            )
+            if attempt_number <= args.max_contract_repairs:
+                update_root_audit(
+                    "repair_pending",
+                    returncode=completed.returncode,
+                    last_contract_error=prior_validation_error,
+                )
+                current_prompt = _contract_repair_prompt(exc)
+                continue
+            update_root_audit(
+                "contract_rejected",
+                returncode=completed.returncode,
+                error="contract_repair_limit_exhausted",
+                last_contract_error=prior_validation_error,
+            )
+            raise ValueError(
+                "Codex artifact remained invalid after "
+                f"{attempt_number} attempt(s): {prior_validation_error}"
+            ) from exc
+
+        attempt_audit["status"] = "accepted"
+        _write_json_atomic(attempt_audit_path, attempt_audit)
+        _copy_attempt_outputs(attempt_dir, call_dir)
+        attempt_records.append(
+            {
+                "attempt_number": attempt_number,
+                "prompt_kind": prompt_kind,
+                "status": "accepted",
+                "returncode": completed.returncode,
+                "duration_seconds": attempt_duration,
+                "input_tokens": stats.input_tokens,
+                "output_tokens": stats.output_tokens,
+                "tool_calls": stats.tool_calls,
+                "audit_file": str(attempt_audit_path.relative_to(call_dir)),
+            }
+        )
+        update_root_audit("accepted", returncode=completed.returncode)
+        break
+
+    if artifact is None or thread_id is None:
+        raise RuntimeError("Codex adapter ended without an accepted artifact and session.")
+
+    duration = time.monotonic() - overall_started
     return AgentResponse(
         request_id=request_id,
         artifact=artifact,
         usage=AgentUsage(
-            input_tokens=stats.input_tokens,
-            output_tokens=stats.output_tokens,
-            tool_calls=stats.tool_calls,
+            input_tokens=total_input_tokens,
+            output_tokens=total_output_tokens,
+            tool_calls=total_tool_calls,
             duration_seconds=duration,
         ),
         raw_text=raw_text,
@@ -775,12 +1113,19 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
             "codex": args.codex,
             "model_id": model_id,
             "reasoning_effort": args.reasoning_effort,
-            "session_action": session_action,
+            "service_tier": args.service_tier,
+            "session_action": initial_session_action,
             "codex_thread_id": thread_id,
-            "events_file": events_path.name,
-            "stderr_file": stderr_path.name,
+            "attempt_count": len(attempt_records),
+            "contract_repair_count": sum(
+                record["prompt_kind"] == "contract_repair"
+                for record in attempt_records
+            ),
+            "attempt_audit_files": [record["audit_file"] for record in attempt_records],
+            "events_file": "codex_events.jsonl",
+            "stderr_file": "codex_stderr.log",
             "audit_file": audit_path.name,
-            "item_types": list(stats.item_types),
+            "item_types": sorted(all_item_types),
         },
     )
 
@@ -794,6 +1139,21 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--reasoning-effort",
         choices=("low", "medium", "high", "xhigh", "max"),
         default="low",
+    )
+    parser.add_argument(
+        "--service-tier",
+        choices=("default", "fast"),
+        default="default",
+        help="Codex service tier; 'fast' requests priority processing.",
+    )
+    parser.add_argument(
+        "--max-contract-repairs",
+        type=int,
+        default=0,
+        help=(
+            "Maximum same-session correction turns after JSON/schema/semantic "
+            "artifact validation failures."
+        ),
     )
     parser.add_argument(
         "--read-root",
@@ -814,6 +1174,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.timeout_seconds < 1:
         parser.error("--timeout-seconds must be positive")
+    if args.max_contract_repairs < 0:
+        parser.error("--max-contract-repairs must be non-negative")
     return args
 
 

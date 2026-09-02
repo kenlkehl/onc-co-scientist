@@ -357,6 +357,10 @@ def test_experiment_writes_deterministic_json_csv_and_markdown(tmp_path: Path) -
         _record(3, "critique", _artifact("critique", EXACT_PREDICATES)),
         _record(4, "synthesis", _artifact("final", EXACT_PREDICATES)),
     ]
+    artifacts[-1]["runtime_metadata"] = {
+        "attempt_count": 2,
+        "contract_repair_count": 1,
+    }
     (run_dir / "run.json").write_text(json.dumps(run), encoding="utf-8")
     (run_dir / "artifacts.json").write_text(json.dumps(artifacts), encoding="utf-8")
 
@@ -370,6 +374,10 @@ def test_experiment_writes_deterministic_json_csv_and_markdown(tmp_path: Path) -
     assert first["by_workflow"][0]["analysis_to_final_survival_rate"] == 1.0
     assert first["by_workflow"][0]["final_supported_exact_rate"] == 1.0
     assert first["by_workflow"][0]["supported_final_exact_per_1k_tokens"] > 0
+    assert first["by_workflow"][0]["total_agent_calls"] == 4
+    assert first["by_workflow"][0]["total_generation_attempts"] == 5
+    assert first["by_workflow"][0]["total_contract_repairs"] == 1
+    assert first["runs"][0]["usage"]["calls_with_contract_repair"] == 1
     assert (out / "aggregate.csv").is_file()
     assert (out / "run_scores.csv").is_file()
     assert (out / "iteration_scores.csv").is_file()

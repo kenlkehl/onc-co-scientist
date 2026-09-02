@@ -219,8 +219,20 @@ def _one_flag_value(arguments: list[str], flag: str) -> str:
     return str(arguments[position + 1])
 
 
+def _optional_flag_value(arguments: list[str], flag: str, *, default: str) -> str:
+    positions = [index for index, value in enumerate(arguments) if value == flag]
+    if not positions:
+        return default
+    if len(positions) != 1:
+        raise ValueError(f"Expected at most one {flag} argument; found {len(positions)}.")
+    position = positions[0]
+    if position + 1 >= len(arguments):
+        raise ValueError(f"Argument {flag} has no value.")
+    return str(arguments[position + 1])
+
+
 def _locked_model_manifest(config: dict[str, Any]) -> dict[str, Any]:
-    """Verify and summarize the model, reasoning, and nested timeout locks."""
+    """Verify and summarize model, reasoning, tier, repair, and timeout locks."""
 
     models = config.get("models")
     if not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict):
@@ -239,11 +251,29 @@ def _locked_model_manifest(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "Model reasoning_effort does not match the adapter --reasoning-effort value."
         )
+    service_tier = _optional_flag_value(
+        extra_args,
+        "--service-tier",
+        default="default",
+    )
+    if service_tier not in {"default", "fast"}:
+        raise ValueError(f"Unsupported adapter service tier: {service_tier!r}.")
     try:
+        max_contract_repairs = int(
+            _optional_flag_value(
+                extra_args,
+                "--max-contract-repairs",
+                default="0",
+            )
+        )
         adapter_timeout = int(_one_flag_value(extra_args, "--timeout-seconds"))
         harness_timeout = int(config["budget"]["max_runtime_seconds_per_call"])
     except (KeyError, TypeError, ValueError) as exc:
-        raise ValueError("The live model must have integer adapter and harness timeouts.") from exc
+        raise ValueError(
+            "The live model must have integer repair and timeout limits."
+        ) from exc
+    if max_contract_repairs < 0:
+        raise ValueError("The contract-repair limit must be non-negative.")
     if not 0 < adapter_timeout < harness_timeout:
         raise ValueError("The adapter timeout must be positive and precede the harness timeout.")
     return {
@@ -251,6 +281,8 @@ def _locked_model_manifest(config: dict[str, Any]) -> dict[str, Any]:
         "id": str(model.get("model_id", "")),
         "adapter": str(model["adapter"]),
         "reasoning_effort": reasoning_effort,
+        "service_tier": service_tier,
+        "max_contract_repairs": max_contract_repairs,
         "adapter_timeout_seconds": adapter_timeout,
         "harness_timeout_seconds": harness_timeout,
     }
@@ -348,12 +380,14 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     smoke["output_root"] = str(args.smoke_output_root.resolve())
     smoke["iteration_policy"]["iterations"] = 1
     smoke["replicates"] = 1
+    smoke["max_parallel"] = 2
     smoke["budget"]["max_agent_calls"] = 12
     stub = json.loads(json.dumps(main))
     stub["experiment_id"] = args.stub_experiment_id
     stub["output_root"] = str(args.stub_output_root.resolve())
     stub["iteration_policy"]["iterations"] = 2
     stub["replicates"] = 1
+    stub["max_parallel"] = 2
     stub["budget"]["max_agent_calls"] = 24
     stub["budget"]["max_runtime_seconds_per_call"] = 60
     stub["models"] = [{"id": "stub", "model_id": "stub", "adapter": "stub"}]

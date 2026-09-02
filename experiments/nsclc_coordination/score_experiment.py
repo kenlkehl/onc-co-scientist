@@ -27,7 +27,7 @@ from typing import Any, Literal
 
 RecoveryLevel = Literal["none", "component", "near", "exact"]
 
-SCORER_VERSION = "nsclc-semantic-workflow-grid-v2"
+SCORER_VERSION = "nsclc-semantic-workflow-grid-v3"
 ASSOCIATION_ID = "buried_sotorasib_krasg12c_alkwt_brca2wt_male"
 DATASET_ID = "ds001_nsclc"
 EXPOSURE = "treatment_sotorasib"
@@ -1100,6 +1100,17 @@ def score_run(
             malformed = malformed or artifact.get("final_answer") is None
         elif artifact.get("final_answer") is not None:
             malformed = True
+        raw_runtime_metadata = record.get("runtime_metadata", {})
+        runtime_metadata = (
+            raw_runtime_metadata if isinstance(raw_runtime_metadata, Mapping) else {}
+        )
+        generation_attempts = int(
+            _finite_number(runtime_metadata.get("attempt_count")) or 1
+        )
+        contract_repairs = int(
+            _finite_number(runtime_metadata.get("contract_repair_count"))
+            or max(0, generation_attempts - 1)
+        )
         scored_all.append(
             {
                 "call_index": _call_index(record, fallback),
@@ -1121,6 +1132,8 @@ def score_run(
                 "round": record.get("round"),
                 "position_kind": record.get("position_kind"),
                 "malformed": malformed or record.get("artifact_valid") is False,
+                "generation_attempts": generation_attempts,
+                "contract_repairs": contract_repairs,
                 "usage": _usage(record),
                 "score": artifact_score,
             }
@@ -1212,6 +1225,9 @@ def score_run(
     total_tokens = total_usage["input_tokens"] + total_usage["output_tokens"]
     successful_calls = int(_finite_number(run.get("agent_calls")) or len(scored_all))
     calls = int(_finite_number(run.get("call_attempts")) or successful_calls)
+    generation_attempts = sum(item["generation_attempts"] for item in scored_all)
+    contract_repairs = sum(item["contract_repairs"] for item in scored_all)
+    calls_with_contract_repair = sum(item["contract_repairs"] > 0 for item in scored_all)
     final_exact_recovered = int(final_supported_exact)
     final_near_or_exact_recovered = int(final_supported)
     tokens_to_first = None
@@ -1348,6 +1364,9 @@ def score_run(
             "agent_calls": calls,
             "successful_agent_calls": successful_calls,
             "call_attempts": calls,
+            "generation_attempts": generation_attempts,
+            "contract_repairs": contract_repairs,
+            "calls_with_contract_repair": calls_with_contract_repair,
             "tokens_to_first_recovery": (
                 int(tokens_to_first) if tokens_to_first is not None else None
             ),
@@ -1471,6 +1490,16 @@ def _aggregate_group(
     total_output_tokens = sum(run["usage"]["output_tokens"] for run in group)
     total_tool_calls = sum(run["usage"]["tool_calls"] for run in group)
     total_duration_seconds = sum(run["usage"]["duration_seconds"] for run in group)
+    total_generation_attempts = sum(
+        int(run["usage"].get("generation_attempts", run["usage"]["agent_calls"]))
+        for run in group
+    )
+    total_contract_repairs = sum(
+        int(run["usage"].get("contract_repairs", 0)) for run in group
+    )
+    calls_with_contract_repair = sum(
+        int(run["usage"].get("calls_with_contract_repair", 0)) for run in group
+    )
 
     return {
         "semantic_condition": semantic_condition,
@@ -1510,6 +1539,9 @@ def _aggregate_group(
         "total_tokens": total_tokens,
         "total_output_tokens": total_output_tokens,
         "total_agent_calls": total_calls,
+        "total_generation_attempts": total_generation_attempts,
+        "total_contract_repairs": total_contract_repairs,
+        "calls_with_contract_repair": calls_with_contract_repair,
         "total_tool_calls": total_tool_calls,
         "total_duration_seconds": total_duration_seconds,
         "timeout_n": sum(bool(run.get("timed_out")) for run in group),
@@ -1721,8 +1753,9 @@ def _markdown_report(aggregate: Mapping[str, Any]) -> str:
         f"Runs scored: **{aggregate['n_runs']}**.",
         "",
         "| Semantic condition | Workflow | Runs | Ever exact synthesis | Terminal exact | "
-        "Ever near/exact | Timeouts | Malformed | Calls | Output tokens | Exact /1k output |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "Ever near/exact | Timeouts | Malformed | Calls | Turns | Repairs | Output tokens | "
+        "Exact /1k output |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in aggregate["by_cell"]:
         lines.append(
@@ -1738,6 +1771,8 @@ def _markdown_report(aggregate: Mapping[str, Any]) -> str:
                     str(row["timeout_n"]),
                     str(row["malformed_output_n"]),
                     str(row["total_agent_calls"]),
+                    str(row["total_generation_attempts"]),
+                    str(row["total_contract_repairs"]),
                     _fmt(row["total_output_tokens"]),
                     _fmt(row["supported_ever_exact_per_1k_output_tokens"]),
                 ]
@@ -1756,8 +1791,9 @@ def _markdown_report(aggregate: Mapping[str, Any]) -> str:
             "- Support requires a directionally compatible quantitative effect, uncertainty "
             "or p-value, and subgroup, exposed, and comparator sample sizes.",
             "- Deliberative chairs are checkpoints; peer artifacts are diagnostics.",
-            "- The comparison is native-resource. Calls, output tokens, tool calls, and wall "
-            "time are reported rather than treated as matched.",
+            "- The comparison is native-resource. Harness calls, generation/repair turns, "
+            "output tokens, tool calls, and wall time are reported rather than treated as "
+            "matched.",
             "- With five planned replicates per cell, all intervals and paired contrasts are "
             "descriptive; no confirmatory workflow-superiority p-values are reported.",
             "",
@@ -1827,6 +1863,8 @@ def write_outputs(aggregate: Mapping[str, Any], out_dir: Path) -> dict[str, Path
                     "call_index": checkpoint["call_index"],
                     "terminal": checkpoint["terminal"],
                     "malformed": checkpoint["malformed"],
+                    "generation_attempts": checkpoint["generation_attempts"],
+                    "contract_repairs": checkpoint["contract_repairs"],
                     "recovery_level": score["recovery_level"],
                     "supported_recovery_level": score["supported_recovery_level"],
                     "target_supported": score["target_supported"],
@@ -1845,6 +1883,9 @@ def write_outputs(aggregate: Mapping[str, Any], out_dir: Path) -> dict[str, Path
                 "workflow_id",
                 "n_runs",
                 "total_agent_calls",
+                "total_generation_attempts",
+                "total_contract_repairs",
+                "calls_with_contract_repair",
                 "total_output_tokens",
                 "total_tool_calls",
                 "total_duration_seconds",
