@@ -1,0 +1,145 @@
+schema_version: "1"
+experiment_id: nsclc-semantic-workflow-grid-qwen38-27b-vllm-v1-20x5
+description: >-
+  Prospective independent 2 x 3 grid testing named versus masked feature
+  semantics across persistent, sequential, and deliberative workflows with
+  Qwen3.8-27B served by vLLM, an adapter-controlled sandboxed Python loop,
+  bounded API and contract retries, six-way main concurrency, and four-hour
+  total per-call ceilings.
+output_root: __MAIN_OUTPUT_ROOT__
+workspace_strategy: copy
+schedule_seed: 20260831
+
+iteration_policy:
+  iterations: 20
+  completion_mode: fixed
+
+tasks:
+  - id: ds001-nsclc-named
+    semantic_condition: named
+    public_workspace: __NAMED_PUBLIC_WORKSPACE__
+    private_evaluation_path: __NAMED_PRIVATE_MANIFEST__
+    prompt: >-
+      Using only the public dataset and description, search the four identified
+      candidate treatment/exposure indicators systematically for one- and
+      multi-feature treatment-effect heterogeneity in pfs_months. Consider all
+      remaining features as possible modifiers or covariates. Distinguish
+      interactions from treatment main effects, control multiplicity, quantify
+      uncertainty, report subgroup/exposed/comparator sample sizes, retain null
+      findings, and do not assume how many signals exist or which exposure or
+      subgroup is involved.
+  - id: ds001-nsclc-masked
+    semantic_condition: masked
+    public_workspace: __MASKED_PUBLIC_WORKSPACE__
+    private_evaluation_path: __MASKED_PRIVATE_MANIFEST__
+    prompt: >-
+      Using only the public dataset and description, search the four identified
+      candidate treatment/exposure indicators systematically for one- and
+      multi-feature treatment-effect heterogeneity in pfs_months. Consider all
+      remaining features as possible modifiers or covariates. Distinguish
+      interactions from treatment main effects, control multiplicity, quantify
+      uncertainty, report subgroup/exposed/comparator sample sizes, retain null
+      findings, and do not assume how many signals exist or which exposure or
+      subgroup is involved.
+
+private_evaluator_assets:
+  column_mapping: __COLUMN_MAPPING__
+
+models:
+  - id: qwen38-27b-vllm-controller-v1
+    model_id: Qwen/Qwen3.8-27B
+    adapter: cli-json
+    command:
+      - __LOCAL_PYTHON__
+      - __VLLM_ADAPTER__
+    extra_args:
+      - --base-url
+      - __VLLM_BASE_URL__
+      - --api-key
+      - EMPTY
+      - --analysis-python
+      - __LOCAL_PYTHON__
+      - --bwrap
+      - __BWRAP__
+      - --timeout-seconds
+      - "14380"
+      - --api-timeout-seconds
+      - "1800"
+      - --python-timeout-seconds
+      - "300"
+      - --max-api-retries
+      - "2"
+      - --max-contract-repairs
+      - "2"
+      - --max-tool-calls
+      - "32"
+      - --min-tool-calls
+      - "1"
+      - --max-controller-decisions
+      - "40"
+      - --max-tool-output-chars
+      - "40000"
+      - --max-history-chars
+      - "180000"
+      - --max-tokens
+      - "16384"
+      - --temperature
+      - "0.2"
+      - --top-p
+      - "0.95"
+
+workflows:
+  - id: persistent
+    mode: persistent
+    safeguards: &common_safeguards
+      preliminary_commitment: true
+      evidence_ledger: true
+      minority_report: true
+      independent_rerun: false
+  - id: sequential
+    mode: sequential
+    safeguards: *common_safeguards
+  - id: deliberative
+    mode: deliberative
+    agents_per_stage: 2
+    deliberation_rounds: 1
+    safeguards: *common_safeguards
+
+stages:
+  - id: hypothesis_generation
+    role: hypothesis scientist
+    instructions: >-
+      Inspect the public schema and data, maintain a cumulative search ledger,
+      and generate a ranked, falsifiable next set of candidate
+      treatment-by-subgroup hypotheses. State direction, predicates, outcome,
+      alternatives, analyses already attempted, and how each candidate will be
+      distinguished from a treatment main effect.
+  - id: analysis
+    role: analysis scientist
+    instructions: >-
+      Execute a systematic, reproducible analysis of the current candidates and
+      viable alternatives. Report signed effects, uncertainty, subgroup,
+      exposed, and comparator sample sizes, multiplicity handling, diagnostics,
+      out-of-subgroup contrasts, and null findings. Populate structured claims
+      only when supported by the analysis.
+  - id: critique
+    role: critical reviewer
+    instructions: >-
+      Audit all prior claims and code for leakage, data errors, confounding,
+      sparse cells, multiple testing, overfitting, sign mistakes, and failure to
+      distinguish interaction from main effect. Reanalyze disputed findings and
+      clearly retract, refine, rescue, or redirect the next iteration.
+  - id: synthesis
+    role: synthesis scientist
+    instructions: >-
+      Produce the iteration checkpoint using only reproducible evidence.
+      Preserve exact subgroup predicates and quantitative support, distinguish
+      supported, negative, and unresolved findings, select the strongest
+      supported claim in final_answer, and provide a self-contained handoff that
+      directs the next iteration without erasing prior null results.
+
+replicates: 5
+max_parallel: 6
+budget:
+  max_agent_calls: 240
+  max_runtime_seconds_per_call: 14400

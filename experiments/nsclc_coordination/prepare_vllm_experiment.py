@@ -1,0 +1,359 @@
+#!/usr/bin/env python3
+"""Verify, isolate, and resolve the Qwen3.8-27B vLLM NSCLC grid."""
+
+from __future__ import annotations
+
+import argparse
+import importlib.metadata
+import json
+import platform
+import re
+import shutil
+import sys
+import urllib.request
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+try:
+    from experiments.nsclc_coordination import prepare_experiment as common
+except ModuleNotFoundError:  # Direct execution puts this directory on sys.path.
+    import prepare_experiment as common  # type: ignore[no-redef]
+
+
+def _fetch_models(base_url: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        base_url.rstrip("/") + "/models",
+        headers={"Accept": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310
+        payload = json.load(response)
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        raise ValueError("vLLM /models response does not have the expected object shape.")
+    return payload
+
+
+def _flag(extra_args: list[str], name: str) -> str:
+    return common._one_flag_value(extra_args, name)
+
+
+def _locked_model_manifest(
+    config: dict[str, Any],
+    *,
+    python: Path,
+    adapter: Path,
+    bwrap: Path,
+    base_url: str,
+) -> dict[str, Any]:
+    models = config.get("models")
+    if not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict):
+        raise ValueError("The vLLM grid requires exactly one model profile.")
+    model = models[0]
+    if model.get("adapter") != "cli-json":
+        raise ValueError("The vLLM grid requires the generic cli-json runtime boundary.")
+    if model.get("model_id") != "Qwen/Qwen3.8-27B":
+        raise ValueError("The vLLM grid is locked to Qwen/Qwen3.8-27B.")
+    if model.get("reasoning_effort") is not None:
+        raise ValueError("The local Qwen profile must not claim a Codex reasoning effort.")
+    command = model.get("command")
+    if command != [str(python), str(adapter)]:
+        raise ValueError("The vLLM adapter command does not match the local runtime lock.")
+    extra_args = model.get("extra_args")
+    if not isinstance(extra_args, list) or not all(isinstance(item, str) for item in extra_args):
+        raise ValueError("The vLLM model profile must provide string extra_args.")
+    expected = {
+        "--base-url": base_url,
+        "--api-key": "EMPTY",
+        "--analysis-python": str(python),
+        "--bwrap": str(bwrap),
+        "--timeout-seconds": "14380",
+        "--api-timeout-seconds": "1800",
+        "--python-timeout-seconds": "300",
+        "--max-api-retries": "2",
+        "--max-contract-repairs": "2",
+        "--max-tool-calls": "32",
+        "--min-tool-calls": "1",
+        "--max-controller-decisions": "40",
+        "--max-tool-output-chars": "40000",
+        "--max-history-chars": "180000",
+        "--max-tokens": "16384",
+        "--temperature": "0.2",
+        "--top-p": "0.95",
+    }
+    observed = {flag: _flag(extra_args, flag) for flag in expected}
+    if observed != expected:
+        raise ValueError(f"vLLM runtime lock mismatch: expected={expected}, observed={observed}")
+    harness_timeout = int(config["budget"]["max_runtime_seconds_per_call"])
+    if int(observed["--timeout-seconds"]) >= harness_timeout:
+        raise ValueError("The adapter timeout must precede the harness timeout.")
+    return {
+        "profile": str(model.get("id", "")),
+        "id": str(model["model_id"]),
+        "adapter": "vllm-cli-json",
+        "base_url": base_url,
+        "sampling": {
+            "temperature": float(observed["--temperature"]),
+            "top_p": float(observed["--top-p"]),
+            "max_tokens": int(observed["--max-tokens"]),
+            "seed_policy": "sha256(request_id,prompt_hash,turn,schema)",
+        },
+        "limits": {
+            "max_api_retries": int(observed["--max-api-retries"]),
+            "max_contract_repairs": int(observed["--max-contract-repairs"]),
+            "min_tool_calls": int(observed["--min-tool-calls"]),
+            "max_tool_calls": int(observed["--max-tool-calls"]),
+            "max_controller_decisions": int(observed["--max-controller-decisions"]),
+            "max_tool_output_chars": int(observed["--max-tool-output-chars"]),
+            "max_history_chars": int(observed["--max-history-chars"]),
+            "python_timeout_seconds": int(observed["--python-timeout-seconds"]),
+            "api_timeout_seconds": float(observed["--api-timeout-seconds"]),
+            "adapter_timeout_seconds": int(observed["--timeout-seconds"]),
+            "harness_timeout_seconds": harness_timeout,
+        },
+    }
+
+
+def _machine_manifest(
+    *,
+    repo: Path,
+    configs: dict[str, Path],
+    source_paths: dict[str, Path],
+    schedule_seed: int,
+    model: dict[str, Any],
+    endpoint_models: dict[str, Any],
+    adapter: Path,
+    bwrap: Path,
+) -> dict[str, Any]:
+    git_status = common._run(
+        ["git", "-c", f"safe.directory={repo}", "status", "--short"], cwd=repo
+    )
+    packages = {
+        distribution.metadata["Name"]: distribution.version
+        for distribution in importlib.metadata.distributions()
+        if distribution.metadata["Name"]
+    }
+    return {
+        "schema_version": "1",
+        "utc_start_time": datetime.now(UTC).isoformat(timespec="seconds"),
+        "git": {
+            "commit": common._run(
+                ["git", "-c", f"safe.directory={repo}", "rev-parse", "HEAD"], cwd=repo
+            ),
+            "pinned_source_commit": "4a8fd25f104869d9209ec010bac504b8a91a4964",
+            "status": git_status,
+            "clean": not bool(git_status),
+        },
+        "host": {
+            "operating_system": platform.platform(),
+            "architecture": platform.machine(),
+            "python": sys.version,
+            "python_executable": str(common._active_python_executable()),
+            "packages": dict(sorted(packages.items(), key=lambda item: item[0].lower())),
+        },
+        "runtime": {
+            "adapter_path": str(adapter),
+            "adapter_sha256": common._sha256(adapter),
+            "bubblewrap_path": str(bwrap),
+            "bubblewrap_version": common._run([str(bwrap), "--version"], cwd=repo),
+            "bubblewrap_sha256": common._sha256(bwrap),
+        },
+        "endpoint_models": endpoint_models,
+        "model": model,
+        "schedule_seed": schedule_seed,
+        "config_sha256": {label: common._sha256(path) for label, path in configs.items()},
+        "substrate_sha256": {
+            label: common._sha256(path) for label, path in source_paths.items()
+        },
+    }
+
+
+def prepare(args: argparse.Namespace) -> dict[str, Any]:
+    repo = args.repo.resolve(strict=True)
+    source_paths = common._source_paths(repo)
+    observed = {label: common._sha256(path) for label, path in source_paths.items()}
+    if observed != common.EXPECTED_HASHES:
+        raise ValueError(f"Pinned source hash mismatch: {observed}")
+    mapping = json.loads(source_paths["column_mapping"].read_text(encoding="utf-8"))
+    if not isinstance(mapping, dict):
+        raise ValueError("column_mapping.json must contain one object.")
+    workspaces = common._prepare_public_workspaces(
+        paths=source_paths,
+        public_root=args.public_root.resolve(),
+        mapping={str(key): str(value) for key, value in mapping.items()},
+    )
+
+    python = common._active_python_executable()
+    adapter = (repo / "scripts" / "vllm_cli_json_adapter.py").resolve(strict=True)
+    bwrap_raw = shutil.which(args.bwrap)
+    if bwrap_raw is None:
+        raise ValueError(f"bubblewrap executable not found: {args.bwrap}")
+    bwrap = Path(bwrap_raw).resolve(strict=True)
+    endpoint_models = _fetch_models(args.base_url)
+    served_ids = {
+        model_id
+        for item in endpoint_models["data"]
+        if isinstance(item, dict) and isinstance((model_id := item.get("id")), str)
+    }
+    if args.model_id not in served_ids:
+        raise ValueError(f"Expected model {args.model_id!r}; endpoint serves {sorted(served_ids)}")
+
+    template = yaml.safe_load(args.template.read_text(encoding="utf-8"))
+    replacements = {
+        "__MAIN_OUTPUT_ROOT__": str(args.main_output_root.resolve()),
+        "__NAMED_PUBLIC_WORKSPACE__": str(workspaces["named"].resolve()),
+        "__MASKED_PUBLIC_WORKSPACE__": str(workspaces["masked"].resolve()),
+        "__NAMED_PRIVATE_MANIFEST__": str(source_paths["named_manifest"].resolve()),
+        "__MASKED_PRIVATE_MANIFEST__": str(source_paths["masked_manifest"].resolve()),
+        "__COLUMN_MAPPING__": str(source_paths["column_mapping"].resolve()),
+        "__LOCAL_PYTHON__": str(python),
+        "__VLLM_ADAPTER__": str(adapter),
+        "__VLLM_BASE_URL__": args.base_url.rstrip("/"),
+        "__BWRAP__": str(bwrap),
+    }
+    main = common._replace_tokens(template, replacements)
+    unresolved = re.findall(r"__[A-Z0-9_]+__", json.dumps(main))
+    if unresolved:
+        raise ValueError(f"Unresolved template tokens: {sorted(set(unresolved))}")
+    model_manifest = _locked_model_manifest(
+        main,
+        python=python,
+        adapter=adapter,
+        bwrap=bwrap,
+        base_url=args.base_url.rstrip("/"),
+    )
+    smoke = json.loads(json.dumps(main))
+    smoke["experiment_id"] = args.smoke_experiment_id
+    smoke["output_root"] = str(args.smoke_output_root.resolve())
+    smoke["iteration_policy"]["iterations"] = 1
+    smoke["replicates"] = 1
+    smoke["max_parallel"] = 2
+    smoke["budget"]["max_agent_calls"] = 12
+    stub = json.loads(json.dumps(main))
+    stub["experiment_id"] = args.stub_experiment_id
+    stub["output_root"] = str(args.stub_output_root.resolve())
+    stub["iteration_policy"]["iterations"] = 2
+    stub["replicates"] = 1
+    stub["max_parallel"] = 2
+    stub["budget"]["max_agent_calls"] = 24
+    stub["budget"]["max_runtime_seconds_per_call"] = 60
+    stub["models"] = [{"id": "stub", "model_id": "stub", "adapter": "stub"}]
+    configs = {
+        "main": args.main_config.resolve(),
+        "smoke": args.smoke_config.resolve(),
+        "stub": args.stub_config.resolve(),
+    }
+    common._write_yaml(configs["main"], main)
+    common._write_yaml(configs["smoke"], smoke)
+    common._write_yaml(configs["stub"], stub)
+    manifest = _machine_manifest(
+        repo=repo,
+        configs=configs,
+        source_paths=source_paths,
+        schedule_seed=int(main["schedule_seed"]),
+        model=model_manifest,
+        endpoint_models=endpoint_models,
+        adapter=adapter,
+        bwrap=bwrap,
+    )
+    common._write_yaml(args.machine_manifest.resolve(), manifest)
+    preparation = {
+        "schema_version": "1",
+        "source_hashes": observed,
+        "shape": list(common.EXPECTED_SHAPE),
+        "row_value_dtype_parity": True,
+        "workspaces": {
+            condition: {
+                "path": str(path.resolve()),
+                "files": sorted(item.name for item in path.iterdir()),
+                "dataset_sha256": common._sha256(path / "dataset.parquet"),
+                "description_sha256": common._sha256(path / "dataset_description.md"),
+            }
+            for condition, path in workspaces.items()
+        },
+        "configs": {label: str(path) for label, path in configs.items()},
+        "template": {
+            "path": str(args.template.resolve()),
+            "sha256": common._sha256(args.template.resolve()),
+        },
+        "machine_manifest": str(args.machine_manifest.resolve()),
+        "endpoint_model_ids": sorted(served_ids),
+    }
+    preparation_path = args.public_root.resolve() / "preparation_manifest.json"
+    preparation_path.write_text(json.dumps(preparation, indent=2) + "\n", encoding="utf-8")
+    return preparation
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    repo = Path(__file__).resolve().parents[2]
+    experiment = Path(__file__).resolve().parent
+    local = experiment / "local"
+    results = experiment / "results"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, default=repo)
+    parser.add_argument(
+        "--template",
+        type=Path,
+        default=experiment / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v1.template.yaml",
+    )
+    parser.add_argument(
+        "--public-root", type=Path, default=local / "public-qwen38-27b-vllm-v1"
+    )
+    parser.add_argument(
+        "--main-config",
+        type=Path,
+        default=experiment / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v1.local.yaml",
+    )
+    parser.add_argument(
+        "--smoke-config",
+        type=Path,
+        default=experiment / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v1.smoke.local.yaml",
+    )
+    parser.add_argument(
+        "--stub-config",
+        type=Path,
+        default=experiment / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v1.stub.local.yaml",
+    )
+    parser.add_argument(
+        "--machine-manifest",
+        type=Path,
+        default=local / "machine_manifest.qwen38_27b_vllm_v1.yaml",
+    )
+    parser.add_argument(
+        "--smoke-experiment-id",
+        default="nsclc-semantic-workflow-grid-qwen38-27b-vllm-v1-live-smoke",
+    )
+    parser.add_argument(
+        "--stub-experiment-id",
+        default="nsclc-semantic-workflow-grid-qwen38-27b-vllm-v1-stub-gate",
+    )
+    parser.add_argument(
+        "--main-output-root",
+        type=Path,
+        default=results / "semantic-workflow-grid-qwen38-27b-vllm-v1-main",
+    )
+    parser.add_argument(
+        "--smoke-output-root",
+        type=Path,
+        default=results / "semantic-workflow-grid-qwen38-27b-vllm-v1-smoke",
+    )
+    parser.add_argument(
+        "--stub-output-root",
+        type=Path,
+        default=results / "semantic-workflow-grid-qwen38-27b-vllm-v1-stub",
+    )
+    parser.add_argument("--base-url", default="http://camus.dfci.harvard.edu:8060/v1")
+    parser.add_argument("--model-id", default="Qwen/Qwen3.8-27B")
+    parser.add_argument("--bwrap", default="bwrap")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    result = prepare(parse_args(argv))
+    print(json.dumps(result, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -12,6 +12,7 @@ sys.path.insert(0, str(EXPERIMENT))
 
 import freeze_provenance as freeze_module  # noqa: E402
 import prepare_experiment as prepare_module  # noqa: E402
+import prepare_vllm_experiment as prepare_vllm_module  # noqa: E402
 from prepare_experiment import (  # noqa: E402
     EXPECTED_HASHES,
     EXPECTED_SHAPE,
@@ -137,6 +138,72 @@ def test_medium_v4_template_locks_fast_repair_reasoning_and_four_hour_ceiling() 
     args[args.index("--max-contract-repairs") + 1] = "-1"
     with pytest.raises(ValueError, match="repair limit"):
         _locked_model_manifest(invalid_repairs)
+
+
+def test_qwen38_vllm_template_locks_controller_sampling_and_isolation() -> None:
+    template = yaml.safe_load(
+        (
+            EXPERIMENT
+            / "nsclc_semantic_workflow_grid_qwen38_27b_vllm_v1.template.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    python = Path("/home/klkehl/thisenv/bin/python")
+    adapter = Path("/repo/scripts/vllm_cli_json_adapter.py")
+    bwrap = Path("/usr/bin/bwrap")
+    base_url = "http://camus.dfci.harvard.edu:8060/v1"
+    resolved = prepare_module._replace_tokens(
+        template,
+        {
+            "__MAIN_OUTPUT_ROOT__": "/results/main",
+            "__NAMED_PUBLIC_WORKSPACE__": "/public/named",
+            "__MASKED_PUBLIC_WORKSPACE__": "/public/masked",
+            "__NAMED_PRIVATE_MANIFEST__": "/private/named.json",
+            "__MASKED_PRIVATE_MANIFEST__": "/private/masked.json",
+            "__COLUMN_MAPPING__": "/private/mapping.json",
+            "__LOCAL_PYTHON__": str(python),
+            "__VLLM_ADAPTER__": str(adapter),
+            "__VLLM_BASE_URL__": base_url,
+            "__BWRAP__": str(bwrap),
+        },
+    )
+
+    model = prepare_vllm_module._locked_model_manifest(
+        resolved,
+        python=python,
+        adapter=adapter,
+        bwrap=bwrap,
+        base_url=base_url,
+    )
+
+    assert resolved["experiment_id"] == (
+        "nsclc-semantic-workflow-grid-qwen38-27b-vllm-v1-20x5"
+    )
+    assert resolved["replicates"] == 5
+    assert resolved["max_parallel"] == 6
+    assert model["id"] == "Qwen/Qwen3.8-27B"
+    assert model["adapter"] == "vllm-cli-json"
+    assert model["sampling"] == {
+        "temperature": 0.2,
+        "top_p": 0.95,
+        "max_tokens": 16_384,
+        "seed_policy": "sha256(request_id,prompt_hash,turn,schema)",
+    }
+    assert model["limits"]["max_tool_calls"] == 32
+    assert model["limits"]["max_contract_repairs"] == 2
+    assert model["limits"]["adapter_timeout_seconds"] == 14_380
+    assert model["limits"]["harness_timeout_seconds"] == 14_400
+
+    changed = json.loads(json.dumps(resolved))
+    extra_args = changed["models"][0]["extra_args"]
+    extra_args[extra_args.index("--max-tool-calls") + 1] = "33"
+    with pytest.raises(ValueError, match="runtime lock mismatch"):
+        prepare_vllm_module._locked_model_manifest(
+            changed,
+            python=python,
+            adapter=adapter,
+            bwrap=bwrap,
+            base_url=base_url,
+        )
 
 
 def test_provenance_freeze_is_hash_locked_and_idempotent(
