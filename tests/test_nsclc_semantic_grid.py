@@ -95,7 +95,7 @@ def test_tracked_grid_template_locks_calls_timeouts_and_parallelism() -> None:
     assert template["models"][0]["reasoning_effort"] == "low"
 
 
-def test_medium_v3_template_locks_fast_repair_reasoning_and_four_hour_ceiling() -> None:
+def test_medium_v4_template_locks_fast_repair_reasoning_and_four_hour_ceiling() -> None:
     template = yaml.safe_load(
         (EXPERIMENT / "nsclc_semantic_workflow_grid_medium.template.yaml").read_text(
             encoding="utf-8"
@@ -105,10 +105,10 @@ def test_medium_v3_template_locks_fast_repair_reasoning_and_four_hour_ceiling() 
     model = _locked_model_manifest(template)
 
     assert template["experiment_id"] == (
-        "nsclc-semantic-workflow-grid-luna-medium-fast-repair-v3-20x5"
+        "nsclc-semantic-workflow-grid-luna-medium-fast-repair-localenv-v4-20x5"
     )
     assert model == {
-        "profile": "codex-luna-medium-fast-repair",
+        "profile": "codex-luna-medium-fast-repair-localenv-v4",
         "id": "gpt-5.6-luna",
         "adapter": "cli-json",
         "reasoning_effort": "medium",

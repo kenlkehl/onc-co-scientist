@@ -1,13 +1,16 @@
-# NSCLC semantic masking × workflow grid: Luna-medium Fast-repair v3 protocol
+# NSCLC semantic masking × workflow grid: Luna-medium local-env v4 protocol
 
 ## Status and frozen objective
 
-This is a new prospective v3 experiment. It does not resume or pool the stopped
-Luna-low run, the failed Luna-medium v1 technical smoke, or the Luna-medium v2
-smoke. The v2 smoke completed four of six runs and failed both deliberative runs
-after otherwise successful generations produced semantically inconsistent
-`supported_claim_indices`. Its main experiment never launched. All predecessor
-result roots remain immutable.
+This is a new prospective v4 experiment. It does not resume or pool the stopped
+Luna-low run or any Luna-medium predecessor. The v2 smoke completed four of six
+runs and failed both deliberative runs after otherwise successful generations
+produced semantically inconsistent `supported_claim_indices`. The v3 smoke
+completed three of six runs: two Python adapter startups failed on transient
+SSHFS `EPERM` reads from the SSHFS-hosted virtual environment, and one Codex
+turn exhausted four hours after its completed analysis command was followed by
+WebSocket and HTTPS transport failures. No v1, v2, or v3 main experiment
+launched. All predecessor result roots remain immutable.
 
 The replacement tests the same 2 × 3 factorial grid on the synthetic
 50,000-row NSCLC cohort. The semantic factor is `named` versus `masked`; the
@@ -19,7 +22,7 @@ exactly 20 ordered iterations of:
 
 The pinned source baseline is commit
 `4a8fd25f104869d9209ec010bac504b8a91a4964`. The execution-plan documentation
-commit and the v3 implementation commit are captured in the frozen machine
+commit and the v4 implementation commit are captured in the frozen machine
 manifest. The model is `gpt-5.6-luna`, with reasoning effort explicitly locked
 to `medium` and Codex `service_tier` explicitly locked to `fast`. The outer
 per-call timeout is 14,400 seconds and the adapter has one shared 14,380-second
@@ -52,9 +55,12 @@ event stream, stderr log, schema, prompt hash, command, validation outcome, and
 usage record are retained in numbered attempt directories. Call-level tokens,
 tool calls, and duration aggregate all attempts.
 
-This repair policy and Fast service tier were fixed before any v3 live smoke or
-main call. No v3 prompt, schedule, iteration count, retry cap, concurrency, or
-scientific endpoint may be changed after inspecting v3 scientific results.
+This repair policy and Fast service tier remain fixed from v3. Before any v4
+live call, the controller, adapter, and model-visible analysis Python are moved
+to `/home/klkehl/thisenv`, a local ext4 virtual environment containing a
+non-editable installation of the committed package and scientific dependencies.
+No v4 prompt, schedule, iteration count, retry cap, concurrency, or scientific
+endpoint may be changed after inspecting v4 scientific results.
 
 ## Conditions and scientific task
 
@@ -93,7 +99,7 @@ calls, duration, timeout status, and efficiency endpoints are reported.
 
 The excluded live smoke uses two concurrent runs. After every smoke run and all
 40 planned harness calls pass the technical gate, the main run uses six
-concurrent runs as explicitly authorized for v3.
+concurrent runs as explicitly authorized for v4.
 
 ## Isolation and reproducibility
 
@@ -153,8 +159,8 @@ descriptive contrasts. With five replicates per cell, no confirmatory
 workflow-superiority p-values are reported. Technical failures and truncated
 runs remain in denominators and reports.
 
-The one-iteration v3 live smoke is stored under a distinct
-`medium-fast-repair-v3-smoke` root and excluded from the main analysis. Main
-launch is automatic only after the smoke summary, normalized artifacts,
-per-attempt audits, Luna/medium/Fast locks, isolation contract, schema hashes,
-and cross-field synthesis invariants all pass.
+The one-iteration v4 live smoke is stored under a distinct
+`medium-fast-repair-localenv-v4-smoke` root and excluded from the main analysis.
+Main launch is automatic only after the smoke summary, normalized artifacts,
+per-attempt audits, Luna/medium/Fast/local-environment locks, isolation contract,
+schema hashes, and cross-field synthesis invariants all pass.
