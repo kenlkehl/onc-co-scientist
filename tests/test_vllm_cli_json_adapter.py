@@ -208,6 +208,10 @@ def test_adapter_repairs_semantic_contract_and_saves_session(tmp_path: Path) -> 
     response = run_adapter(_args(tmp_path, request_file, output), client=client)
 
     assert response.artifact.claims[0].supported is True
+    assert all(
+        request["max_tokens"] == 1_024
+        for request in client.chat.completions.requests
+    )
     assert response.usage.input_tokens == 30
     assert response.usage.output_tokens == 15
     assert response.runtime_metadata["contract_repair_count"] == 1

@@ -48,6 +48,8 @@ except ModuleNotFoundError:  # Direct execution puts ``scripts/`` on sys.path.
 
 
 ADAPTER_PROTOCOL_VERSION = 1
+DEFAULT_API_TIMEOUT_SECONDS = 7_200.0
+DEFAULT_MAX_TOKENS = 100_000
 DECISION_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Sandboxed scientific-agent controller decision",
@@ -833,7 +835,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--analysis-python", type=Path, required=True)
     parser.add_argument("--bwrap", default="bwrap")
     parser.add_argument("--timeout-seconds", type=int, default=14_380)
-    parser.add_argument("--api-timeout-seconds", type=float, default=1_800.0)
+    parser.add_argument(
+        "--api-timeout-seconds", type=float, default=DEFAULT_API_TIMEOUT_SECONDS
+    )
     parser.add_argument("--python-timeout-seconds", type=int, default=300)
     parser.add_argument("--max-api-retries", type=int, default=2)
     parser.add_argument("--max-contract-repairs", type=int, default=2)
@@ -842,7 +846,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-controller-decisions", type=int, default=40)
     parser.add_argument("--max-tool-output-chars", type=int, default=40_000)
     parser.add_argument("--max-history-chars", type=int, default=180_000)
-    parser.add_argument("--max-tokens", type=int, default=16_384)
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOKENS,
+        help=(
+            "Maximum completion tokens per vLLM request, including reasoning tokens "
+            "and the visible response."
+        ),
+    )
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=0.95)
     args = parser.parse_args(argv)

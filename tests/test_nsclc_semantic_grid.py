@@ -185,11 +185,12 @@ def test_qwen38_vllm_template_locks_controller_sampling_and_isolation() -> None:
     assert model["sampling"] == {
         "temperature": 0.2,
         "top_p": 0.95,
-        "max_tokens": 16_384,
+        "max_tokens": 100_000,
         "seed_policy": "sha256(request_id,prompt_hash,turn,schema)",
     }
     assert model["limits"]["max_tool_calls"] == 32
     assert model["limits"]["max_contract_repairs"] == 2
+    assert model["limits"]["api_timeout_seconds"] == 7_200
     assert model["limits"]["adapter_timeout_seconds"] == 14_380
     assert model["limits"]["harness_timeout_seconds"] == 14_400
 

@@ -69,7 +69,7 @@ def _locked_model_manifest(
         "--analysis-python": str(python),
         "--bwrap": str(bwrap),
         "--timeout-seconds": "14380",
-        "--api-timeout-seconds": "1800",
+        "--api-timeout-seconds": "7200",
         "--python-timeout-seconds": "300",
         "--max-api-retries": "2",
         "--max-contract-repairs": "2",
@@ -78,7 +78,7 @@ def _locked_model_manifest(
         "--max-controller-decisions": "40",
         "--max-tool-output-chars": "40000",
         "--max-history-chars": "180000",
-        "--max-tokens": "16384",
+        "--max-tokens": "100000",
         "--temperature": "0.2",
         "--top-p": "0.95",
     }

@@ -22,10 +22,11 @@ inference resources are matched across providers.
 ## Model and controller policy
 
 Every model request uses `Qwen/Qwen3.8-27B`, temperature 0.2, top-p 0.95, and a
-16,384-token completion ceiling. Each model turn receives a deterministic seed
-derived from the harness request identity, prompt hash, turn number, and schema
-name. Replicates have distinct request identities. The adapter uses the vLLM
-OpenAI-compatible Chat Completions API with a strict JSON schema on every turn.
+100,000-token completion ceiling shared by reasoning and the visible response.
+Each model turn receives a deterministic seed derived from the harness request
+identity, prompt hash, turn number, and schema name. Replicates have distinct
+request identities. The adapter uses the vLLM OpenAI-compatible Chat
+Completions API with a strict JSON schema on every turn.
 
 On controller turns Qwen must choose either `python` or `final`. A Python action
 contains self-contained code. The adapter runs it through bubblewrap with only
@@ -60,11 +61,13 @@ instructed to reuse completed analysis without more tools. Separately, each API
 request permits at most two retries after retryable transport, timeout, rate
 limit, or server errors; HTTP 4xx configuration errors other than 408, 409, and
 429 are terminal. The adapter has one shared 14,380-second call deadline inside
-the harness's 14,400-second deadline. Raw API requests and responses, separate
-reasoning fields returned by vLLM, seeds, token usage, every tool program and
-result, validation failures, retry attempts, accepted artifacts, and bounded
-session state are retained. Failed physical API attempts without provider usage
-metadata cannot contribute token counts and are reported separately.
+the harness's 14,400-second deadline, and an individual API generation may run
+for up to 7,200 seconds within that shared deadline. Raw API requests and
+responses, separate reasoning fields returned by vLLM, seeds, token usage,
+every tool program and result, validation failures, retry attempts, accepted
+artifacts, and bounded session state are retained. Failed physical API attempts
+without provider usage metadata cannot contribute token counts and are reported
+separately.
 
 ## Data isolation and scientific task
 
