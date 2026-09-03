@@ -199,7 +199,7 @@ def test_qwen38_vllm_v2_template_locks_controller_sampling_and_isolation() -> No
         "top_p": 0.95,
         "max_tokens": 100_000,
         "thinking_mode": "server-default",
-        "seed_policy": "sha256(request_id,prompt_hash,turn,schema)",
+        "seed_policy": "sha256(request_id,prompt_hash,turn,schema,attempt)",
     }
     assert model["limits"]["max_tool_calls"] == 32
     assert model["limits"]["max_contract_repairs"] == 2
@@ -286,6 +286,86 @@ def test_gemma4_vllm_template_locks_thinking_and_controller_runtime(
             expected_model_id="gemma4-31b",
             expected_thinking_mode="enabled",
             expected_interaction_mode="native-tools",
+        )
+
+
+def test_gemma4_vllm_v3_locks_split_ceilings_and_sampling() -> None:
+    template = yaml.safe_load(
+        (
+            EXPERIMENT
+            / "nsclc_semantic_workflow_grid_gemma4_31b_vllm_v3.template.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    python = Path("/home/klkehl/thisenv/bin/python")
+    adapter = Path("/repo/scripts/vllm_cli_json_adapter.py")
+    bwrap = Path("/usr/bin/bwrap")
+    base_url = "http://172.24.216.113:1234/v1"
+    resolved = prepare_module._replace_tokens(
+        template,
+        {
+            "__MAIN_OUTPUT_ROOT__": "/results/main",
+            "__NAMED_PUBLIC_WORKSPACE__": "/public/named",
+            "__MASKED_PUBLIC_WORKSPACE__": "/public/masked",
+            "__NAMED_PRIVATE_MANIFEST__": "/private/named.json",
+            "__MASKED_PRIVATE_MANIFEST__": "/private/masked.json",
+            "__COLUMN_MAPPING__": "/private/mapping.json",
+            "__LOCAL_PYTHON__": str(python),
+            "__VLLM_ADAPTER__": str(adapter),
+            "__VLLM_BASE_URL__": base_url,
+            "__BWRAP__": str(bwrap),
+        },
+    )
+
+    model = prepare_vllm_module._locked_model_manifest(
+        resolved,
+        python=python,
+        adapter=adapter,
+        bwrap=bwrap,
+        base_url=base_url,
+        expected_model_id="gemma4-31b",
+        expected_thinking_mode="enabled",
+        expected_interaction_mode="native-tools",
+        expected_temperature=1.0,
+        expected_top_p=0.95,
+        expected_top_k=64,
+        expected_repetition_penalty=1.1,
+        expected_max_decision_tokens=16_000,
+    )
+
+    assert resolved["experiment_id"] == (
+        "nsclc-semantic-workflow-grid-gemma4-31b-vllm-v3-20x5"
+    )
+    assert resolved["models"][0]["id"] == "gemma4-31b-vllm-controller-v3"
+    assert model["sampling"] == {
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "max_tokens": 100_000,
+        "thinking_mode": "enabled",
+        "seed_policy": "sha256(request_id,prompt_hash,turn,schema,attempt)",
+        "top_k": 64,
+        "repetition_penalty": 1.1,
+    }
+    assert model["limits"]["max_decision_tokens"] == 16_000
+    assert resolved["max_parallel"] == 6
+
+    changed = json.loads(json.dumps(resolved))
+    extra_args = changed["models"][0]["extra_args"]
+    extra_args[extra_args.index("--top-k") + 1] = "63"
+    with pytest.raises(ValueError, match="runtime lock mismatch"):
+        prepare_vllm_module._locked_model_manifest(
+            changed,
+            python=python,
+            adapter=adapter,
+            bwrap=bwrap,
+            base_url=base_url,
+            expected_model_id="gemma4-31b",
+            expected_thinking_mode="enabled",
+            expected_interaction_mode="native-tools",
+            expected_temperature=1.0,
+            expected_top_p=0.95,
+            expected_top_k=64,
+            expected_repetition_penalty=1.1,
+            expected_max_decision_tokens=16_000,
         )
 
 

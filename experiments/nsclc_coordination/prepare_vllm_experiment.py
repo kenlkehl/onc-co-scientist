@@ -49,6 +49,11 @@ def _locked_model_manifest(
     expected_model_id: str = "Qwen/Qwen3.8-27B",
     expected_thinking_mode: str = "server-default",
     expected_interaction_mode: str = "json-schema",
+    expected_temperature: float = 0.2,
+    expected_top_p: float = 0.95,
+    expected_top_k: int | None = None,
+    expected_repetition_penalty: float | None = None,
+    expected_max_decision_tokens: int | None = None,
 ) -> dict[str, Any]:
     if expected_thinking_mode not in {"server-default", "enabled", "disabled"}:
         raise ValueError(f"Unsupported thinking mode: {expected_thinking_mode}")
@@ -118,9 +123,15 @@ def _locked_model_manifest(
         "--max-tool-output-chars": "40000",
         "--max-history-chars": "180000",
         "--max-tokens": "100000",
-        "--temperature": "0.2",
-        "--top-p": "0.95",
+        "--temperature": str(expected_temperature),
+        "--top-p": str(expected_top_p),
     }
+    if expected_top_k is not None:
+        expected["--top-k"] = str(expected_top_k)
+    if expected_repetition_penalty is not None:
+        expected["--repetition-penalty"] = str(expected_repetition_penalty)
+    if expected_max_decision_tokens is not None:
+        expected["--max-decision-tokens"] = str(expected_max_decision_tokens)
     if expected_thinking_mode != "server-default":
         expected["--thinking-mode"] = expected_thinking_mode
     if expected_interaction_mode != "json-schema":
@@ -131,32 +142,42 @@ def _locked_model_manifest(
     harness_timeout = int(config["budget"]["max_runtime_seconds_per_call"])
     if int(observed["--timeout-seconds"]) >= harness_timeout:
         raise ValueError("The adapter timeout must precede the harness timeout.")
+    sampling: dict[str, Any] = {
+        "temperature": float(observed["--temperature"]),
+        "top_p": float(observed["--top-p"]),
+        "max_tokens": int(observed["--max-tokens"]),
+        "thinking_mode": expected_thinking_mode,
+        "seed_policy": "sha256(request_id,prompt_hash,turn,schema,attempt)",
+    }
+    if expected_top_k is not None:
+        sampling["top_k"] = int(observed["--top-k"])
+    if expected_repetition_penalty is not None:
+        sampling["repetition_penalty"] = float(
+            observed["--repetition-penalty"]
+        )
+    limits: dict[str, Any] = {
+        "max_api_retries": int(observed["--max-api-retries"]),
+        "max_contract_repairs": int(observed["--max-contract-repairs"]),
+        "min_tool_calls": int(observed["--min-tool-calls"]),
+        "max_tool_calls": int(observed["--max-tool-calls"]),
+        "max_controller_decisions": int(observed["--max-controller-decisions"]),
+        "max_tool_output_chars": int(observed["--max-tool-output-chars"]),
+        "max_history_chars": int(observed["--max-history-chars"]),
+        "python_timeout_seconds": int(observed["--python-timeout-seconds"]),
+        "api_timeout_seconds": float(observed["--api-timeout-seconds"]),
+        "adapter_timeout_seconds": int(observed["--timeout-seconds"]),
+        "harness_timeout_seconds": harness_timeout,
+    }
+    if expected_max_decision_tokens is not None:
+        limits["max_decision_tokens"] = int(observed["--max-decision-tokens"])
     return {
         "profile": str(model.get("id", "")),
         "id": str(model["model_id"]),
         "adapter": "vllm-cli-json",
         "base_url": base_url,
         "interaction_mode": expected_interaction_mode,
-        "sampling": {
-            "temperature": float(observed["--temperature"]),
-            "top_p": float(observed["--top-p"]),
-            "max_tokens": int(observed["--max-tokens"]),
-            "thinking_mode": expected_thinking_mode,
-            "seed_policy": "sha256(request_id,prompt_hash,turn,schema)",
-        },
-        "limits": {
-            "max_api_retries": int(observed["--max-api-retries"]),
-            "max_contract_repairs": int(observed["--max-contract-repairs"]),
-            "min_tool_calls": int(observed["--min-tool-calls"]),
-            "max_tool_calls": int(observed["--max-tool-calls"]),
-            "max_controller_decisions": int(observed["--max-controller-decisions"]),
-            "max_tool_output_chars": int(observed["--max-tool-output-chars"]),
-            "max_history_chars": int(observed["--max-history-chars"]),
-            "python_timeout_seconds": int(observed["--python-timeout-seconds"]),
-            "api_timeout_seconds": float(observed["--api-timeout-seconds"]),
-            "adapter_timeout_seconds": int(observed["--timeout-seconds"]),
-            "harness_timeout_seconds": harness_timeout,
-        },
+        "sampling": sampling,
+        "limits": limits,
     }
 
 
@@ -270,6 +291,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         expected_model_id=args.model_id,
         expected_thinking_mode=args.thinking_mode,
         expected_interaction_mode=args.interaction_mode,
+        expected_temperature=args.temperature,
+        expected_top_p=args.top_p,
+        expected_top_k=args.top_k,
+        expected_repetition_penalty=args.repetition_penalty,
+        expected_max_decision_tokens=args.max_decision_tokens,
     )
     smoke = json.loads(json.dumps(main))
     smoke["experiment_id"] = args.smoke_experiment_id
@@ -403,6 +429,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=("json-schema", "native-tools"),
         default="json-schema",
     )
+    parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument("--top-k", type=int)
+    parser.add_argument("--repetition-penalty", type=float)
+    parser.add_argument("--max-decision-tokens", type=int)
     parser.add_argument("--bwrap", default="bwrap")
     return parser.parse_args(argv)
 

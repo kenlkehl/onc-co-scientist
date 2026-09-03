@@ -19,19 +19,42 @@ from scripts.vllm_cli_json_adapter import (
 
 
 class _FakeResponse:
-    def __init__(self, content: str, *, input_tokens: int = 10, output_tokens: int = 5):
-        self.choices = [SimpleNamespace(message=SimpleNamespace(content=content))]
+    def __init__(
+        self,
+        content: str | None,
+        *,
+        input_tokens: int = 10,
+        output_tokens: int = 5,
+        finish_reason: str = "stop",
+    ):
+        self.choices = [
+            SimpleNamespace(
+                message=SimpleNamespace(content=content),
+                finish_reason=finish_reason,
+            )
+        ]
         self.usage = SimpleNamespace(
             prompt_tokens=input_tokens,
             completion_tokens=output_tokens,
         )
         self._content = content
+        self._input_tokens = input_tokens
+        self._output_tokens = output_tokens
+        self._finish_reason = finish_reason
 
     def model_dump(self, *, mode: str) -> dict[str, Any]:
         assert mode == "json"
         return {
-            "choices": [{"message": {"content": self._content}}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            "choices": [
+                {
+                    "message": {"content": self._content},
+                    "finish_reason": self._finish_reason,
+                }
+            ],
+            "usage": {
+                "prompt_tokens": self._input_tokens,
+                "completion_tokens": self._output_tokens,
+            },
         }
 
 
@@ -44,13 +67,15 @@ class _FakeToolResponse:
         call_id: str,
         input_tokens: int = 10,
         output_tokens: int = 5,
+        finish_reason: str = "tool_calls",
     ):
         encoded = json.dumps(arguments)
         function = SimpleNamespace(name=name, arguments=encoded)
         tool_call = SimpleNamespace(id=call_id, function=function)
         self.choices = [
             SimpleNamespace(
-                message=SimpleNamespace(content="", tool_calls=[tool_call])
+                message=SimpleNamespace(content="", tool_calls=[tool_call]),
+                finish_reason=finish_reason,
             )
         ]
         self.usage = SimpleNamespace(
@@ -60,6 +85,9 @@ class _FakeToolResponse:
         self._name = name
         self._arguments = encoded
         self._call_id = call_id
+        self._input_tokens = input_tokens
+        self._output_tokens = output_tokens
+        self._finish_reason = finish_reason
 
     def model_dump(self, *, mode: str) -> dict[str, Any]:
         assert mode == "json"
@@ -78,10 +106,14 @@ class _FakeToolResponse:
                                 },
                             }
                         ],
-                    }
+                    },
+                    "finish_reason": self._finish_reason,
                 }
             ],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            "usage": {
+                "prompt_tokens": self._input_tokens,
+                "completion_tokens": self._output_tokens,
+            },
         }
 
 
@@ -96,7 +128,7 @@ class _FakeCompletions:
 
 
 class _FakeClient:
-    def __init__(self, responses: list[_FakeResponse]):
+    def __init__(self, responses: list[Any]):
         self.chat = SimpleNamespace(completions=_FakeCompletions(responses))
 
     def with_options(self, *, timeout: float) -> _FakeClient:
@@ -157,8 +189,11 @@ def _args(tmp_path: Path, request_file: Path, output: Path) -> argparse.Namespac
         max_tool_output_chars=1_000,
         max_history_chars=10_000,
         max_tokens=1_024,
+        max_decision_tokens=512,
         temperature=0.2,
         top_p=0.95,
+        top_k=64,
+        repetition_penalty=1.1,
         thinking_mode="enabled",
         interaction_mode="json-schema",
     )
@@ -260,12 +295,16 @@ def test_adapter_repairs_semantic_contract_and_saves_session(tmp_path: Path) -> 
     response = run_adapter(_args(tmp_path, request_file, output), client=client)
 
     assert response.artifact.claims[0].supported is True
+    assert [
+        request["max_tokens"] for request in client.chat.completions.requests
+    ] == [512, 1_024, 1_024]
     assert all(
-        request["max_tokens"] == 1_024
-        for request in client.chat.completions.requests
-    )
-    assert all(
-        request["extra_body"]["chat_template_kwargs"] == {"enable_thinking": True}
+        request["extra_body"]
+        == {
+            "chat_template_kwargs": {"enable_thinking": True},
+            "top_k": 64,
+            "repetition_penalty": 1.1,
+        }
         for request in client.chat.completions.requests
     )
     assert response.usage.input_tokens == 30
@@ -342,6 +381,7 @@ def test_adapter_uses_native_tools_for_controller_and_artifact(tmp_path: Path) -
     requests = client.chat.completions.requests
     assert len(requests) == 2
     assert requests[0]["tool_choice"] == "required"
+    assert requests[0]["max_tokens"] == 512
     assert {
         tool["function"]["name"] for tool in requests[0]["tools"]
     } == {"run_python", "finish_stage"}
@@ -349,6 +389,7 @@ def test_adapter_uses_native_tools_for_controller_and_artifact(tmp_path: Path) -
         "type": "function",
         "function": {"name": "submit_stage_artifact"},
     }
+    assert requests[1]["max_tokens"] == 1_024
     assert response.artifact.final_answer is not None
     audit = json.loads((call_dir / "vllm_call.json").read_text())
     assert audit["interaction_mode"] == "native-tools"
@@ -410,12 +451,112 @@ def test_adapter_retries_native_tool_arguments_that_fail_schema(tmp_path: Path) 
     run_adapter(args, client=client)
 
     assert len(client.chat.completions.requests) == 3
+    assert (
+        client.chat.completions.requests[0]["seed"]
+        != client.chat.completions.requests[1]["seed"]
+    )
+    assert "SCHEMA RECOVERY" in client.chat.completions.requests[1]["messages"][-1][
+        "content"
+    ]
     attempt_root = call_dir / "vllm_turns" / "model_turn_0001_decision"
     first_error = json.loads((attempt_root / "attempt_0001" / "error.json").read_text())
     assert first_error["error_type"] == "ValueError"
     assert first_error["retryable"] is True
     audit = json.loads((call_dir / "vllm_call.json").read_text())
     assert audit["turns"][0]["api_attempts"] == 2
+
+
+def test_adapter_recovers_from_length_exhaustion_with_fresh_seed(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    scratch = tmp_path / "run" / "scratch" / "session"
+    call_dir = tmp_path / "run" / "calls" / "call_0001"
+    workspace.mkdir(parents=True)
+    scratch.mkdir(parents=True)
+    request = {
+        "request_id": "run:c0001",
+        "experiment_id": "experiment",
+        "run_id": "run",
+        "task_id": "task",
+        "workflow_id": "deliberative",
+        "model_profile": "gemma",
+        "model_id": "gemma4-31b",
+        "reasoning_effort": None,
+        "stage_id": "synthesis",
+        "require_final_answer": True,
+        "iteration_index": 1,
+        "max_iterations": 1,
+        "stage_index": 3,
+        "stage_position": 4,
+        "terminal": True,
+        "role": "synthesis scientist",
+        "agent_id": "agent",
+        "session_id": "persistent-session",
+        "prompt": "Return the required artifact.",
+        "workspace": str(workspace),
+        "scratch_dir": str(scratch),
+        "metadata": {},
+    }
+    request_file = call_dir / "request.json"
+    request_file.parent.mkdir(parents=True)
+    request_file.write_text(json.dumps(request), encoding="utf-8")
+    output = call_dir / "response.json"
+    client = _FakeClient(
+        [
+            _FakeResponse(
+                None,
+                input_tokens=100,
+                output_tokens=16_000,
+                finish_reason="length",
+            ),
+            _FakeToolResponse(
+                "finish_stage", {"purpose": "ready"}, call_id="finish-2"
+            ),
+            _FakeToolResponse(
+                "submit_stage_artifact",
+                _artifact(supported=True),
+                call_id="artifact-1",
+            ),
+        ]
+    )
+    args = _args(tmp_path, request_file, output)
+    args.interaction_mode = "native-tools"
+    args.min_tool_calls = 0
+    args.max_api_retries = 1
+
+    response = run_adapter(args, client=client)
+
+    requests = client.chat.completions.requests
+    assert [item["max_tokens"] for item in requests] == [512, 512, 1_024]
+    assert requests[0]["seed"] != requests[1]["seed"]
+    assert requests[0]["extra_body"]["chat_template_kwargs"] == {
+        "enable_thinking": True
+    }
+    assert requests[1]["extra_body"]["chat_template_kwargs"] == {
+        "enable_thinking": False
+    }
+    assert "GENERATION RECOVERY" in requests[1]["messages"][-1]["content"]
+    assert response.usage.input_tokens == 120
+    assert response.usage.output_tokens == 16_010
+    first_attempt = (
+        call_dir
+        / "vllm_turns"
+        / "model_turn_0001_decision"
+        / "attempt_0001"
+    )
+    first_error = json.loads((first_attempt / "error.json").read_text())
+    assert first_error["finish_reason"] == "length"
+    assert first_error["output_tokens"] == 16_000
+    assert (first_attempt / "request.json").exists()
+    second_request = json.loads(
+        (
+            first_attempt.parent / "attempt_0002" / "request.json"
+        ).read_text()
+    )
+    assert second_request["seed"] != json.loads(
+        (first_attempt / "request.json").read_text()
+    )["seed"]
 
 
 @pytest.mark.parametrize("fallback_on_controller", [True, False])

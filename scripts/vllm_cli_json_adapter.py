@@ -48,7 +48,7 @@ except ModuleNotFoundError:  # Direct execution puts ``scripts/`` on sys.path.
     )
 
 
-ADAPTER_PROTOCOL_VERSION = 3
+ADAPTER_PROTOCOL_VERSION = 4
 DEFAULT_API_TIMEOUT_SECONDS = 7_200.0
 DEFAULT_MAX_TOKENS = 100_000
 DECISION_SCHEMA: dict[str, Any] = {
@@ -91,7 +91,8 @@ statistics, verify prior work, or read public documentation. Python starts in th
 workspace. It can read that workspace and installed scientific packages, can write only
 to the scratch directory named in the task prompt, and has no network. Print concise,
 information-rich results; do not print whole datasets. Choose action "final" only when
-you have enough reproducible evidence for the requested stage.
+you have enough reproducible evidence for the requested stage. Keep controller reasoning
+brief, never repeat an intermediate thought, and emit the decision promptly.
 
 After choosing "final", you will receive a separate request for the exact stage artifact.
 On artifact turns, return only the artifact required by the user's stage contract. Treat
@@ -112,7 +113,8 @@ work, or read public documentation. Python starts in the public workspace, can r
 workspace and installed scientific packages, can write only to the scratch directory
 named in the task prompt, and has no network. Print concise, information-rich results;
 do not print whole datasets. Call finish_stage only when you have enough reproducible
-evidence for the requested stage.
+evidence for the requested stage. Keep controller reasoning brief, never repeat an
+intermediate thought, and emit exactly one function call promptly.
 
 On artifact turns, call submit_stage_artifact exactly once with the complete artifact
 required by the user's stage contract. Treat its parameter schema as authoritative.
@@ -145,6 +147,9 @@ def _session_settings(args: argparse.Namespace, model_id: str) -> dict[str, Any]
         "base_url": args.base_url.rstrip("/"),
         "temperature": args.temperature,
         "top_p": args.top_p,
+        "top_k": args.top_k,
+        "repetition_penalty": args.repetition_penalty,
+        "max_decision_tokens": args.max_decision_tokens,
         "max_tokens": args.max_tokens,
         "max_history_chars": args.max_history_chars,
         "max_controller_decisions": args.max_controller_decisions,
@@ -234,7 +239,12 @@ def _client_request_payload(request_payload: dict[str, Any]) -> dict[str, Any]:
     payload = dict(request_payload)
     extra_body = {
         key: payload.pop(key)
-        for key in ("chat_template_kwargs", "structured_outputs")
+        for key in (
+            "chat_template_kwargs",
+            "structured_outputs",
+            "top_k",
+            "repetition_penalty",
+        )
         if key in payload
     }
     if extra_body:
@@ -273,6 +283,39 @@ def _usage(response: Any) -> tuple[int, int]:
     )
 
 
+def _finish_reason(response: Any) -> str | None:
+    choices = getattr(response, "choices", None)
+    if not choices:
+        return None
+    reason = getattr(choices[0], "finish_reason", None)
+    return reason if isinstance(reason, str) else None
+
+
+def _attempt_seed(
+    *, seed_namespace: str, turn_number: int, schema_name: str, attempt_number: int
+) -> int:
+    seed_material = (
+        f"{seed_namespace}:{turn_number}:{schema_name}:attempt:{attempt_number}"
+    )
+    return int(_sha256(seed_material)[:8], 16) & 0x7FFFFFFF
+
+
+def _recovery_prompt(*, error: Exception, finish_reason: str | None) -> str:
+    if finish_reason == "length":
+        return (
+            "GENERATION RECOVERY: The previous response exhausted its token budget "
+            "before emitting one valid required response. Do not resume, quote, or "
+            "repeat its reasoning. Respond immediately with exactly one required "
+            "function call or schema object. Use the evidence already available. "
+            f"Validation error: {error}"
+        )
+    return (
+        "SCHEMA RECOVERY: The previous response was rejected for this exact reason: "
+        f"{error}. Do not repeat the rejected response or extended reasoning. Respond "
+        "immediately with exactly one valid required function call or schema object."
+    )
+
+
 def _chat_completion(
     *,
     client: Any,
@@ -284,32 +327,54 @@ def _chat_completion(
     turn_dir: Path,
     turn_number: int,
     deadline: float,
+    max_tokens: int,
 ) -> tuple[str, dict[str, Any], int, int, float, int]:
-    seed_material = f"{args.seed_namespace}:{turn_number}:{schema_name}"
-    seed = int(_sha256(seed_material)[:8], 16) & 0x7FFFFFFF
-    request_payload = {
+    base_request_payload: dict[str, Any] = {
         "model": model_id,
-        "messages": messages,
         "temperature": args.temperature,
         "top_p": args.top_p,
-        "max_tokens": args.max_tokens,
-        "seed": seed,
+        "top_k": args.top_k,
+        "repetition_penalty": args.repetition_penalty,
+        "max_tokens": max_tokens,
         "response_format": {
             "type": "json_schema",
             "json_schema": {"name": schema_name, "strict": True, "schema": schema},
         },
     }
-    if args.thinking_mode != "server-default":
-        request_payload["chat_template_kwargs"] = {
-            "enable_thinking": args.thinking_mode == "enabled"
-        }
     turn_dir.mkdir(parents=True, exist_ok=False)
-    _write_json_atomic(turn_dir / "request.json", request_payload)
 
     total_duration = 0.0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    recovery: str | None = None
+    disable_thinking_for_recovery = False
     for attempt_number in range(1, args.max_api_retries + 2):
         attempt_dir = turn_dir / f"attempt_{attempt_number:04d}"
         attempt_dir.mkdir(parents=True, exist_ok=False)
+        attempt_messages = list(messages)
+        if recovery is not None:
+            attempt_messages.append({"role": "user", "content": recovery})
+        seed = _attempt_seed(
+            seed_namespace=args.seed_namespace,
+            turn_number=turn_number,
+            schema_name=schema_name,
+            attempt_number=attempt_number,
+        )
+        request_payload = {
+            **base_request_payload,
+            "messages": attempt_messages,
+            "seed": seed,
+        }
+        if args.thinking_mode != "server-default":
+            request_payload["chat_template_kwargs"] = {
+                "enable_thinking": (
+                    args.thinking_mode == "enabled"
+                    and not disable_thinking_for_recovery
+                )
+            }
+        if attempt_number == 1:
+            _write_json_atomic(turn_dir / "request.json", request_payload)
+        _write_json_atomic(attempt_dir / "request.json", request_payload)
         started = time.monotonic()
         try:
             timeout = min(args.api_timeout_seconds, _remaining(deadline))
@@ -326,6 +391,7 @@ def _chat_completion(
                     "error": str(exc),
                     "duration_seconds": duration,
                     "retryable": _retryable_api_error(exc),
+                    "seed": seed,
                 },
             )
             if attempt_number > args.max_api_retries or not _retryable_api_error(exc):
@@ -338,9 +404,41 @@ def _chat_completion(
         total_duration += duration
         payload = _response_payload(response)
         _write_json_atomic(attempt_dir / "response.json", payload)
-        content = _completion_content(response)
-        (attempt_dir / "content.json").write_text(content + "\n", encoding="utf-8")
         input_tokens, output_tokens = _usage(response)
+        total_input_tokens += input_tokens
+        total_output_tokens += output_tokens
+        finish_reason = _finish_reason(response)
+        parse_error: Exception | None = None
+        content = ""
+        try:
+            content = _completion_content(response)
+            _schema_object_from_text(content, schema=schema, label=schema_name)
+        except (RuntimeError, ValueError) as exc:
+            parse_error = exc
+        if parse_error is not None:
+            _write_json_atomic(
+                attempt_dir / "error.json",
+                {
+                    "error_type": type(parse_error).__name__,
+                    "error": str(parse_error),
+                    "duration_seconds": duration,
+                    "retryable": True,
+                    "finish_reason": finish_reason,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "seed": seed,
+                },
+            )
+            if attempt_number > args.max_api_retries:
+                raise parse_error
+            recovery = _recovery_prompt(
+                error=parse_error, finish_reason=finish_reason
+            )
+            disable_thinking_for_recovery = finish_reason == "length"
+            delay = min(float(2 ** (attempt_number - 1)), _remaining(deadline))
+            time.sleep(delay)
+            continue
+        (attempt_dir / "content.json").write_text(content + "\n", encoding="utf-8")
         _write_json_atomic(
             attempt_dir / "success.json",
             {
@@ -348,13 +446,14 @@ def _chat_completion(
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "seed": seed,
+                "finish_reason": finish_reason,
             },
         )
         return (
             content,
             payload,
-            input_tokens,
-            output_tokens,
+            total_input_tokens,
+            total_output_tokens,
             total_duration,
             attempt_number,
         )
@@ -448,6 +547,7 @@ def _native_tool_completion(
     turn_dir: Path,
     turn_number: int,
     deadline: float,
+    max_tokens: int,
     content_fallback_schema: dict[str, Any] | None = None,
     content_fallback_name: str | None = None,
     content_fallback_validator: Callable[[str], None] | None = None,
@@ -461,34 +561,55 @@ def _native_tool_completion(
     int,
     str,
 ]:
-    seed_material = f"{args.seed_namespace}:{turn_number}:{schema_name}"
-    seed = int(_sha256(seed_material)[:8], 16) & 0x7FFFFFFF
-    request_payload: dict[str, Any] = {
+    base_request_payload: dict[str, Any] = {
         "model": model_id,
-        "messages": messages,
         "temperature": args.temperature,
         "top_p": args.top_p,
-        "max_tokens": args.max_tokens,
-        "seed": seed,
+        "top_k": args.top_k,
+        "repetition_penalty": args.repetition_penalty,
+        "max_tokens": max_tokens,
         "tools": tools,
         "tool_choice": tool_choice,
         "parallel_tool_calls": False,
     }
-    if args.thinking_mode != "server-default":
-        request_payload["chat_template_kwargs"] = {
-            "enable_thinking": args.thinking_mode == "enabled"
-        }
     tool_schemas = {
         str(tool["function"]["name"]): tool["function"]["parameters"]
         for tool in tools
     }
     turn_dir.mkdir(parents=True, exist_ok=False)
-    _write_json_atomic(turn_dir / "request.json", request_payload)
 
     total_duration = 0.0
+    total_input_tokens = 0
+    total_output_tokens = 0
+    recovery: str | None = None
+    disable_thinking_for_recovery = False
     for attempt_number in range(1, args.max_api_retries + 2):
         attempt_dir = turn_dir / f"attempt_{attempt_number:04d}"
         attempt_dir.mkdir(parents=True, exist_ok=False)
+        attempt_messages = list(messages)
+        if recovery is not None:
+            attempt_messages.append({"role": "user", "content": recovery})
+        seed = _attempt_seed(
+            seed_namespace=args.seed_namespace,
+            turn_number=turn_number,
+            schema_name=schema_name,
+            attempt_number=attempt_number,
+        )
+        request_payload: dict[str, Any] = {
+            **base_request_payload,
+            "messages": attempt_messages,
+            "seed": seed,
+        }
+        if args.thinking_mode != "server-default":
+            request_payload["chat_template_kwargs"] = {
+                "enable_thinking": (
+                    args.thinking_mode == "enabled"
+                    and not disable_thinking_for_recovery
+                )
+            }
+        if attempt_number == 1:
+            _write_json_atomic(turn_dir / "request.json", request_payload)
+        _write_json_atomic(attempt_dir / "request.json", request_payload)
         started = time.monotonic()
         try:
             timeout = min(args.api_timeout_seconds, _remaining(deadline))
@@ -505,6 +626,7 @@ def _native_tool_completion(
                     "error": str(exc),
                     "duration_seconds": duration,
                     "retryable": _retryable_api_error(exc),
+                    "seed": seed,
                 },
             )
             if attempt_number > args.max_api_retries or not _retryable_api_error(exc):
@@ -517,6 +639,10 @@ def _native_tool_completion(
         total_duration += duration
         payload = _response_payload(response)
         _write_json_atomic(attempt_dir / "response.json", payload)
+        input_tokens, output_tokens = _usage(response)
+        total_input_tokens += input_tokens
+        total_output_tokens += output_tokens
+        finish_reason = _finish_reason(response)
         response_mode = "native_tool"
         parse_error: Exception | None = None
         tool_call: dict[str, str] | None = None
@@ -574,17 +700,24 @@ def _native_tool_completion(
                     "error": str(parse_error),
                     "duration_seconds": duration,
                     "retryable": True,
+                    "finish_reason": finish_reason,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "seed": seed,
                 },
             )
             if attempt_number > args.max_api_retries:
                 raise parse_error
+            recovery = _recovery_prompt(
+                error=parse_error, finish_reason=finish_reason
+            )
+            disable_thinking_for_recovery = finish_reason == "length"
             delay = min(float(2 ** (attempt_number - 1)), _remaining(deadline))
             time.sleep(delay)
             continue
         (attempt_dir / "content.json").write_text(
             tool_call["arguments"] + "\n", encoding="utf-8"
         )
-        input_tokens, output_tokens = _usage(response)
         _write_json_atomic(
             attempt_dir / "success.json",
             {
@@ -592,6 +725,7 @@ def _native_tool_completion(
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "seed": seed,
+                "finish_reason": finish_reason,
                 "tool_call_id": tool_call["id"],
                 "tool_name": tool_call["name"],
                 "response_mode": response_mode,
@@ -614,8 +748,8 @@ def _native_tool_completion(
             tool_call,
             assistant_message,
             payload,
-            input_tokens,
-            output_tokens,
+            total_input_tokens,
+            total_output_tokens,
             total_duration,
             attempt_number,
             response_mode,
@@ -919,6 +1053,9 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
         "history_messages_loaded": len(history),
         "temperature": args.temperature,
         "top_p": args.top_p,
+        "top_k": args.top_k,
+        "repetition_penalty": args.repetition_penalty,
+        "max_decision_tokens": args.max_decision_tokens,
         "max_tokens": args.max_tokens,
         "max_tool_calls": args.max_tool_calls,
         "max_controller_decisions": args.max_controller_decisions,
@@ -1007,6 +1144,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     turn_dir=turn_dir,
                     turn_number=model_turn,
                     deadline=deadline,
+                    max_tokens=args.max_decision_tokens,
                     content_fallback_schema=stage_schema,
                     content_fallback_name="submit_stage_artifact",
                     content_fallback_validator=validate_stage_fallback,
@@ -1038,6 +1176,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     turn_dir=turn_dir,
                     turn_number=model_turn,
                     deadline=deadline,
+                    max_tokens=args.max_decision_tokens,
                 )
                 assistant_message = {"role": "assistant", "content": content}
                 decision = _decision_from_text(content)
@@ -1193,6 +1332,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     turn_dir=turn_dir,
                     turn_number=model_turn,
                     deadline=deadline,
+                    max_tokens=args.max_tokens,
                     content_fallback_schema=stage_schema,
                     content_fallback_name="submit_stage_artifact",
                 )
@@ -1213,6 +1353,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     turn_dir=turn_dir,
                     turn_number=model_turn,
                     deadline=deadline,
+                    max_tokens=args.max_tokens,
                 )
                 assistant_message = {"role": "assistant", "content": content}
                 response_mode = "json_schema"
@@ -1307,6 +1448,12 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 "model_id": model_id,
                 "thinking_mode": args.thinking_mode,
                 "interaction_mode": args.interaction_mode,
+                "temperature": args.temperature,
+                "top_p": args.top_p,
+                "top_k": args.top_k,
+                "repetition_penalty": args.repetition_penalty,
+                "max_decision_tokens": args.max_decision_tokens,
+                "max_artifact_tokens": args.max_tokens,
                 "session_action": session_action,
                 "session_sha256": _sha256(session_id),
                 "history_messages_loaded": len(history),
@@ -1372,8 +1519,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "and the visible response."
         ),
     )
+    parser.add_argument(
+        "--max-decision-tokens",
+        type=int,
+        default=None,
+        help=(
+            "Maximum completion tokens for controller decisions. The default uses "
+            "--max-tokens; artifact and repair turns always use --max-tokens."
+        ),
+    )
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=-1,
+        help="vLLM top-k sampling; -1 disables the cutoff.",
+    )
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        default=1.0,
+        help="vLLM repetition penalty applied to prompt and generated tokens.",
+    )
     parser.add_argument(
         "--thinking-mode",
         choices=("server-default", "enabled", "disabled"),
@@ -1393,6 +1561,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     args = parser.parse_args(argv)
+    if args.max_decision_tokens is None:
+        args.max_decision_tokens = args.max_tokens
     if args.timeout_seconds <= 0:
         parser.error("--timeout-seconds must be positive")
     if not 0 < args.api_timeout_seconds < args.timeout_seconds:
@@ -1404,10 +1574,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("tool-call limits are inconsistent")
     if args.max_controller_decisions < args.max_tool_calls:
         parser.error("--max-controller-decisions must be at least --max-tool-calls")
-    if args.max_tokens < 1 or args.max_history_chars < 1 or args.max_tool_output_chars < 1:
+    if (
+        args.max_tokens < 1
+        or args.max_decision_tokens < 1
+        or args.max_history_chars < 1
+        or args.max_tool_output_chars < 1
+    ):
         parser.error("token, history, and tool-output limits must be positive")
     if not 0 <= args.temperature <= 2 or not 0 < args.top_p <= 1:
         parser.error("sampling settings are out of range")
+    if args.top_k != -1 and args.top_k < 1:
+        parser.error("--top-k must be -1 or positive")
+    if args.repetition_penalty <= 0:
+        parser.error("--repetition-penalty must be positive")
     discovered_bwrap = shutil.which(args.bwrap)
     if discovered_bwrap is None:
         parser.error(f"bubblewrap executable not found: {args.bwrap}")
