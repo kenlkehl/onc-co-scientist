@@ -96,7 +96,7 @@ def test_tracked_grid_template_locks_calls_timeouts_and_parallelism() -> None:
     assert template["models"][0]["reasoning_effort"] == "low"
 
 
-def test_medium_v5_template_locks_resilient_fast_reasoning_and_eight_hour_ceiling() -> None:
+def test_medium_v6_template_locks_resilient_fast_reasoning_and_eight_hour_ceiling() -> None:
     template = yaml.safe_load(
         (EXPERIMENT / "nsclc_semantic_workflow_grid_medium.template.yaml").read_text(
             encoding="utf-8"
@@ -106,10 +106,10 @@ def test_medium_v5_template_locks_resilient_fast_reasoning_and_eight_hour_ceilin
     model = _locked_model_manifest(template)
 
     assert template["experiment_id"] == (
-        "nsclc-semantic-workflow-grid-luna-medium-fast-resilient-localenv-v5-20x5"
+        "nsclc-semantic-workflow-grid-luna-medium-fast-resilient-localenv-v6-20x5"
     )
     assert model == {
-        "profile": "codex-luna-medium-fast-resilient-localenv-v5",
+        "profile": "codex-luna-medium-fast-resilient-localenv-v6",
         "id": "gpt-5.6-luna",
         "adapter": "cli-json",
         "reasoning_effort": "medium",
@@ -126,7 +126,7 @@ def test_medium_v5_template_locks_resilient_fast_reasoning_and_eight_hour_ceilin
     }
     assert template["iteration_policy"] == {"iterations": 20, "completion_mode": "fixed"}
     assert template["replicates"] == 5
-    assert template["max_parallel"] == 6
+    assert template["max_parallel"] == 12
 
     mismatched = json.loads(json.dumps(template))
     mismatched["models"][0]["reasoning_effort"] = "low"
@@ -150,6 +150,14 @@ def test_medium_v5_template_locks_resilient_fast_reasoning_and_eight_hour_ceilin
     args[args.index("--max-runtime-retries") + 1] = "-1"
     with pytest.raises(ValueError, match="runtime-retry limit"):
         _locked_model_manifest(invalid_runtime_retries)
+
+
+def test_prepare_smoke_parallelism_is_explicit() -> None:
+    assert prepare_module.parse_args([]).smoke_max_parallel == 2
+    assert (
+        prepare_module.parse_args(["--smoke-max-parallel", "6"]).smoke_max_parallel
+        == 6
+    )
 
 
 def test_qwen38_vllm_v2_template_locks_controller_sampling_and_isolation() -> None:

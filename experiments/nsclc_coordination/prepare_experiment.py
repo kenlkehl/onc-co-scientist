@@ -394,6 +394,8 @@ def _machine_manifest(
 
 
 def prepare(args: argparse.Namespace) -> dict[str, Any]:
+    if args.smoke_max_parallel < 1:
+        raise ValueError("smoke_max_parallel must be at least 1.")
     repo = args.repo.resolve(strict=True)
     source_paths = _source_paths(repo)
     observed = {label: _sha256(path) for label, path in source_paths.items()}
@@ -436,7 +438,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     smoke["output_root"] = str(args.smoke_output_root.resolve())
     smoke["iteration_policy"]["iterations"] = 1
     smoke["replicates"] = 1
-    smoke["max_parallel"] = 2
+    smoke["max_parallel"] = args.smoke_max_parallel
     smoke["budget"]["max_agent_calls"] = 12
     stub = json.loads(json.dumps(main))
     stub["experiment_id"] = args.stub_experiment_id
@@ -526,6 +528,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--stub-experiment-id",
         default="nsclc-semantic-workflow-grid-stub-gate",
     )
+    parser.add_argument("--smoke-max-parallel", type=int, default=2)
     parser.add_argument(
         "--main-output-root", type=Path, default=results / "semantic-workflow-grid-main"
     )

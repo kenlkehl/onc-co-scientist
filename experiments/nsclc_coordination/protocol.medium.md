@@ -1,15 +1,13 @@
-# NSCLC semantic masking × workflow grid: Luna-medium resilient local-env v5 protocol
+# NSCLC semantic masking × workflow grid: Luna-medium resilient local-env v6 protocol
 
 ## Status and frozen objective
 
-This is a new prospective v5 experiment. It does not resume or pool the stopped
-Luna-low run or any Luna-medium predecessor. In v4, three of 30 main runs
-completed before a temporary Codex backend-routing outage caused 26 transport
-failures (HTTP 404 from both WebSocket and HTTPS Responses paths) and the
-scheduler immediately fed queued runs into that outage. One additional v4 run
-failed after three otherwise valid synthesis artifacts each used an off-by-one
-`supported_claim_indices` value. The v4 root remains immutable and is excluded
-from v5 analysis.
+This is a new prospective v6 experiment. It does not resume or pool the stopped
+Luna-low run or any Luna-medium predecessor. The v5 live smoke was stopped by
+operator request while incomplete after its low two-way concurrency made the
+technical gate impractically slow. Its root remains preserved and immutable and
+is excluded from v6 analysis. The only intended change from v5 is concurrency:
+the excluded live smoke uses six workers and the main run uses twelve.
 
 The replacement tests the same 2 × 3 factorial grid on the synthetic
 50,000-row NSCLC cohort. The semantic factor is `named` versus `masked`; the
@@ -21,7 +19,7 @@ exactly 20 ordered iterations of:
 
 The pinned source baseline is commit
 `4a8fd25f104869d9209ec010bac504b8a91a4964`. The execution-plan documentation
-commit and the v5 implementation commit are captured in the frozen machine
+commit and the v6 implementation commit are captured in the frozen machine
 manifest. The model is `gpt-5.6-luna`, with reasoning effort explicitly locked
 to `medium` and Codex `service_tier` explicitly locked to `fast`. The outer
 per-call timeout is 28,800 seconds and the adapter has one shared 28,780-second
@@ -69,12 +67,12 @@ directory. Logical schema-repair and physical transport-retry counts are
 reported separately, while call-level tokens, tool calls, and duration aggregate
 all attempts.
 
-Before any v5 live call, the controller, adapter, and model-visible analysis
+Before any v6 live call, the controller, adapter, and model-visible analysis
 Python use `/home/klkehl/thisenv`, a local ext4 virtual environment containing a
 non-editable installation of the committed package and scientific dependencies.
 The Codex CLI package is copied to a versioned local-ext4 path and its version
-and hash are frozen. No v5 prompt, schedule, iteration count, retry cap,
-concurrency, or scientific endpoint may be changed after inspecting v5
+and hash are frozen. No v6 prompt, schedule, iteration count, retry cap,
+concurrency, or scientific endpoint may be changed after inspecting v6
 scientific results.
 
 ## Conditions and scientific task
@@ -112,9 +110,9 @@ separately. This is a native-resource comparison, not a resource-matched
 comparison. Calls, original, repair, and transport-retry turns, tokens, tool
 calls, duration, timeout status, and efficiency endpoints are reported.
 
-The excluded live smoke uses two concurrent runs. After every smoke run and all
-40 planned harness calls pass the technical gate, the main run uses six
-concurrent runs as explicitly authorized for v5.
+The excluded live smoke uses six concurrent runs. After every smoke run and all
+40 planned harness calls pass the technical gate, the main run uses twelve
+concurrent runs as explicitly authorized for v6.
 
 ## Isolation and reproducibility
 
@@ -174,8 +172,8 @@ descriptive contrasts. With five replicates per cell, no confirmatory
 workflow-superiority p-values are reported. Technical failures and truncated
 runs remain in denominators and reports.
 
-The one-iteration v5 live smoke is stored under a distinct
-`medium-fast-resilient-localenv-v5-smoke` root and excluded from the main analysis.
+The one-iteration v6 live smoke is stored under a distinct
+`medium-fast-resilient-localenv-v6-smoke` root and excluded from the main analysis.
 Main launch is automatic only after the smoke summary, normalized artifacts,
 per-attempt audits, Luna/medium/Fast/local-environment locks, isolation contract,
 schema hashes, and cross-field synthesis invariants all pass.
