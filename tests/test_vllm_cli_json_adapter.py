@@ -35,8 +35,58 @@ class _FakeResponse:
         }
 
 
+class _FakeToolResponse:
+    def __init__(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        call_id: str,
+        input_tokens: int = 10,
+        output_tokens: int = 5,
+    ):
+        encoded = json.dumps(arguments)
+        function = SimpleNamespace(name=name, arguments=encoded)
+        tool_call = SimpleNamespace(id=call_id, function=function)
+        self.choices = [
+            SimpleNamespace(
+                message=SimpleNamespace(content="", tool_calls=[tool_call])
+            )
+        ]
+        self.usage = SimpleNamespace(
+            prompt_tokens=input_tokens,
+            completion_tokens=output_tokens,
+        )
+        self._name = name
+        self._arguments = encoded
+        self._call_id = call_id
+
+    def model_dump(self, *, mode: str) -> dict[str, Any]:
+        assert mode == "json"
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": self._call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": self._name,
+                                    "arguments": self._arguments,
+                                },
+                            }
+                        ],
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+
+
 class _FakeCompletions:
-    def __init__(self, responses: list[_FakeResponse]):
+    def __init__(self, responses: list[Any]):
         self.responses = responses
         self.requests: list[dict[str, Any]] = []
 
@@ -109,6 +159,8 @@ def _args(tmp_path: Path, request_file: Path, output: Path) -> argparse.Namespac
         max_tokens=1_024,
         temperature=0.2,
         top_p=0.95,
+        thinking_mode="enabled",
+        interaction_mode="json-schema",
     )
 
 
@@ -212,12 +264,18 @@ def test_adapter_repairs_semantic_contract_and_saves_session(tmp_path: Path) -> 
         request["max_tokens"] == 1_024
         for request in client.chat.completions.requests
     )
+    assert all(
+        request["extra_body"]["chat_template_kwargs"] == {"enable_thinking": True}
+        for request in client.chat.completions.requests
+    )
     assert response.usage.input_tokens == 30
     assert response.usage.output_tokens == 15
     assert response.runtime_metadata["contract_repair_count"] == 1
     assert output.exists()
     audit = json.loads((call_dir / "vllm_call.json").read_text())
     assert audit["status"] == "accepted"
+    assert audit["thinking_mode"] == "enabled"
+    assert audit["interaction_mode"] == "json-schema"
     assert [turn["kind"] for turn in audit["turns"]] == [
         "decision",
         "artifact",
@@ -227,3 +285,134 @@ def test_adapter_repairs_semantic_contract_and_saves_session(tmp_path: Path) -> 
     assert len(session_files) == 1
     session = json.loads(session_files[0].read_text())
     assert len(session["history"]) == 2
+
+
+def test_adapter_uses_native_tools_for_controller_and_artifact(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    scratch = tmp_path / "run" / "scratch" / "session"
+    call_dir = tmp_path / "run" / "calls" / "call_0001"
+    workspace.mkdir(parents=True)
+    scratch.mkdir(parents=True)
+    request = {
+        "request_id": "run:c0001",
+        "experiment_id": "experiment",
+        "run_id": "run",
+        "task_id": "task",
+        "workflow_id": "persistent",
+        "model_profile": "gemma",
+        "model_id": "gemma4-31b",
+        "reasoning_effort": None,
+        "stage_id": "synthesis",
+        "require_final_answer": True,
+        "iteration_index": 1,
+        "max_iterations": 1,
+        "stage_index": 3,
+        "stage_position": 4,
+        "terminal": True,
+        "role": "synthesis scientist",
+        "agent_id": "agent",
+        "session_id": "persistent-session",
+        "prompt": "Return the required artifact.",
+        "workspace": str(workspace),
+        "scratch_dir": str(scratch),
+        "metadata": {},
+    }
+    request_file = call_dir / "request.json"
+    request_file.parent.mkdir(parents=True)
+    request_file.write_text(json.dumps(request), encoding="utf-8")
+    output = call_dir / "response.json"
+    client = _FakeClient(
+        [
+            _FakeToolResponse(
+                "finish_stage", {"purpose": "ready"}, call_id="finish-1"
+            ),
+            _FakeToolResponse(
+                "submit_stage_artifact",
+                _artifact(supported=True),
+                call_id="artifact-1",
+            ),
+        ]
+    )
+    args = _args(tmp_path, request_file, output)
+    args.interaction_mode = "native-tools"
+    args.min_tool_calls = 0
+
+    response = run_adapter(args, client=client)
+
+    requests = client.chat.completions.requests
+    assert len(requests) == 2
+    assert requests[0]["tool_choice"] == "required"
+    assert {
+        tool["function"]["name"] for tool in requests[0]["tools"]
+    } == {"run_python", "finish_stage"}
+    assert requests[1]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "submit_stage_artifact"},
+    }
+    assert response.artifact.final_answer is not None
+    audit = json.loads((call_dir / "vllm_call.json").read_text())
+    assert audit["interaction_mode"] == "native-tools"
+    assert [turn["kind"] for turn in audit["turns"]] == ["decision", "artifact"]
+
+
+def test_adapter_retries_native_tool_arguments_that_fail_schema(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    scratch = tmp_path / "run" / "scratch" / "session"
+    call_dir = tmp_path / "run" / "calls" / "call_0001"
+    workspace.mkdir(parents=True)
+    scratch.mkdir(parents=True)
+    request = {
+        "request_id": "run:c0001",
+        "experiment_id": "experiment",
+        "run_id": "run",
+        "task_id": "task",
+        "workflow_id": "persistent",
+        "model_profile": "gemma",
+        "model_id": "gemma4-31b",
+        "reasoning_effort": None,
+        "stage_id": "synthesis",
+        "require_final_answer": True,
+        "iteration_index": 1,
+        "max_iterations": 1,
+        "stage_index": 3,
+        "stage_position": 4,
+        "terminal": True,
+        "role": "synthesis scientist",
+        "agent_id": "agent",
+        "session_id": "persistent-session",
+        "prompt": "Return the required artifact.",
+        "workspace": str(workspace),
+        "scratch_dir": str(scratch),
+        "metadata": {},
+    }
+    request_file = call_dir / "request.json"
+    request_file.parent.mkdir(parents=True)
+    request_file.write_text(json.dumps(request), encoding="utf-8")
+    output = call_dir / "response.json"
+    client = _FakeClient(
+        [
+            _FakeToolResponse("finish_stage", {}, call_id="invalid-finish"),
+            _FakeToolResponse(
+                "finish_stage", {"purpose": "ready"}, call_id="valid-finish"
+            ),
+            _FakeToolResponse(
+                "submit_stage_artifact",
+                _artifact(supported=True),
+                call_id="artifact-1",
+            ),
+        ]
+    )
+    args = _args(tmp_path, request_file, output)
+    args.interaction_mode = "native-tools"
+    args.min_tool_calls = 0
+    args.max_api_retries = 1
+
+    run_adapter(args, client=client)
+
+    assert len(client.chat.completions.requests) == 3
+    attempt_root = call_dir / "vllm_turns" / "model_turn_0001_decision"
+    first_error = json.loads((attempt_root / "attempt_0001" / "error.json").read_text())
+    assert first_error["error_type"] == "ValueError"
+    assert first_error["retryable"] is True
+    audit = json.loads((call_dir / "vllm_call.json").read_text())
+    assert audit["turns"][0]["api_attempts"] == 2

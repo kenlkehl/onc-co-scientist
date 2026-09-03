@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify, isolate, and resolve the Qwen3.8-27B vLLM NSCLC grid."""
+"""Verify, isolate, and resolve an OpenAI-compatible vLLM NSCLC grid."""
 
 from __future__ import annotations
 
@@ -46,23 +46,62 @@ def _locked_model_manifest(
     adapter: Path,
     bwrap: Path,
     base_url: str,
+    expected_model_id: str = "Qwen/Qwen3.8-27B",
+    expected_thinking_mode: str = "server-default",
+    expected_interaction_mode: str = "json-schema",
 ) -> dict[str, Any]:
+    if expected_thinking_mode not in {"server-default", "enabled", "disabled"}:
+        raise ValueError(f"Unsupported thinking mode: {expected_thinking_mode}")
+    if expected_interaction_mode not in {"json-schema", "native-tools"}:
+        raise ValueError(f"Unsupported interaction mode: {expected_interaction_mode}")
     models = config.get("models")
     if not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict):
         raise ValueError("The vLLM grid requires exactly one model profile.")
     model = models[0]
     if model.get("adapter") != "cli-json":
         raise ValueError("The vLLM grid requires the generic cli-json runtime boundary.")
-    if model.get("model_id") != "Qwen/Qwen3.8-27B":
-        raise ValueError("The vLLM grid is locked to Qwen/Qwen3.8-27B.")
+    if model.get("model_id") != expected_model_id:
+        raise ValueError(f"The vLLM grid is locked to {expected_model_id}.")
     if model.get("reasoning_effort") is not None:
-        raise ValueError("The local Qwen profile must not claim a Codex reasoning effort.")
+        raise ValueError("A local vLLM profile must not claim a Codex reasoning effort.")
     command = model.get("command")
     if command != [str(python), str(adapter)]:
         raise ValueError("The vLLM adapter command does not match the local runtime lock.")
     extra_args = model.get("extra_args")
     if not isinstance(extra_args, list) or not all(isinstance(item, str) for item in extra_args):
         raise ValueError("The vLLM model profile must provide string extra_args.")
+    thinking_positions = [
+        index for index, item in enumerate(extra_args) if item == "--thinking-mode"
+    ]
+    if len(thinking_positions) > 1:
+        raise ValueError("The vLLM model profile repeats --thinking-mode.")
+    observed_thinking_mode = "server-default"
+    if thinking_positions:
+        position = thinking_positions[0]
+        if position + 1 >= len(extra_args):
+            raise ValueError("The vLLM model profile omits the thinking-mode value.")
+        observed_thinking_mode = extra_args[position + 1]
+    if observed_thinking_mode != expected_thinking_mode:
+        raise ValueError(
+            "vLLM thinking-mode lock mismatch: "
+            f"expected={expected_thinking_mode}, observed={observed_thinking_mode}"
+        )
+    interaction_positions = [
+        index for index, item in enumerate(extra_args) if item == "--interaction-mode"
+    ]
+    if len(interaction_positions) > 1:
+        raise ValueError("The vLLM model profile repeats --interaction-mode.")
+    observed_interaction_mode = "json-schema"
+    if interaction_positions:
+        position = interaction_positions[0]
+        if position + 1 >= len(extra_args):
+            raise ValueError("The vLLM model profile omits the interaction-mode value.")
+        observed_interaction_mode = extra_args[position + 1]
+    if observed_interaction_mode != expected_interaction_mode:
+        raise ValueError(
+            "vLLM interaction-mode lock mismatch: "
+            f"expected={expected_interaction_mode}, observed={observed_interaction_mode}"
+        )
     expected = {
         "--base-url": base_url,
         "--api-key": "EMPTY",
@@ -82,6 +121,10 @@ def _locked_model_manifest(
         "--temperature": "0.2",
         "--top-p": "0.95",
     }
+    if expected_thinking_mode != "server-default":
+        expected["--thinking-mode"] = expected_thinking_mode
+    if expected_interaction_mode != "json-schema":
+        expected["--interaction-mode"] = expected_interaction_mode
     observed = {flag: _flag(extra_args, flag) for flag in expected}
     if observed != expected:
         raise ValueError(f"vLLM runtime lock mismatch: expected={expected}, observed={observed}")
@@ -93,10 +136,12 @@ def _locked_model_manifest(
         "id": str(model["model_id"]),
         "adapter": "vllm-cli-json",
         "base_url": base_url,
+        "interaction_mode": expected_interaction_mode,
         "sampling": {
             "temperature": float(observed["--temperature"]),
             "top_p": float(observed["--top-p"]),
             "max_tokens": int(observed["--max-tokens"]),
+            "thinking_mode": expected_thinking_mode,
             "seed_policy": "sha256(request_id,prompt_hash,turn,schema)",
         },
         "limits": {
@@ -222,6 +267,9 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         adapter=adapter,
         bwrap=bwrap,
         base_url=args.base_url.rstrip("/"),
+        expected_model_id=args.model_id,
+        expected_thinking_mode=args.thinking_mode,
+        expected_interaction_mode=args.interaction_mode,
     )
     smoke = json.loads(json.dumps(main))
     smoke["experiment_id"] = args.smoke_experiment_id
@@ -345,6 +393,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--base-url", default="http://camus.dfci.harvard.edu:8060/v1")
     parser.add_argument("--model-id", default="Qwen/Qwen3.8-27B")
+    parser.add_argument(
+        "--thinking-mode",
+        choices=("server-default", "enabled", "disabled"),
+        default="server-default",
+    )
+    parser.add_argument(
+        "--interaction-mode",
+        choices=("json-schema", "native-tools"),
+        default="json-schema",
+    )
     parser.add_argument("--bwrap", default="bwrap")
     return parser.parse_args(argv)
 

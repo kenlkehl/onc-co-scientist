@@ -186,6 +186,7 @@ def test_qwen38_vllm_v2_template_locks_controller_sampling_and_isolation() -> No
         "temperature": 0.2,
         "top_p": 0.95,
         "max_tokens": 100_000,
+        "thinking_mode": "server-default",
         "seed_policy": "sha256(request_id,prompt_hash,turn,schema)",
     }
     assert model["limits"]["max_tool_calls"] == 32
@@ -204,6 +205,71 @@ def test_qwen38_vllm_v2_template_locks_controller_sampling_and_isolation() -> No
             adapter=adapter,
             bwrap=bwrap,
             base_url=base_url,
+        )
+
+
+def test_gemma4_vllm_v1_template_locks_thinking_and_controller_runtime() -> None:
+    template = yaml.safe_load(
+        (
+            EXPERIMENT
+            / "nsclc_semantic_workflow_grid_gemma4_31b_vllm_v1.template.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    python = Path("/home/klkehl/thisenv/bin/python")
+    adapter = Path("/repo/scripts/vllm_cli_json_adapter.py")
+    bwrap = Path("/usr/bin/bwrap")
+    base_url = "http://172.24.216.113:1234/v1"
+    resolved = prepare_module._replace_tokens(
+        template,
+        {
+            "__MAIN_OUTPUT_ROOT__": "/results/main",
+            "__NAMED_PUBLIC_WORKSPACE__": "/public/named",
+            "__MASKED_PUBLIC_WORKSPACE__": "/public/masked",
+            "__NAMED_PRIVATE_MANIFEST__": "/private/named.json",
+            "__MASKED_PRIVATE_MANIFEST__": "/private/masked.json",
+            "__COLUMN_MAPPING__": "/private/mapping.json",
+            "__LOCAL_PYTHON__": str(python),
+            "__VLLM_ADAPTER__": str(adapter),
+            "__VLLM_BASE_URL__": base_url,
+            "__BWRAP__": str(bwrap),
+        },
+    )
+
+    model = prepare_vllm_module._locked_model_manifest(
+        resolved,
+        python=python,
+        adapter=adapter,
+        bwrap=bwrap,
+        base_url=base_url,
+        expected_model_id="gemma4-31b",
+        expected_thinking_mode="enabled",
+        expected_interaction_mode="native-tools",
+    )
+
+    assert resolved["experiment_id"] == (
+        "nsclc-semantic-workflow-grid-gemma4-31b-vllm-v1-20x5"
+    )
+    assert resolved["replicates"] == 5
+    assert resolved["max_parallel"] == 6
+    assert model["id"] == "gemma4-31b"
+    assert model["interaction_mode"] == "native-tools"
+    assert model["sampling"]["thinking_mode"] == "enabled"
+    assert model["sampling"]["max_tokens"] == 100_000
+    assert model["limits"]["api_timeout_seconds"] == 7_200
+
+    changed = json.loads(json.dumps(resolved))
+    extra_args = changed["models"][0]["extra_args"]
+    extra_args[extra_args.index("--thinking-mode") + 1] = "disabled"
+    with pytest.raises(ValueError, match="thinking-mode lock mismatch"):
+        prepare_vllm_module._locked_model_manifest(
+            changed,
+            python=python,
+            adapter=adapter,
+            bwrap=bwrap,
+            base_url=base_url,
+            expected_model_id="gemma4-31b",
+            expected_thinking_mode="enabled",
+            expected_interaction_mode="native-tools",
         )
 
 

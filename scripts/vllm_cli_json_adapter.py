@@ -47,7 +47,7 @@ except ModuleNotFoundError:  # Direct execution puts ``scripts/`` on sys.path.
     )
 
 
-ADAPTER_PROTOCOL_VERSION = 1
+ADAPTER_PROTOCOL_VERSION = 2
 DEFAULT_API_TIMEOUT_SECONDS = 7_200.0
 DEFAULT_MAX_TOKENS = 100_000
 DECISION_SCHEMA: dict[str, Any] = {
@@ -61,6 +61,21 @@ DECISION_SCHEMA: dict[str, Any] = {
         "purpose": {"type": "string", "minLength": 1},
     },
     "required": ["action", "python_code", "purpose"],
+}
+PYTHON_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "python_code": {"type": "string", "minLength": 1},
+        "purpose": {"type": "string", "minLength": 1},
+    },
+    "required": ["python_code", "purpose"],
+}
+FINISH_TOOL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {"purpose": {"type": "string", "minLength": 1}},
+    "required": ["purpose"],
 }
 
 SYSTEM_PROMPT = """You are a scientific analysis agent in a controlled experiment.
@@ -82,6 +97,26 @@ On artifact turns, return only the artifact required by the user's stage contrac
 the artifact JSON schema as authoritative. Preserve null and negative findings, never
 invent quantitative support, and make every supported_claim_indices entry refer to an
 existing claim whose supported field is true.
+"""
+
+NATIVE_TOOL_SYSTEM_PROMPT = """You are a scientific analysis agent in a controlled
+experiment. Use only the task prompt, prior accepted stage artifacts supplied in this
+conversation, and results returned by the sandboxed Python controller. Never infer or
+seek evaluator files, scoring keys, parent directories, sibling workspaces, credentials,
+or network resources.
+
+On controller turns, call exactly one provided function. Call run_python with
+self-contained code when you need to inspect data, calculate statistics, verify prior
+work, or read public documentation. Python starts in the public workspace, can read that
+workspace and installed scientific packages, can write only to the scratch directory
+named in the task prompt, and has no network. Print concise, information-rich results;
+do not print whole datasets. Call finish_stage only when you have enough reproducible
+evidence for the requested stage.
+
+On artifact turns, call submit_stage_artifact exactly once with the complete artifact
+required by the user's stage contract. Treat its parameter schema as authoritative.
+Preserve null and negative findings, never invent quantitative support, and make every
+supported_claim_indices entry refer to an existing claim whose supported field is true.
 """
 
 
@@ -112,6 +147,8 @@ def _session_settings(args: argparse.Namespace, model_id: str) -> dict[str, Any]
         "max_tokens": args.max_tokens,
         "max_history_chars": args.max_history_chars,
         "max_controller_decisions": args.max_controller_decisions,
+        "thinking_mode": args.thinking_mode,
+        "interaction_mode": args.interaction_mode,
     }
 
 
@@ -191,6 +228,19 @@ def _response_payload(response: Any) -> dict[str, Any]:
     raise RuntimeError("The vLLM client returned an unsupported response object.")
 
 
+def _client_request_payload(request_payload: dict[str, Any]) -> dict[str, Any]:
+    """Move vLLM-only request fields under the OpenAI SDK's extra_body hook."""
+    payload = dict(request_payload)
+    extra_body = {
+        key: payload.pop(key)
+        for key in ("chat_template_kwargs", "structured_outputs")
+        if key in payload
+    }
+    if extra_body:
+        payload["extra_body"] = extra_body
+    return payload
+
+
 def _retryable_api_error(exc: Exception) -> bool:
     status = getattr(exc, "status_code", None)
     if status is None:
@@ -248,6 +298,10 @@ def _chat_completion(
             "json_schema": {"name": schema_name, "strict": True, "schema": schema},
         },
     }
+    if args.thinking_mode != "server-default":
+        request_payload["chat_template_kwargs"] = {
+            "enable_thinking": args.thinking_mode == "enabled"
+        }
     turn_dir.mkdir(parents=True, exist_ok=False)
     _write_json_atomic(turn_dir / "request.json", request_payload)
 
@@ -259,7 +313,7 @@ def _chat_completion(
         try:
             timeout = min(args.api_timeout_seconds, _remaining(deadline))
             response = client.with_options(timeout=timeout).chat.completions.create(
-                **request_payload
+                **_client_request_payload(request_payload)
             )
         except Exception as exc:
             duration = time.monotonic() - started
@@ -297,6 +351,204 @@ def _chat_completion(
         )
         return (
             content,
+            payload,
+            input_tokens,
+            output_tokens,
+            total_duration,
+            attempt_number,
+        )
+    raise AssertionError("unreachable")
+
+
+def _function_tool(
+    name: str, description: str, parameters: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "strict": True,
+            "parameters": parameters,
+        },
+    }
+
+
+def _controller_tools() -> list[dict[str, Any]]:
+    return [
+        _function_tool(
+            "run_python",
+            "Run self-contained Python in the isolated scientific-analysis sandbox.",
+            PYTHON_TOOL_SCHEMA,
+        ),
+        _function_tool(
+            "finish_stage",
+            "Stop using tools and proceed to the required stage artifact.",
+            FINISH_TOOL_SCHEMA,
+        ),
+    ]
+
+
+def _artifact_tool(schema: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        _function_tool(
+            "submit_stage_artifact",
+            "Submit the complete stage artifact required by the experiment contract.",
+            schema,
+        )
+    ]
+
+
+def _native_tool_call(response: Any) -> tuple[dict[str, str], dict[str, Any]]:
+    choices = getattr(response, "choices", None)
+    if not choices:
+        raise RuntimeError("The vLLM response contained no choices.")
+    message = choices[0].message
+    tool_calls = getattr(message, "tool_calls", None)
+    if not isinstance(tool_calls, list) or len(tool_calls) != 1:
+        raise RuntimeError("The vLLM response did not contain exactly one tool call.")
+    tool_call = tool_calls[0]
+    call_id = getattr(tool_call, "id", None)
+    function = getattr(tool_call, "function", None)
+    name = getattr(function, "name", None)
+    arguments = getattr(function, "arguments", None)
+    if not isinstance(call_id, str) or not call_id:
+        raise RuntimeError("The vLLM tool call omitted its ID.")
+    if not isinstance(name, str) or not name:
+        raise RuntimeError("The vLLM tool call omitted its function name.")
+    if isinstance(arguments, dict):
+        arguments = json.dumps(arguments, separators=(",", ":"))
+    if not isinstance(arguments, str) or not arguments.strip():
+        raise RuntimeError("The vLLM tool call omitted its arguments.")
+    normalized = {"id": call_id, "name": name, "arguments": arguments.strip()}
+    assistant_message = {
+        "role": "assistant",
+        "content": getattr(message, "content", None) or "",
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": name, "arguments": normalized["arguments"]},
+            }
+        ],
+    }
+    return normalized, assistant_message
+
+
+def _native_tool_completion(
+    *,
+    client: Any,
+    args: argparse.Namespace,
+    model_id: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    tool_choice: str | dict[str, Any],
+    schema_name: str,
+    turn_dir: Path,
+    turn_number: int,
+    deadline: float,
+) -> tuple[dict[str, str], dict[str, Any], dict[str, Any], int, int, float, int]:
+    seed_material = f"{args.seed_namespace}:{turn_number}:{schema_name}"
+    seed = int(_sha256(seed_material)[:8], 16) & 0x7FFFFFFF
+    request_payload: dict[str, Any] = {
+        "model": model_id,
+        "messages": messages,
+        "temperature": args.temperature,
+        "top_p": args.top_p,
+        "max_tokens": args.max_tokens,
+        "seed": seed,
+        "tools": tools,
+        "tool_choice": tool_choice,
+        "parallel_tool_calls": False,
+    }
+    if args.thinking_mode != "server-default":
+        request_payload["chat_template_kwargs"] = {
+            "enable_thinking": args.thinking_mode == "enabled"
+        }
+    tool_schemas = {
+        str(tool["function"]["name"]): tool["function"]["parameters"]
+        for tool in tools
+    }
+    turn_dir.mkdir(parents=True, exist_ok=False)
+    _write_json_atomic(turn_dir / "request.json", request_payload)
+
+    total_duration = 0.0
+    for attempt_number in range(1, args.max_api_retries + 2):
+        attempt_dir = turn_dir / f"attempt_{attempt_number:04d}"
+        attempt_dir.mkdir(parents=True, exist_ok=False)
+        started = time.monotonic()
+        try:
+            timeout = min(args.api_timeout_seconds, _remaining(deadline))
+            response = client.with_options(timeout=timeout).chat.completions.create(
+                **_client_request_payload(request_payload)
+            )
+        except Exception as exc:
+            duration = time.monotonic() - started
+            total_duration += duration
+            _write_json_atomic(
+                attempt_dir / "error.json",
+                {
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "duration_seconds": duration,
+                    "retryable": _retryable_api_error(exc),
+                },
+            )
+            if attempt_number > args.max_api_retries or not _retryable_api_error(exc):
+                raise
+            delay = min(float(2 ** (attempt_number - 1)), _remaining(deadline))
+            time.sleep(delay)
+            continue
+
+        duration = time.monotonic() - started
+        total_duration += duration
+        payload = _response_payload(response)
+        _write_json_atomic(attempt_dir / "response.json", payload)
+        try:
+            tool_call, assistant_message = _native_tool_call(response)
+            tool_schema = tool_schemas.get(tool_call["name"])
+            if tool_schema is None:
+                raise ValueError(
+                    f"vLLM invoked an unavailable native tool: {tool_call['name']}"
+                )
+            _schema_object_from_text(
+                tool_call["arguments"],
+                schema=tool_schema,
+                label=f"{tool_call['name']} tool call",
+            )
+        except (RuntimeError, ValueError) as exc:
+            _write_json_atomic(
+                attempt_dir / "error.json",
+                {
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "duration_seconds": duration,
+                    "retryable": True,
+                },
+            )
+            if attempt_number > args.max_api_retries:
+                raise
+            delay = min(float(2 ** (attempt_number - 1)), _remaining(deadline))
+            time.sleep(delay)
+            continue
+        (attempt_dir / "content.json").write_text(
+            tool_call["arguments"] + "\n", encoding="utf-8"
+        )
+        input_tokens, output_tokens = _usage(response)
+        _write_json_atomic(
+            attempt_dir / "success.json",
+            {
+                "duration_seconds": duration,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "seed": seed,
+                "tool_call_id": tool_call["id"],
+                "tool_name": tool_call["name"],
+            },
+        )
+        return (
+            tool_call,
+            assistant_message,
             payload,
             input_tokens,
             output_tokens,
@@ -478,21 +730,53 @@ def _run_python_tool(
     return result
 
 
-def _decision_from_text(raw: str) -> dict[str, str]:
+def _schema_object_from_text(
+    raw: str, *, schema: dict[str, Any], label: str
+) -> dict[str, Any]:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ValueError("vLLM controller decision was not valid JSON.") from exc
+        raise ValueError(f"vLLM {label} was not valid JSON.") from exc
     errors = sorted(
-        Draft202012Validator(DECISION_SCHEMA).iter_errors(payload),
+        Draft202012Validator(schema).iter_errors(payload),
         key=lambda error: tuple(str(part) for part in error.absolute_path),
     )
     if errors:
         error = errors[0]
         location = ".".join(str(part) for part in error.absolute_path) or "$"
-        raise ValueError(f"vLLM controller decision failed at {location}: {error.message}")
+        raise ValueError(f"vLLM {label} failed at {location}: {error.message}")
     assert isinstance(payload, dict)
+    return payload
+
+
+def _decision_from_text(raw: str) -> dict[str, str]:
+    payload = _schema_object_from_text(
+        raw, schema=DECISION_SCHEMA, label="controller decision"
+    )
     return {key: str(payload[key]) for key in ("action", "python_code", "purpose")}
+
+
+def _native_controller_decision(tool_call: dict[str, str]) -> dict[str, str]:
+    name = tool_call["name"]
+    if name == "run_python":
+        payload = _schema_object_from_text(
+            tool_call["arguments"], schema=PYTHON_TOOL_SCHEMA, label="Python tool call"
+        )
+        return {
+            "action": "python",
+            "python_code": str(payload["python_code"]),
+            "purpose": str(payload["purpose"]),
+        }
+    if name == "finish_stage":
+        payload = _schema_object_from_text(
+            tool_call["arguments"], schema=FINISH_TOOL_SCHEMA, label="finish tool call"
+        )
+        return {
+            "action": "final",
+            "python_code": "",
+            "purpose": str(payload["purpose"]),
+        }
+    raise ValueError(f"vLLM returned an unknown controller tool: {name}")
 
 
 def _repair_prompt(error: ValueError) -> str:
@@ -552,6 +836,8 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
         "max_controller_decisions": args.max_controller_decisions,
         "max_contract_repairs": args.max_contract_repairs,
         "max_api_retries": args.max_api_retries,
+        "thinking_mode": args.thinking_mode,
+        "interaction_mode": args.interaction_mode,
         "turns": [],
         "tool_calls": 0,
         "input_tokens": 0,
@@ -571,7 +857,12 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
     update_audit("starting")
     if client is None:
         client = _build_client(args)
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
+    system_prompt = (
+        NATIVE_TOOL_SYSTEM_PROMPT
+        if args.interaction_mode == "native-tools"
+        else SYSTEM_PROMPT
+    )
+    messages = [{"role": "system", "content": system_prompt}, *history]
     messages.append({"role": "user", "content": prompt})
     model_turn = 0
     tool_calls = 0
@@ -599,20 +890,46 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 },
             ]
             turn_dir = turns_dir / f"model_turn_{model_turn:04d}_decision"
-            content, _, used_in, used_out, duration, attempts = _chat_completion(
-                client=client,
-                args=args,
-                model_id=model_id,
-                messages=decision_messages,
-                schema=DECISION_SCHEMA,
-                schema_name="scientific_agent_decision",
-                turn_dir=turn_dir,
-                turn_number=model_turn,
-                deadline=deadline,
-            )
+            tool_call: dict[str, str] | None = None
+            if args.interaction_mode == "native-tools":
+                (
+                    tool_call,
+                    assistant_message,
+                    _,
+                    used_in,
+                    used_out,
+                    duration,
+                    attempts,
+                ) = _native_tool_completion(
+                    client=client,
+                    args=args,
+                    model_id=model_id,
+                    messages=decision_messages,
+                    tools=_controller_tools(),
+                    tool_choice="required",
+                    schema_name="scientific_agent_controller_tools",
+                    turn_dir=turn_dir,
+                    turn_number=model_turn,
+                    deadline=deadline,
+                )
+                content = tool_call["arguments"]
+                decision = _native_controller_decision(tool_call)
+            else:
+                content, _, used_in, used_out, duration, attempts = _chat_completion(
+                    client=client,
+                    args=args,
+                    model_id=model_id,
+                    messages=decision_messages,
+                    schema=DECISION_SCHEMA,
+                    schema_name="scientific_agent_decision",
+                    turn_dir=turn_dir,
+                    turn_number=model_turn,
+                    deadline=deadline,
+                )
+                assistant_message = {"role": "assistant", "content": content}
+                decision = _decision_from_text(content)
             input_tokens += used_in
             output_tokens += used_out
-            decision = _decision_from_text(content)
             record = {
                 "model_turn": model_turn,
                 "kind": "decision",
@@ -630,21 +947,36 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
             messages.extend(
                 [
                     {"role": "user", "content": decision_messages[-1]["content"]},
-                    {"role": "assistant", "content": content},
+                    assistant_message,
                 ]
             )
             if decision["action"] == "final":
                 if tool_calls >= args.min_tool_calls:
+                    if tool_call is not None:
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "name": tool_call["name"],
+                                "content": "Accepted. Proceed to the final stage artifact.",
+                            }
+                        )
                     break
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "You must inspect the public workspace with sandboxed Python at "
-                            "least once before finalizing. Choose a python action next."
-                        ),
-                    }
+                reminder = (
+                    "You must inspect the public workspace with sandboxed Python at "
+                    "least once before finalizing. Choose a python action next."
                 )
+                if tool_call is not None:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call["id"],
+                            "name": tool_call["name"],
+                            "content": reminder,
+                        }
+                    )
+                else:
+                    messages.append({"role": "user", "content": reminder})
                 continue
 
             tool_calls += 1
@@ -668,12 +1000,18 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 }
             )
             update_audit("running")
-            messages.append(
-                {
-                    "role": "user",
-                    "content": "SANDBOXED PYTHON RESULT\n" + json.dumps(result),
-                }
-            )
+            tool_result = "SANDBOXED PYTHON RESULT\n" + json.dumps(result)
+            if tool_call is not None:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "name": tool_call["name"],
+                        "content": tool_result,
+                    }
+                )
+            else:
+                messages.append({"role": "user", "content": tool_result})
         else:
             messages.append(
                 {
@@ -699,21 +1037,55 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
             model_turn += 1
             kind = "artifact" if repair_number == 0 else "contract_repair"
             turn_dir = turns_dir / f"model_turn_{model_turn:04d}_{kind}"
-            content, _, used_in, used_out, duration, attempts = _chat_completion(
-                client=client,
-                args=args,
-                model_id=model_id,
-                messages=messages,
-                schema=stage_schema,
-                schema_name=(
-                    "scientific_synthesis_artifact"
-                    if require_final_answer
-                    else "scientific_stage_artifact"
-                ),
-                turn_dir=turn_dir,
-                turn_number=model_turn,
-                deadline=deadline,
+            schema_name = (
+                "scientific_synthesis_artifact"
+                if require_final_answer
+                else "scientific_stage_artifact"
             )
+            artifact_tool_call: dict[str, str] | None = None
+            if args.interaction_mode == "native-tools":
+                (
+                    artifact_tool_call,
+                    assistant_message,
+                    _,
+                    used_in,
+                    used_out,
+                    duration,
+                    attempts,
+                ) = _native_tool_completion(
+                    client=client,
+                    args=args,
+                    model_id=model_id,
+                    messages=messages,
+                    tools=_artifact_tool(stage_schema),
+                    tool_choice={
+                        "type": "function",
+                        "function": {"name": "submit_stage_artifact"},
+                    },
+                    schema_name=schema_name,
+                    turn_dir=turn_dir,
+                    turn_number=model_turn,
+                    deadline=deadline,
+                )
+                if artifact_tool_call["name"] != "submit_stage_artifact":
+                    raise ValueError(
+                        "vLLM invoked an unexpected artifact tool: "
+                        f"{artifact_tool_call['name']}"
+                    )
+                content = artifact_tool_call["arguments"]
+            else:
+                content, _, used_in, used_out, duration, attempts = _chat_completion(
+                    client=client,
+                    args=args,
+                    model_id=model_id,
+                    messages=messages,
+                    schema=stage_schema,
+                    schema_name=schema_name,
+                    turn_dir=turn_dir,
+                    turn_number=model_turn,
+                    deadline=deadline,
+                )
+                assistant_message = {"role": "assistant", "content": content}
             input_tokens += used_in
             output_tokens += used_out
             record = {
@@ -729,7 +1101,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
             root_audit["input_tokens"] = input_tokens
             root_audit["output_tokens"] = output_tokens
             raw_text = content
-            messages.append({"role": "assistant", "content": content})
+            messages.append(assistant_message)
             try:
                 candidate = _artifact_from_text(content, schema=stage_schema)
                 _validate_artifact_contract(
@@ -745,6 +1117,15 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                         "vLLM artifact remained invalid after "
                         f"{repair_number + 1} attempt(s): {exc}"
                     ) from exc
+                if artifact_tool_call is not None:
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": artifact_tool_call["id"],
+                            "name": artifact_tool_call["name"],
+                            "content": "Artifact rejected: " + str(exc),
+                        }
+                    )
                 messages.append({"role": "user", "content": _repair_prompt(exc)})
                 continue
             artifact = candidate
@@ -790,6 +1171,8 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 "adapter_protocol_version": ADAPTER_PROTOCOL_VERSION,
                 "base_url": args.base_url,
                 "model_id": model_id,
+                "thinking_mode": args.thinking_mode,
+                "interaction_mode": args.interaction_mode,
                 "session_action": session_action,
                 "session_sha256": _sha256(session_id),
                 "history_messages_loaded": len(history),
@@ -857,6 +1240,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument(
+        "--thinking-mode",
+        choices=("server-default", "enabled", "disabled"),
+        default="server-default",
+        help=(
+            "Whether to override the model chat template's enable_thinking flag. "
+            "The default leaves the vLLM server/model setting unchanged."
+        ),
+    )
+    parser.add_argument(
+        "--interaction-mode",
+        choices=("json-schema", "native-tools"),
+        default="json-schema",
+        help=(
+            "Use schema-constrained JSON controller responses or the server's native "
+            "function-call protocol for controller actions and artifact submission."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.timeout_seconds <= 0:
         parser.error("--timeout-seconds must be positive")
