@@ -289,11 +289,14 @@ def test_gemma4_vllm_template_locks_thinking_and_controller_runtime(
         )
 
 
-def test_gemma4_vllm_v3_locks_split_ceilings_and_sampling() -> None:
+@pytest.mark.parametrize("version", ["v3", "v4"])
+def test_gemma4_vllm_hardened_templates_lock_split_ceilings_and_sampling(
+    version: str,
+) -> None:
     template = yaml.safe_load(
         (
             EXPERIMENT
-            / "nsclc_semantic_workflow_grid_gemma4_31b_vllm_v3.template.yaml"
+            / f"nsclc_semantic_workflow_grid_gemma4_31b_vllm_{version}.template.yaml"
         ).read_text(encoding="utf-8")
     )
     python = Path("/home/klkehl/thisenv/bin/python")
@@ -333,9 +336,9 @@ def test_gemma4_vllm_v3_locks_split_ceilings_and_sampling() -> None:
     )
 
     assert resolved["experiment_id"] == (
-        "nsclc-semantic-workflow-grid-gemma4-31b-vllm-v3-20x5"
+        f"nsclc-semantic-workflow-grid-gemma4-31b-vllm-{version}-20x5"
     )
-    assert resolved["models"][0]["id"] == "gemma4-31b-vllm-controller-v3"
+    assert resolved["models"][0]["id"] == f"gemma4-31b-vllm-controller-{version}"
     assert model["sampling"] == {
         "temperature": 1.0,
         "top_p": 0.95,

@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+import scripts.vllm_cli_json_adapter as vllm_adapter
 from scripts.codex_cli_json_adapter import artifact_schema as codex_artifact_schema
 from scripts.vllm_cli_json_adapter import (
     _decision_from_text,
@@ -458,12 +459,137 @@ def test_adapter_retries_native_tool_arguments_that_fail_schema(tmp_path: Path) 
     assert "SCHEMA RECOVERY" in client.chat.completions.requests[1]["messages"][-1][
         "content"
     ]
+    recovery = client.chat.completions.requests[1]["messages"][-1]["content"]
+    assert "`finish_stage`" in recovery
+    assert "`run_python`" in recovery
     attempt_root = call_dir / "vllm_turns" / "model_turn_0001_decision"
     first_error = json.loads((attempt_root / "attempt_0001" / "error.json").read_text())
     assert first_error["error_type"] == "ValueError"
     assert first_error["retryable"] is True
     audit = json.loads((call_dir / "vllm_call.json").read_text())
     assert audit["turns"][0]["api_attempts"] == 2
+
+
+def test_adapter_accepts_exact_native_artifact_only_after_minimum_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace"
+    scratch = tmp_path / "run" / "scratch" / "session"
+    call_dir = tmp_path / "run" / "calls" / "call_0001"
+    workspace.mkdir(parents=True)
+    scratch.mkdir(parents=True)
+    request = {
+        "request_id": "run:c0001",
+        "experiment_id": "experiment",
+        "run_id": "run",
+        "task_id": "task",
+        "workflow_id": "deliberative",
+        "model_profile": "gemma",
+        "model_id": "gemma4-31b",
+        "reasoning_effort": None,
+        "stage_id": "synthesis_consensus",
+        "require_final_answer": True,
+        "iteration_index": 1,
+        "max_iterations": 1,
+        "stage_index": 3,
+        "stage_position": 4,
+        "terminal": True,
+        "role": "synthesis scientist consensus chair",
+        "agent_id": "agent",
+        "session_id": "persistent-session",
+        "prompt": "Return the required artifact.",
+        "workspace": str(workspace),
+        "scratch_dir": str(scratch),
+        "metadata": {},
+    }
+    request_file = call_dir / "request.json"
+    request_file.parent.mkdir(parents=True)
+    request_file.write_text(json.dumps(request), encoding="utf-8")
+    output = call_dir / "response.json"
+    candidate = _artifact(supported=True)
+    client = _FakeClient(
+        [
+            _FakeToolResponse(
+                "submit_stage_artifact", candidate, call_id="too-early"
+            ),
+            _FakeToolResponse(
+                "run_python",
+                {"python_code": "print(1)", "purpose": "minimum inspection"},
+                call_id="python-1",
+            ),
+            _FakeToolResponse(
+                "submit_stage_artifact", candidate, call_id="accepted-artifact"
+            ),
+        ]
+    )
+    args = _args(tmp_path, request_file, output)
+    args.interaction_mode = "native-tools"
+    args.min_tool_calls = 1
+    args.max_api_retries = 1
+    monkeypatch.setattr(
+        vllm_adapter,
+        "_run_python_tool",
+        lambda **_: {
+            "tool": "python",
+            "tool_number": 1,
+            "status": "ok",
+            "returncode": 0,
+            "duration_seconds": 0.0,
+            "stdout": "1\n",
+            "stderr": "",
+            "stdout_bytes": 2,
+            "stderr_bytes": 0,
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+        },
+    )
+
+    response = run_adapter(args, client=client)
+
+    requests = client.chat.completions.requests
+    assert len(requests) == 3
+    assert all(
+        {tool["function"]["name"] for tool in item["tools"]}
+        == {"run_python", "finish_stage"}
+        for item in requests
+    )
+    assert "`finish_stage`" in requests[1]["messages"][-1]["content"]
+    assert "submit_stage_artifact" in requests[0]["messages"][-1]["content"]
+    assert response.artifact.final_answer is not None
+    audit = json.loads((call_dir / "vllm_call.json").read_text())
+    assert [turn["kind"] for turn in audit["turns"]] == [
+        "decision",
+        "python_tool",
+        "content_artifact",
+    ]
+    assert audit["turns"][-1]["response_mode"] == (
+        "validated_native_artifact_fallback"
+    )
+    first_error = json.loads(
+        (
+            call_dir
+            / "vllm_turns"
+            / "model_turn_0001_decision"
+            / "attempt_0001"
+            / "error.json"
+        ).read_text()
+    )
+    assert "unavailable native tool" in first_error["error"]
+    fallback_success = json.loads(
+        (
+            call_dir
+            / "vllm_turns"
+            / "model_turn_0002_decision"
+            / "attempt_0001"
+            / "success.json"
+        ).read_text()
+    )
+    assert fallback_success["response_mode"] == (
+        "validated_native_artifact_fallback"
+    )
+    assert fallback_success["content_fallback_schema_sha256"] == audit[
+        "output_schema_sha256"
+    ]
 
 
 def test_adapter_recovers_from_length_exhaustion_with_fresh_seed(

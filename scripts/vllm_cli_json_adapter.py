@@ -48,7 +48,7 @@ except ModuleNotFoundError:  # Direct execution puts ``scripts/`` on sys.path.
     )
 
 
-ADAPTER_PROTOCOL_VERSION = 4
+ADAPTER_PROTOCOL_VERSION = 5
 DEFAULT_API_TIMEOUT_SECONDS = 7_200.0
 DEFAULT_MAX_TOKENS = 100_000
 DECISION_SCHEMA: dict[str, Any] = {
@@ -300,19 +300,32 @@ def _attempt_seed(
     return int(_sha256(seed_material)[:8], 16) & 0x7FFFFFFF
 
 
-def _recovery_prompt(*, error: Exception, finish_reason: str | None) -> str:
+def _recovery_prompt(
+    *,
+    error: Exception,
+    finish_reason: str | None,
+    allowed_functions: tuple[str, ...] | None = None,
+) -> str:
+    if allowed_functions:
+        choices = " or ".join(f"`{name}`" for name in allowed_functions)
+        response_instruction = (
+            f"Call exactly one available function: {choices}. Do not call any other "
+            "function and do not emit the next phase's artifact."
+        )
+    else:
+        response_instruction = "Emit exactly one object that satisfies the required schema."
     if finish_reason == "length":
         return (
             "GENERATION RECOVERY: The previous response exhausted its token budget "
             "before emitting one valid required response. Do not resume, quote, or "
-            "repeat its reasoning. Respond immediately with exactly one required "
-            "function call or schema object. Use the evidence already available. "
+            "repeat its reasoning. Use the evidence already available. "
+            f"{response_instruction} Respond immediately. "
             f"Validation error: {error}"
         )
     return (
         "SCHEMA RECOVERY: The previous response was rejected for this exact reason: "
-        f"{error}. Do not repeat the rejected response or extended reasoning. Respond "
-        "immediately with exactly one valid required function call or schema object."
+        f"{error}. Do not repeat the rejected response or extended reasoning. "
+        f"{response_instruction} Respond immediately."
     )
 
 
@@ -432,7 +445,8 @@ def _chat_completion(
             if attempt_number > args.max_api_retries:
                 raise parse_error
             recovery = _recovery_prompt(
-                error=parse_error, finish_reason=finish_reason
+                error=parse_error,
+                finish_reason=finish_reason,
             )
             disable_thinking_for_recovery = finish_reason == "length"
             delay = min(float(2 ** (attempt_number - 1)), _remaining(deadline))
@@ -551,6 +565,7 @@ def _native_tool_completion(
     content_fallback_schema: dict[str, Any] | None = None,
     content_fallback_name: str | None = None,
     content_fallback_validator: Callable[[str], None] | None = None,
+    allow_unavailable_fallback_tool: bool = False,
 ) -> tuple[
     dict[str, str],
     dict[str, Any],
@@ -650,14 +665,31 @@ def _native_tool_completion(
             tool_call, assistant_message = _native_tool_call(response)
             tool_schema = tool_schemas.get(tool_call["name"])
             if tool_schema is None:
-                raise ValueError(
-                    f"vLLM invoked an unavailable native tool: {tool_call['name']}"
+                if (
+                    allow_unavailable_fallback_tool
+                    and content_fallback_schema is not None
+                    and content_fallback_name is not None
+                    and tool_call["name"] == content_fallback_name
+                ):
+                    _schema_object_from_text(
+                        tool_call["arguments"],
+                        schema=content_fallback_schema,
+                        label=f"out-of-phase {content_fallback_name} tool call",
+                    )
+                    if content_fallback_validator is not None:
+                        content_fallback_validator(tool_call["arguments"])
+                    response_mode = "validated_native_artifact_fallback"
+                else:
+                    raise ValueError(
+                        "vLLM invoked an unavailable native tool: "
+                        f"{tool_call['name']}"
+                    )
+            else:
+                _schema_object_from_text(
+                    tool_call["arguments"],
+                    schema=tool_schema,
+                    label=f"{tool_call['name']} tool call",
                 )
-            _schema_object_from_text(
-                tool_call["arguments"],
-                schema=tool_schema,
-                label=f"{tool_call['name']} tool call",
-            )
         except (RuntimeError, ValueError) as exc:
             parse_error = exc
             if (
@@ -709,7 +741,9 @@ def _native_tool_completion(
             if attempt_number > args.max_api_retries:
                 raise parse_error
             recovery = _recovery_prompt(
-                error=parse_error, finish_reason=finish_reason
+                error=parse_error,
+                finish_reason=finish_reason,
+                allowed_functions=tuple(sorted(tool_schemas)),
             )
             disable_thinking_for_recovery = finish_reason == "length"
             delay = min(float(2 ** (attempt_number - 1)), _remaining(deadline))
@@ -739,7 +773,11 @@ def _native_tool_completion(
                             )
                         )
                     }
-                    if response_mode == "validated_content_fallback"
+                    if response_mode
+                    in {
+                        "validated_content_fallback",
+                        "validated_native_artifact_fallback",
+                    }
                     else {}
                 ),
             },
@@ -1115,8 +1153,11 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 {
                     "role": "user",
                     "content": (
-                        "CONTROLLER: Choose the next action. Inspect or verify with sandboxed "
-                        "Python unless the evidence is already sufficient; otherwise choose final."
+                        "CONTROLLER TURN ONLY: Call exactly one available function: "
+                        "run_python or finish_stage. Do not call submit_stage_artifact and "
+                        "do not emit the stage artifact on this turn. Inspect or verify with "
+                        "sandboxed Python when needed. If the evidence is already sufficient, "
+                        "call finish_stage now; a separate artifact turn will follow."
                     ),
                 },
             ]
@@ -1148,9 +1189,15 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     content_fallback_schema=stage_schema,
                     content_fallback_name="submit_stage_artifact",
                     content_fallback_validator=validate_stage_fallback,
+                    allow_unavailable_fallback_tool=(
+                        tool_calls >= args.min_tool_calls
+                    ),
                 )
                 content = tool_call["arguments"]
-                if response_mode == "validated_content_fallback":
+                if response_mode in {
+                    "validated_content_fallback",
+                    "validated_native_artifact_fallback",
+                }:
                     fallback_artifact = _artifact_from_text(
                         content, schema=stage_schema
                     )
@@ -1161,7 +1208,9 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     decision = {
                         "action": "final",
                         "python_code": "",
-                        "purpose": "schema-valid artifact returned as plain content",
+                        "purpose": (
+                            "schema-valid artifact returned during controller turn"
+                        ),
                     }
                 else:
                     decision = _native_controller_decision(tool_call)
