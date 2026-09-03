@@ -96,7 +96,7 @@ def test_tracked_grid_template_locks_calls_timeouts_and_parallelism() -> None:
     assert template["models"][0]["reasoning_effort"] == "low"
 
 
-def test_medium_v4_template_locks_fast_repair_reasoning_and_four_hour_ceiling() -> None:
+def test_medium_v5_template_locks_resilient_fast_reasoning_and_eight_hour_ceiling() -> None:
     template = yaml.safe_load(
         (EXPERIMENT / "nsclc_semantic_workflow_grid_medium.template.yaml").read_text(
             encoding="utf-8"
@@ -106,17 +106,23 @@ def test_medium_v4_template_locks_fast_repair_reasoning_and_four_hour_ceiling() 
     model = _locked_model_manifest(template)
 
     assert template["experiment_id"] == (
-        "nsclc-semantic-workflow-grid-luna-medium-fast-repair-localenv-v4-20x5"
+        "nsclc-semantic-workflow-grid-luna-medium-fast-resilient-localenv-v5-20x5"
     )
     assert model == {
-        "profile": "codex-luna-medium-fast-repair-localenv-v4",
+        "profile": "codex-luna-medium-fast-resilient-localenv-v5",
         "id": "gpt-5.6-luna",
         "adapter": "cli-json",
         "reasoning_effort": "medium",
         "service_tier": "fast",
         "max_contract_repairs": 2,
-        "adapter_timeout_seconds": 14_380,
-        "harness_timeout_seconds": 14_400,
+        "max_runtime_retries": 24,
+        "runtime_retry_initial_seconds": 30.0,
+        "runtime_retry_max_seconds": 900.0,
+        "runtime_retry_budget_seconds": 21_600.0,
+        "transport_circuit_failure_threshold": 2,
+        "transport_circuit_cooldown_seconds": 300.0,
+        "adapter_timeout_seconds": 28_780,
+        "harness_timeout_seconds": 28_800,
     }
     assert template["iteration_policy"] == {"iterations": 20, "completion_mode": "fixed"}
     assert template["replicates"] == 5
@@ -138,6 +144,12 @@ def test_medium_v4_template_locks_fast_repair_reasoning_and_four_hour_ceiling() 
     args[args.index("--max-contract-repairs") + 1] = "-1"
     with pytest.raises(ValueError, match="repair limit"):
         _locked_model_manifest(invalid_repairs)
+
+    invalid_runtime_retries = json.loads(json.dumps(template))
+    args = invalid_runtime_retries["models"][0]["extra_args"]
+    args[args.index("--max-runtime-retries") + 1] = "-1"
+    with pytest.raises(ValueError, match="runtime-retry limit"):
+        _locked_model_manifest(invalid_runtime_retries)
 
 
 def test_qwen38_vllm_v2_template_locks_controller_sampling_and_isolation() -> None:

@@ -188,15 +188,23 @@ import sys
 argv = sys.argv[1:]
 is_resume = argv[:2] == ["exec", "resume"]
 last_message = pathlib.Path(argv[argv.index("--output-last-message") + 1])
+schema_path = pathlib.Path(argv[argv.index("--output-schema") + 1])
+schema = json.loads(schema_path.read_text())
+is_index_repair = schema.get("title") == "Supported claim index correction"
 prompt = sys.stdin.read()
 with pathlib.Path(os.environ["FAKE_CODEX_LOG"]).open("a", encoding="utf-8") as stream:
     stream.write(json.dumps({
         "argv": argv,
         "is_resume": is_resume,
-        "has_exact_error": (
-            "supported_claim_indices references unsupported claim index 0" in prompt
+        "is_index_repair": is_index_repair,
+        "index_item_schema": (
+            schema["properties"]["supported_claim_indices"]["items"]
+            if is_index_repair else None
         ),
-        "asks_to_avoid_new_analysis": "do not rerun tools" in prompt,
+        "has_exact_error": (
+            "supported_claim_indices references absent claim index 2" in prompt
+        ),
+        "asks_to_avoid_new_analysis": "do not rerun tools" in prompt.lower(),
     }) + "\n")
 
 claim = {
@@ -215,21 +223,28 @@ claim = {
     "confidence": 0.8,
     "evidence": ["analysis"],
 }
-artifact = {
-    "summary": "corrected" if is_resume else "invalid cross-reference",
-    "handoff": "handoff",
-    "hypotheses": [],
-    "analyses": [],
-    "claims": [claim],
-    "evidence": [],
-    "concerns": [],
-    "minority_report": "",
-    "final_answer": {
-        "conclusion": "result",
-        "supported_claim_indices": [] if is_resume else [0],
-    },
-}
-last_message.write_text(json.dumps(artifact), encoding="utf-8")
+supported_claim = dict(claim)
+supported_claim["supported"] = True
+if is_index_repair:
+    last_message.write_text(
+        json.dumps({"supported_claim_indices": [1]}), encoding="utf-8"
+    )
+else:
+    artifact = {
+        "summary": "invalid cross-reference",
+        "handoff": "handoff",
+        "hypotheses": [],
+        "analyses": [],
+        "claims": [claim, supported_claim],
+        "evidence": [],
+        "concerns": [],
+        "minority_report": "",
+        "final_answer": {
+            "conclusion": "result",
+            "supported_claim_indices": [2],
+        },
+    }
+    last_message.write_text(json.dumps(artifact), encoding="utf-8")
 if not is_resume:
     print(json.dumps({"type": "thread.started", "thread_id": "thread-repair-001"}))
 print(json.dumps({
@@ -261,6 +276,57 @@ with pathlib.Path(os.environ["FAKE_CODEX_LOG"]).open("a", encoding="utf-8") as s
     stream.write(json.dumps({"argv": sys.argv[1:]}) + "\n")
 print("simulated provider failure", file=sys.stderr)
 raise SystemExit(7)
+''',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def _write_transient_then_success_fake_codex(path: Path) -> None:
+    path.write_text(
+        r'''#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+argv = sys.argv[1:]
+is_resume = argv[:2] == ["exec", "resume"]
+last_message = pathlib.Path(argv[argv.index("--output-last-message") + 1])
+prompt = sys.stdin.read()
+log_path = pathlib.Path(os.environ["FAKE_CODEX_LOG"])
+prior = log_path.read_text().splitlines() if log_path.exists() else []
+with log_path.open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps({
+        "argv": argv,
+        "is_resume": is_resume,
+        "is_transport_retry": "transient controller transport failure" in prompt,
+    }) + "\n")
+
+if not prior:
+    print(json.dumps({"type": "thread.started", "thread_id": "thread-transient-001"}))
+    print(
+        "unexpected status 404 Not Found from backend-api/codex/responses",
+        file=sys.stderr,
+    )
+    raise SystemExit(7)
+
+artifact = {
+    "summary": "recovered",
+    "handoff": "handoff",
+    "hypotheses": [],
+    "analyses": [],
+    "claims": [],
+    "evidence": [],
+    "concerns": [],
+    "minority_report": "",
+    "final_answer": None,
+}
+last_message.write_text(json.dumps(artifact), encoding="utf-8")
+print(json.dumps({
+    "type": "turn.completed",
+    "usage": {"input_tokens": 12, "output_tokens": 3},
+}))
 ''',
         encoding="utf-8",
     )
@@ -465,8 +531,8 @@ def test_codex_adapter_repairs_semantic_contract_in_same_session_and_preserves_a
         ResourceBudget(max_runtime_seconds_per_call=60),
     )
 
-    assert response.artifact.summary == "corrected"
-    assert response.artifact.final_answer["supported_claim_indices"] == []
+    assert response.artifact.summary == "invalid cross-reference"
+    assert response.artifact.final_answer["supported_claim_indices"] == [1]
     assert response.usage.input_tokens == 200
     assert response.usage.output_tokens == 50
     assert response.runtime_metadata["attempt_count"] == 2
@@ -477,6 +543,9 @@ def test_codex_adapter_repairs_semantic_contract_in_same_session_and_preserves_a
     assert len(invocations) == 2
     assert invocations[0]["is_resume"] is False
     assert invocations[1]["is_resume"] is True
+    assert invocations[0]["is_index_repair"] is False
+    assert invocations[1]["is_index_repair"] is True
+    assert invocations[1]["index_item_schema"]["enum"] == [1]
     assert invocations[0]["has_exact_error"] is False
     assert invocations[1]["has_exact_error"] is True
     assert invocations[1]["asks_to_avoid_new_analysis"] is True
@@ -496,8 +565,15 @@ def test_codex_adapter_repairs_semantic_contract_in_same_session_and_preserves_a
         assert (attempt_dir / "codex_agent_artifact.schema.json").is_file()
     first_artifact = json.loads((first_dir / "codex_last_message.json").read_text())
     second_artifact = json.loads((second_dir / "codex_last_message.json").read_text())
-    assert first_artifact["final_answer"]["supported_claim_indices"] == [0]
-    assert second_artifact["final_answer"]["supported_claim_indices"] == []
+    assert first_artifact["final_answer"]["supported_claim_indices"] == [2]
+    assert second_artifact == {"supported_claim_indices": [1]}
+    merged_artifact = json.loads(
+        (second_dir / "codex_merged_artifact.json").read_text()
+    )
+    assert merged_artifact["summary"] == first_artifact["summary"]
+    assert merged_artifact["final_answer"]["supported_claim_indices"] == [1]
+    canonical_artifact = json.loads((call_dir / "codex_last_message.json").read_text())
+    assert canonical_artifact == merged_artifact
 
     root_audit_text = (call_dir / "codex_call.json").read_text()
     assert "ORIGINAL_SECRET_PROMPT" not in root_audit_text
@@ -511,12 +587,16 @@ def test_codex_adapter_repairs_semantic_contract_in_same_session_and_preserves_a
         "contract_rejected",
         "accepted",
     ]
+    assert [attempt["task_kind"] for attempt in root_audit["attempts"]] == [
+        "original",
+        "supported_claim_indices_repair",
+    ]
     first_audit = json.loads((first_dir / "codex_call.json").read_text())
     second_audit = json.loads((second_dir / "codex_call.json").read_text())
     assert first_audit["session_action"] == "started"
-    assert "unsupported claim index 0" in first_audit["validation_error"]
+    assert "absent claim index 2" in first_audit["validation_error"]
     assert second_audit["session_action"] == "resumed"
-    assert "unsupported claim index 0" in second_audit["repair_for_error"]
+    assert "absent claim index 2" in second_audit["repair_for_error"]
 
     session_file = next((tmp_path / "run" / "scratch" / ".codex_sessions").glob("*.json"))
     session = json.loads(session_file.read_text())
@@ -524,7 +604,84 @@ def test_codex_adapter_repairs_semantic_contract_in_same_session_and_preserves_a
     assert session["service_tier"] == "fast"
 
 
-def test_codex_adapter_does_not_retry_nonzero_runtime_exit(tmp_path: Path, monkeypatch) -> None:
+def test_codex_adapter_retries_transient_exit_and_persists_failed_turn_thread(
+    tmp_path: Path, monkeypatch
+) -> None:
+    fake_codex = tmp_path / "fake-codex"
+    invocation_log = tmp_path / "fake_invocations.jsonl"
+    _write_transient_then_success_fake_codex(fake_codex)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(invocation_log))
+    runtime = CliJsonRuntime(
+        ModelSpec(
+            id="luna-medium-fast",
+            model_id="gpt-5.6-luna",
+            adapter="cli-json",
+            command=[sys.executable, str(ADAPTER)],
+            extra_args=[
+                "--codex",
+                str(fake_codex),
+                "--reasoning-effort",
+                "medium",
+                "--service-tier",
+                "fast",
+                "--max-runtime-retries",
+                "2",
+                "--runtime-retry-initial-seconds",
+                "0",
+                "--runtime-retry-max-seconds",
+                "0",
+                "--transport-circuit-failure-threshold",
+                "1",
+                "--transport-circuit-cooldown-seconds",
+                "0",
+                "--timeout-seconds",
+                "10",
+            ],
+            env_passthrough=["FAKE_CODEX_LOG"],
+        )
+    )
+
+    response = runtime.run(
+        _request(
+            tmp_path,
+            index=1,
+            prompt="ORIGINAL_PENDING_TASK",
+            reasoning_effort="medium",
+        ),
+        ResourceBudget(max_runtime_seconds_per_call=60),
+    )
+
+    assert response.artifact.summary == "recovered"
+    assert response.runtime_metadata["attempt_count"] == 2
+    assert response.runtime_metadata["runtime_retry_count"] == 1
+    assert response.runtime_metadata["contract_repair_count"] == 0
+    invocations = [json.loads(line) for line in invocation_log.read_text().splitlines()]
+    assert len(invocations) == 2
+    assert invocations[0]["is_resume"] is False
+    assert invocations[1]["is_resume"] is True
+    assert invocations[1]["is_transport_retry"] is True
+    assert "thread-transient-001" in invocations[1]["argv"]
+
+    call_dir = tmp_path / "run" / "calls" / "call_0001"
+    audit = json.loads((call_dir / "codex_call.json").read_text())
+    assert audit["status"] == "accepted"
+    assert audit["runtime_retry_count"] == 1
+    assert [item["status"] for item in audit["attempts"]] == [
+        "transport_retry_pending",
+        "accepted",
+    ]
+    assert audit["attempts"][0]["transport_retry_reason"] == "codex_backend_404"
+    first_audit = json.loads(
+        (call_dir / "attempts" / "attempt_0001" / "codex_call.json").read_text()
+    )
+    assert first_audit["codex_thread_id"] == "thread-transient-001"
+    session_file = next((tmp_path / "run" / "scratch" / ".codex_sessions").glob("*.json"))
+    assert json.loads(session_file.read_text())["codex_thread_id"] == "thread-transient-001"
+
+
+def test_codex_adapter_does_not_retry_nontransport_runtime_exit(
+    tmp_path: Path, monkeypatch
+) -> None:
     fake_codex = tmp_path / "fake-codex"
     invocation_log = tmp_path / "fake_invocations.jsonl"
     _write_failing_fake_codex(fake_codex)
@@ -543,6 +700,8 @@ def test_codex_adapter_does_not_retry_nonzero_runtime_exit(tmp_path: Path, monke
                 "--service-tier",
                 "fast",
                 "--max-contract-repairs",
+                "2",
+                "--max-runtime-retries",
                 "2",
             ],
             env_passthrough=["FAKE_CODEX_LOG"],

@@ -1,16 +1,15 @@
-# NSCLC semantic masking × workflow grid: Luna-medium local-env v4 protocol
+# NSCLC semantic masking × workflow grid: Luna-medium resilient local-env v5 protocol
 
 ## Status and frozen objective
 
-This is a new prospective v4 experiment. It does not resume or pool the stopped
-Luna-low run or any Luna-medium predecessor. The v2 smoke completed four of six
-runs and failed both deliberative runs after otherwise successful generations
-produced semantically inconsistent `supported_claim_indices`. The v3 smoke
-completed three of six runs: two Python adapter startups failed on transient
-SSHFS `EPERM` reads from the SSHFS-hosted virtual environment, and one Codex
-turn exhausted four hours after its completed analysis command was followed by
-WebSocket and HTTPS transport failures. No v1, v2, or v3 main experiment
-launched. All predecessor result roots remain immutable.
+This is a new prospective v5 experiment. It does not resume or pool the stopped
+Luna-low run or any Luna-medium predecessor. In v4, three of 30 main runs
+completed before a temporary Codex backend-routing outage caused 26 transport
+failures (HTTP 404 from both WebSocket and HTTPS Responses paths) and the
+scheduler immediately fed queued runs into that outage. One additional v4 run
+failed after three otherwise valid synthesis artifacts each used an off-by-one
+`supported_claim_indices` value. The v4 root remains immutable and is excluded
+from v5 analysis.
 
 The replacement tests the same 2 × 3 factorial grid on the synthetic
 50,000-row NSCLC cohort. The semantic factor is `named` versus `masked`; the
@@ -22,11 +21,11 @@ exactly 20 ordered iterations of:
 
 The pinned source baseline is commit
 `4a8fd25f104869d9209ec010bac504b8a91a4964`. The execution-plan documentation
-commit and the v4 implementation commit are captured in the frozen machine
+commit and the v5 implementation commit are captured in the frozen machine
 manifest. The model is `gpt-5.6-luna`, with reasoning effort explicitly locked
 to `medium` and Codex `service_tier` explicitly locked to `fast`. The outer
-per-call timeout is 14,400 seconds and the adapter has one shared 14,380-second
-deadline across the original turn and any repair turns.
+per-call timeout is 28,800 seconds and the adapter has one shared 28,780-second
+deadline across original, retry, and repair turns.
 
 Each request records reasoning effort and whether the stage must produce a
 final answer. The adapter rejects a reasoning mismatch before launch. It gives
@@ -37,30 +36,46 @@ and records the exact schema hash and effective launch settings.
 
 ## Preregistered contract-repair policy
 
-Each harness call permits at most two bounded same-session repair turns after
-the original generation, for at most three Codex turns total. A repair is
+Each harness call permits at most two bounded same-session schema-repair turns
+after the original generation. A repair is
 allowed only when Codex exited successfully and its saved final artifact fails
 JSON parsing, the supplied JSON schema, model validation, or the controller's
 cross-field semantic checks. In particular, each
 `supported_claim_indices` entry must be unique, in range, and point to a claim
 whose `supported` field is true.
 
-The adapter saves the thread ID before artifact validation. On an eligible
-failure it resumes that exact thread, sends the exact controller error, asks for
-a complete replacement artifact, and directs Luna to reuse completed analysis
-without rerunning tools unless correction is otherwise impossible. Timeouts,
-nonzero exits, missing runtime output, and thread-identity errors are terminal
-and are never retried by this policy. The original and every repair response,
-event stream, stderr log, schema, prompt hash, command, validation outcome, and
-usage record are retained in numbered attempt directories. Call-level tokens,
-tool calls, and duration aggregate all attempts.
+The adapter saves the thread ID immediately after every subprocess turn,
+including failed turns. Cross-reference-only failures are repaired with a
+narrow schema that permits only `supported_claim_indices` and dynamically
+enumerates indices of claims whose `supported` value is true; the controller
+merges that patch without allowing any other scientific field to change. Other
+eligible contract failures request a complete corrected artifact in the same
+thread. All repairs receive the exact controller error and direct Luna to reuse
+completed analysis without rerunning tools unless correction is impossible.
 
-This repair policy and Fast service tier remain fixed from v3. Before any v4
-live call, the controller, adapter, and model-visible analysis Python are moved
-to `/home/klkehl/thisenv`, a local ext4 virtual environment containing a
+Classified transient transport exits have a separate budget of at most 24
+retries, exponential backoff from 30 to 900 seconds, and a six-hour retry
+window within the eight-hour call deadline. Two consecutive transport failures
+open a shared experiment-level circuit for at least 300 seconds. Active workers
+remain occupied while backing off, and newly scheduled workers consult the same
+circuit before launching, preventing the scheduler from rapidly consuming the
+queue during a provider outage. A retry resumes an emitted thread ID and
+resubmits the exact pending task with an interruption notice. Nontransport
+runtime errors, missing output, and thread-identity errors remain terminal.
+
+Every response, event stream, stderr log, schema, prompt hash, command,
+validation outcome, and usage record is retained in a numbered physical-attempt
+directory. Logical schema-repair and physical transport-retry counts are
+reported separately, while call-level tokens, tool calls, and duration aggregate
+all attempts.
+
+Before any v5 live call, the controller, adapter, and model-visible analysis
+Python use `/home/klkehl/thisenv`, a local ext4 virtual environment containing a
 non-editable installation of the committed package and scientific dependencies.
-No v4 prompt, schedule, iteration count, retry cap, concurrency, or scientific
-endpoint may be changed after inspecting v4 scientific results.
+The Codex CLI package is copied to a versioned local-ext4 path and its version
+and hash are frozen. No v5 prompt, schedule, iteration count, retry cap,
+concurrency, or scientific endpoint may be changed after inspecting v5
+scientific results.
 
 ## Conditions and scientific task
 
@@ -91,15 +106,15 @@ clearly labeled cross-condition display after scoring.
 
 Persistent and sequential runs have 80 planned harness calls; deliberative
 runs have 240. Across 30 runs the healthy call graph contains 4,000 harness
-calls, 2,400 logical stage checkpoints, and 600 synthesis checkpoints. With the
-repair cap, the theoretical maximum is 12,000 Codex turns, although repairs are
-expected to be exceptional. This is a native-resource comparison, not a
-resource-matched comparison. Calls, original and repair turns, tokens, tool
+calls, 2,400 logical stage checkpoints, and 600 synthesis checkpoints. Schema
+repairs and transport retries are exceptional physical turns and are reported
+separately. This is a native-resource comparison, not a resource-matched
+comparison. Calls, original, repair, and transport-retry turns, tokens, tool
 calls, duration, timeout status, and efficiency endpoints are reported.
 
 The excluded live smoke uses two concurrent runs. After every smoke run and all
 40 planned harness calls pass the technical gate, the main run uses six
-concurrent runs as explicitly authorized for v4.
+concurrent runs as explicitly authorized for v5.
 
 ## Isolation and reproducibility
 
@@ -159,8 +174,8 @@ descriptive contrasts. With five replicates per cell, no confirmatory
 workflow-superiority p-values are reported. Technical failures and truncated
 runs remain in denominators and reports.
 
-The one-iteration v4 live smoke is stored under a distinct
-`medium-fast-repair-localenv-v4-smoke` root and excluded from the main analysis.
+The one-iteration v5 live smoke is stored under a distinct
+`medium-fast-resilient-localenv-v5-smoke` root and excluded from the main analysis.
 Main launch is automatic only after the smoke summary, normalized artifacts,
 per-attempt audits, Luna/medium/Fast/local-environment locks, isolation contract,
 schema hashes, and cross-field synthesis invariants all pass.

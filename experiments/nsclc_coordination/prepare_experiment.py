@@ -232,7 +232,7 @@ def _optional_flag_value(arguments: list[str], flag: str, *, default: str) -> st
 
 
 def _locked_model_manifest(config: dict[str, Any]) -> dict[str, Any]:
-    """Verify and summarize model, reasoning, tier, repair, and timeout locks."""
+    """Verify and summarize model, reasoning, retry, repair, and timeout locks."""
 
     models = config.get("models")
     if not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict):
@@ -266,14 +266,64 @@ def _locked_model_manifest(config: dict[str, Any]) -> dict[str, Any]:
                 default="0",
             )
         )
+        max_runtime_retries = int(
+            _optional_flag_value(
+                extra_args,
+                "--max-runtime-retries",
+                default="0",
+            )
+        )
+        runtime_retry_initial = float(
+            _optional_flag_value(
+                extra_args,
+                "--runtime-retry-initial-seconds",
+                default="15",
+            )
+        )
+        runtime_retry_max = float(
+            _optional_flag_value(
+                extra_args,
+                "--runtime-retry-max-seconds",
+                default="900",
+            )
+        )
+        runtime_retry_budget = float(
+            _optional_flag_value(
+                extra_args,
+                "--runtime-retry-budget-seconds",
+                default="0",
+            )
+        )
+        circuit_threshold = int(
+            _optional_flag_value(
+                extra_args,
+                "--transport-circuit-failure-threshold",
+                default="0",
+            )
+        )
+        circuit_cooldown = float(
+            _optional_flag_value(
+                extra_args,
+                "--transport-circuit-cooldown-seconds",
+                default="120",
+            )
+        )
         adapter_timeout = int(_one_flag_value(extra_args, "--timeout-seconds"))
         harness_timeout = int(config["budget"]["max_runtime_seconds_per_call"])
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(
-            "The live model must have integer repair and timeout limits."
+            "The live model must have valid retry, repair, and timeout limits."
         ) from exc
     if max_contract_repairs < 0:
         raise ValueError("The contract-repair limit must be non-negative.")
+    if max_runtime_retries < 0:
+        raise ValueError("The runtime-retry limit must be non-negative.")
+    if not 0 <= runtime_retry_initial <= runtime_retry_max:
+        raise ValueError("The runtime-retry backoff limits are invalid.")
+    if not 0 <= runtime_retry_budget <= adapter_timeout:
+        raise ValueError("The runtime-retry budget must fit within the adapter timeout.")
+    if circuit_threshold < 0 or circuit_cooldown < 0:
+        raise ValueError("The transport-circuit limits must be non-negative.")
     if not 0 < adapter_timeout < harness_timeout:
         raise ValueError("The adapter timeout must be positive and precede the harness timeout.")
     return {
@@ -283,6 +333,12 @@ def _locked_model_manifest(config: dict[str, Any]) -> dict[str, Any]:
         "reasoning_effort": reasoning_effort,
         "service_tier": service_tier,
         "max_contract_repairs": max_contract_repairs,
+        "max_runtime_retries": max_runtime_retries,
+        "runtime_retry_initial_seconds": runtime_retry_initial,
+        "runtime_retry_max_seconds": runtime_retry_max,
+        "runtime_retry_budget_seconds": runtime_retry_budget,
+        "transport_circuit_failure_threshold": circuit_threshold,
+        "transport_circuit_cooldown_seconds": circuit_cooldown,
         "adapter_timeout_seconds": adapter_timeout,
         "harness_timeout_seconds": harness_timeout,
     }
