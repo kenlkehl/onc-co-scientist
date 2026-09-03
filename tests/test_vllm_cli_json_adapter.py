@@ -416,3 +416,79 @@ def test_adapter_retries_native_tool_arguments_that_fail_schema(tmp_path: Path) 
     assert first_error["retryable"] is True
     audit = json.loads((call_dir / "vllm_call.json").read_text())
     assert audit["turns"][0]["api_attempts"] == 2
+
+
+@pytest.mark.parametrize("fallback_on_controller", [True, False])
+def test_adapter_accepts_schema_valid_plain_content_from_native_server(
+    tmp_path: Path, fallback_on_controller: bool
+) -> None:
+    workspace = tmp_path / "workspace"
+    scratch = tmp_path / "run" / "scratch" / "session"
+    call_dir = tmp_path / "run" / "calls" / "call_0001"
+    workspace.mkdir(parents=True)
+    scratch.mkdir(parents=True)
+    request = {
+        "request_id": "run:c0001",
+        "experiment_id": "experiment",
+        "run_id": "run",
+        "task_id": "task",
+        "workflow_id": "persistent",
+        "model_profile": "gemma",
+        "model_id": "gemma4-31b",
+        "reasoning_effort": None,
+        "stage_id": "synthesis",
+        "require_final_answer": True,
+        "iteration_index": 1,
+        "max_iterations": 1,
+        "stage_index": 3,
+        "stage_position": 4,
+        "terminal": True,
+        "role": "synthesis scientist",
+        "agent_id": "agent",
+        "session_id": "persistent-session",
+        "prompt": "Return the required artifact.",
+        "workspace": str(workspace),
+        "scratch_dir": str(scratch),
+        "metadata": {},
+    }
+    request_file = call_dir / "request.json"
+    request_file.parent.mkdir(parents=True)
+    request_file.write_text(json.dumps(request), encoding="utf-8")
+    output = call_dir / "response.json"
+    plain_artifact = _FakeResponse(
+        "```json\n" + json.dumps(_artifact(supported=True)) + "\n```"
+    )
+    responses: list[Any] = [plain_artifact]
+    if not fallback_on_controller:
+        responses.insert(
+            0,
+            _FakeToolResponse(
+                "finish_stage", {"purpose": "ready"}, call_id="finish-1"
+            ),
+        )
+    client = _FakeClient(responses)
+    args = _args(tmp_path, request_file, output)
+    args.interaction_mode = "native-tools"
+    args.min_tool_calls = 0
+
+    response = run_adapter(args, client=client)
+
+    assert response.artifact.final_answer is not None
+    audit = json.loads((call_dir / "vllm_call.json").read_text())
+    model_turns = [
+        turn for turn in audit["turns"] if turn["kind"] != "python_tool"
+    ]
+    fallback_turn = model_turns[-1]
+    assert fallback_turn["response_mode"] == "validated_content_fallback"
+    expected_kind = "content_artifact" if fallback_on_controller else "artifact"
+    assert fallback_turn["kind"] == expected_kind
+    success = json.loads(
+        (
+            call_dir
+            / fallback_turn["directory"]
+            / "attempt_0001"
+            / "success.json"
+        ).read_text()
+    )
+    assert success["response_mode"] == "validated_content_fallback"
+    assert success["content_fallback_schema_sha256"] == audit["output_schema_sha256"]

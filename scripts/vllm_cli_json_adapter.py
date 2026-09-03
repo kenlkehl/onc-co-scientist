@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +48,7 @@ except ModuleNotFoundError:  # Direct execution puts ``scripts/`` on sys.path.
     )
 
 
-ADAPTER_PROTOCOL_VERSION = 2
+ADAPTER_PROTOCOL_VERSION = 3
 DEFAULT_API_TIMEOUT_SECONDS = 7_200.0
 DEFAULT_MAX_TOKENS = 100_000
 DECISION_SCHEMA: dict[str, Any] = {
@@ -447,7 +448,19 @@ def _native_tool_completion(
     turn_dir: Path,
     turn_number: int,
     deadline: float,
-) -> tuple[dict[str, str], dict[str, Any], dict[str, Any], int, int, float, int]:
+    content_fallback_schema: dict[str, Any] | None = None,
+    content_fallback_name: str | None = None,
+    content_fallback_validator: Callable[[str], None] | None = None,
+) -> tuple[
+    dict[str, str],
+    dict[str, Any],
+    dict[str, Any],
+    int,
+    int,
+    float,
+    int,
+    str,
+]:
     seed_material = f"{args.seed_namespace}:{turn_number}:{schema_name}"
     seed = int(_sha256(seed_material)[:8], 16) & 0x7FFFFFFF
     request_payload: dict[str, Any] = {
@@ -504,6 +517,9 @@ def _native_tool_completion(
         total_duration += duration
         payload = _response_payload(response)
         _write_json_atomic(attempt_dir / "response.json", payload)
+        response_mode = "native_tool"
+        parse_error: Exception | None = None
+        tool_call: dict[str, str] | None = None
         try:
             tool_call, assistant_message = _native_tool_call(response)
             tool_schema = tool_schemas.get(tool_call["name"])
@@ -517,17 +533,51 @@ def _native_tool_completion(
                 label=f"{tool_call['name']} tool call",
             )
         except (RuntimeError, ValueError) as exc:
+            parse_error = exc
+            if (
+                tool_call is None
+                and content_fallback_schema is not None
+                and content_fallback_name is not None
+            ):
+                try:
+                    fallback = _schema_object_from_content(
+                        _native_message_content(response),
+                        schema=content_fallback_schema,
+                        label=f"{content_fallback_name} content fallback",
+                    )
+                    arguments = json.dumps(
+                        fallback, ensure_ascii=False, separators=(",", ":")
+                    )
+                    if content_fallback_validator is not None:
+                        content_fallback_validator(arguments)
+                except (RuntimeError, ValueError) as fallback_exc:
+                    parse_error = RuntimeError(
+                        f"{exc} Validated content fallback was rejected: {fallback_exc}"
+                    )
+                else:
+                    tool_call = {
+                        "id": f"content-fallback-{turn_number}-{attempt_number}",
+                        "name": content_fallback_name,
+                        "arguments": arguments,
+                    }
+                    assistant_message = {
+                        "role": "assistant",
+                        "content": _native_message_content(response),
+                    }
+                    response_mode = "validated_content_fallback"
+                    parse_error = None
+        if parse_error is not None:
             _write_json_atomic(
                 attempt_dir / "error.json",
                 {
-                    "error_type": type(exc).__name__,
-                    "error": str(exc),
+                    "error_type": type(parse_error).__name__,
+                    "error": str(parse_error),
                     "duration_seconds": duration,
                     "retryable": True,
                 },
             )
             if attempt_number > args.max_api_retries:
-                raise
+                raise parse_error
             delay = min(float(2 ** (attempt_number - 1)), _remaining(deadline))
             time.sleep(delay)
             continue
@@ -544,6 +594,20 @@ def _native_tool_completion(
                 "seed": seed,
                 "tool_call_id": tool_call["id"],
                 "tool_name": tool_call["name"],
+                "response_mode": response_mode,
+                **(
+                    {
+                        "content_fallback_schema_sha256": _sha256(
+                            json.dumps(
+                                content_fallback_schema,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )
+                        )
+                    }
+                    if response_mode == "validated_content_fallback"
+                    else {}
+                ),
             },
         )
         return (
@@ -554,6 +618,7 @@ def _native_tool_completion(
             output_tokens,
             total_duration,
             attempt_number,
+            response_mode,
         )
     raise AssertionError("unreachable")
 
@@ -749,6 +814,29 @@ def _schema_object_from_text(
     return payload
 
 
+def _native_message_content(response: Any) -> str:
+    choices = getattr(response, "choices", None)
+    if not choices:
+        raise RuntimeError("The vLLM response contained no choices.")
+    content = getattr(choices[0].message, "content", None)
+    if not isinstance(content, str) or not content.strip():
+        raise RuntimeError("The vLLM response contained no non-empty text fallback.")
+    return content
+
+
+def _schema_object_from_content(
+    raw: str, *, schema: dict[str, Any], label: str
+) -> dict[str, Any]:
+    """Accept one bare JSON object or one JSON Markdown fence, then enforce schema."""
+    text = raw.strip()
+    lines = text.splitlines()
+    if lines and lines[0].strip().lower() in {"```", "```json"}:
+        if len(lines) < 3 or lines[-1].strip() != "```":
+            raise ValueError(f"vLLM {label} had an unterminated Markdown fence.")
+        text = "\n".join(lines[1:-1]).strip()
+    return _schema_object_from_text(text, schema=schema, label=label)
+
+
 def _decision_from_text(raw: str) -> dict[str, str]:
     payload = _schema_object_from_text(
         raw, schema=DECISION_SCHEMA, label="controller decision"
@@ -871,6 +959,12 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
     raw_text = ""
     artifact: AgentArtifact | None = None
 
+    def validate_stage_fallback(content: str) -> None:
+        candidate = _artifact_from_text(content, schema=stage_schema)
+        _validate_artifact_contract(
+            candidate, require_final_answer=require_final_answer
+        )
+
     try:
         controller_decisions = 0
         while (
@@ -891,6 +985,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
             ]
             turn_dir = turns_dir / f"model_turn_{model_turn:04d}_decision"
             tool_call: dict[str, str] | None = None
+            fallback_artifact: AgentArtifact | None = None
             if args.interaction_mode == "native-tools":
                 (
                     tool_call,
@@ -900,6 +995,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     used_out,
                     duration,
                     attempts,
+                    response_mode,
                 ) = _native_tool_completion(
                     client=client,
                     args=args,
@@ -911,9 +1007,26 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     turn_dir=turn_dir,
                     turn_number=model_turn,
                     deadline=deadline,
+                    content_fallback_schema=stage_schema,
+                    content_fallback_name="submit_stage_artifact",
+                    content_fallback_validator=validate_stage_fallback,
                 )
                 content = tool_call["arguments"]
-                decision = _native_controller_decision(tool_call)
+                if response_mode == "validated_content_fallback":
+                    fallback_artifact = _artifact_from_text(
+                        content, schema=stage_schema
+                    )
+                    _validate_artifact_contract(
+                        fallback_artifact,
+                        require_final_answer=require_final_answer,
+                    )
+                    decision = {
+                        "action": "final",
+                        "python_code": "",
+                        "purpose": "schema-valid artifact returned as plain content",
+                    }
+                else:
+                    decision = _native_controller_decision(tool_call)
             else:
                 content, _, used_in, used_out, duration, attempts = _chat_completion(
                     client=client,
@@ -928,12 +1041,14 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 )
                 assistant_message = {"role": "assistant", "content": content}
                 decision = _decision_from_text(content)
+                response_mode = "json_schema"
             input_tokens += used_in
             output_tokens += used_out
             record = {
                 "model_turn": model_turn,
                 "kind": "decision",
                 "action": decision["action"],
+                "response_mode": response_mode,
                 "duration_seconds": duration,
                 "api_attempts": attempts,
                 "input_tokens": used_in,
@@ -950,9 +1065,16 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     assistant_message,
                 ]
             )
+            if fallback_artifact is not None and tool_calls >= args.min_tool_calls:
+                record["kind"] = "content_artifact"
+                record["status"] = "accepted"
+                artifact = fallback_artifact
+                raw_text = content
+                update_audit("running")
+                break
             if decision["action"] == "final":
                 if tool_calls >= args.min_tool_calls:
-                    if tool_call is not None:
+                    if tool_call is not None and response_mode == "native_tool":
                         messages.append(
                             {
                                 "role": "tool",
@@ -966,7 +1088,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     "You must inspect the public workspace with sandboxed Python at "
                     "least once before finalizing. Choose a python action next."
                 )
-                if tool_call is not None:
+                if tool_call is not None and response_mode == "native_tool":
                     messages.append(
                         {
                             "role": "tool",
@@ -1023,17 +1145,21 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 }
             )
 
-        messages.append(
-            {
-                "role": "user",
-                "content": (
-                    "FINAL ARTIFACT: Return only the complete stage artifact required by the "
-                    "original task. Do not wrap it in a controller action or Markdown."
-                ),
-            }
-        )
+        if artifact is None:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "FINAL ARTIFACT: Return only the complete stage artifact required by the "
+                        "original task. Do not wrap it in a controller action or Markdown."
+                    ),
+                }
+            )
         validation_error: ValueError | None = None
-        for repair_number in range(args.max_contract_repairs + 1):
+        repair_attempts = (
+            range(args.max_contract_repairs + 1) if artifact is None else range(0)
+        )
+        for repair_number in repair_attempts:
             model_turn += 1
             kind = "artifact" if repair_number == 0 else "contract_repair"
             turn_dir = turns_dir / f"model_turn_{model_turn:04d}_{kind}"
@@ -1052,6 +1178,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     used_out,
                     duration,
                     attempts,
+                    response_mode,
                 ) = _native_tool_completion(
                     client=client,
                     args=args,
@@ -1066,6 +1193,8 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     turn_dir=turn_dir,
                     turn_number=model_turn,
                     deadline=deadline,
+                    content_fallback_schema=stage_schema,
+                    content_fallback_name="submit_stage_artifact",
                 )
                 if artifact_tool_call["name"] != "submit_stage_artifact":
                     raise ValueError(
@@ -1086,11 +1215,13 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     deadline=deadline,
                 )
                 assistant_message = {"role": "assistant", "content": content}
+                response_mode = "json_schema"
             input_tokens += used_in
             output_tokens += used_out
             record = {
                 "model_turn": model_turn,
                 "kind": kind,
+                "response_mode": response_mode,
                 "duration_seconds": duration,
                 "api_attempts": attempts,
                 "input_tokens": used_in,
@@ -1117,7 +1248,10 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                         "vLLM artifact remained invalid after "
                         f"{repair_number + 1} attempt(s): {exc}"
                     ) from exc
-                if artifact_tool_call is not None:
+                if (
+                    artifact_tool_call is not None
+                    and response_mode == "native_tool"
+                ):
                     messages.append(
                         {
                             "role": "tool",

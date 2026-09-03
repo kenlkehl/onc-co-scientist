@@ -208,11 +208,14 @@ def test_qwen38_vllm_v2_template_locks_controller_sampling_and_isolation() -> No
         )
 
 
-def test_gemma4_vllm_v1_template_locks_thinking_and_controller_runtime() -> None:
+@pytest.mark.parametrize("version", ["v1", "v2"])
+def test_gemma4_vllm_template_locks_thinking_and_controller_runtime(
+    version: str,
+) -> None:
     template = yaml.safe_load(
         (
             EXPERIMENT
-            / "nsclc_semantic_workflow_grid_gemma4_31b_vllm_v1.template.yaml"
+            / f"nsclc_semantic_workflow_grid_gemma4_31b_vllm_{version}.template.yaml"
         ).read_text(encoding="utf-8")
     )
     python = Path("/home/klkehl/thisenv/bin/python")
@@ -247,8 +250,9 @@ def test_gemma4_vllm_v1_template_locks_thinking_and_controller_runtime() -> None
     )
 
     assert resolved["experiment_id"] == (
-        "nsclc-semantic-workflow-grid-gemma4-31b-vllm-v1-20x5"
+        f"nsclc-semantic-workflow-grid-gemma4-31b-vllm-{version}-20x5"
     )
+    assert resolved["models"][0]["id"] == f"gemma4-31b-vllm-controller-{version}"
     assert resolved["replicates"] == 5
     assert resolved["max_parallel"] == 6
     assert model["id"] == "gemma4-31b"
