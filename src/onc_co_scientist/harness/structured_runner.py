@@ -361,7 +361,11 @@ class StructuredRunner:
 
 
 def finalize_workspace(
-    workspace: str | Path, *, model_id: str | None = None, harness_id: str | None = None
+    workspace: str | Path,
+    *,
+    model_id: str | None = None,
+    harness_id: str | None = None,
+    write_output: bool = True,
 ) -> Transcript:
     root = Path(workspace)
     meta = json.loads((root / "metadata.json").read_text(encoding="utf-8"))
@@ -415,9 +419,10 @@ def finalize_workspace(
         max_iterations=int(meta["max_iterations"]),
         iterations=records,
     )
-    (root / "transcript.json").write_text(
-        json.dumps(transcript.model_dump(mode="json"), indent=2) + "\n", encoding="utf-8"
-    )
+    if write_output:
+        (root / "transcript.json").write_text(
+            json.dumps(transcript.model_dump(mode="json"), indent=2) + "\n", encoding="utf-8"
+        )
     return transcript
 
 

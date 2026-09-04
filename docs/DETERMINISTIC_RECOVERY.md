@@ -178,6 +178,20 @@ scores plus PNG/PDF/SVG recovery plots and discovery curves. `--allow-incomplete
 is for diagnostics and explicitly marks figures incomplete. Do not use it to
 quietly replace the prespecified denominator.
 
+The portable research archive retains evaluator inputs and all analysis records,
+with one discovery-data copy per cohort/condition. Restore it into an empty
+directory to rescore on another machine; original absolute paths are preserved
+in `plan_original_paths.json` while the active plan points to the restored files:
+
+```bash
+.venv/bin/python experiments/aim1_recovery/archive.py restore \
+  --archive aim1_structured_checkpoint.tar.gz --out data/restored_aim1
+.venv/bin/python experiments/aim1_recovery/score.py \
+  --plan data/restored_aim1/experiment/plan.json --out experiments/aim1_recovery/results/restored
+```
+
+A checkpoint can contain unfinished jobs; the same completeness gate still applies.
+
 The rerun is a new development pilot: model, output contract, held-out confirmation,
 and neutral examples differ from the archived pilot. The 0.90 threshold was a
 development choice made after inspecting archived examples and frozen before

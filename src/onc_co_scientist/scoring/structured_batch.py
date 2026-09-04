@@ -163,6 +163,7 @@ def score_transcript(
     strict_times = [a["strict_iteration"] for a in associations if a["strict_recovered"]]
     return {
         "scorer_version": SCORER_VERSION,
+        "primary_scoring_backend": "deterministic",
         "dataset_id": transcript.dataset_id,
         "model_id": transcript.model_id,
         "harness_id": transcript.harness_id,

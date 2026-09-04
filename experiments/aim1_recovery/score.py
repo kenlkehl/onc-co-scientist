@@ -47,7 +47,9 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
         ):
             raise ValueError(f"Task input changed: {job['job_id']}")
         saved = Transcript.model_validate_json((ws / "transcript.json").read_text())
-        assembled = finalize_workspace(ws, model_id=saved.model_id, harness_id=saved.harness_id)
+        assembled = finalize_workspace(
+            ws, model_id=saved.model_id, harness_id=saved.harness_id, write_output=False
+        )
         if saved.model_dump() != assembled.model_dump():
             raise ValueError("Transcript differs from submitted records")
         ev = Path(job["evaluator"])
@@ -175,6 +177,15 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
             "results."
         ),
     }
+    for filename in ["plan.json", "protocol.json", "implementation_at_launch.json"]:
+        source_path = plan_path.parent / filename
+        if source_path.exists():
+            shutil.copyfile(source_path, out / filename)
+    state_path = plan_path.parent / "coordinator_state.json"
+    if state_path.exists():
+        state = json.loads(state_path.read_text())
+        summary["technical_interruptions"] = state.get("technical_interruptions", [])
+        shutil.copyfile(state_path, out / state_path.name)
     (out / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n")
     pd.DataFrame(summaries).to_csv(out / "group_scores.csv", index=False)
     plot(frame, out, complete=not unfinished)
@@ -197,11 +208,6 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
         "| Family | Condition | N | Primary | Strict | RMST iterations |",
         "|---|---|---:|---:|---:|---:|",
     ]
-    if plan["protocol"].get("excluded_setup_batch"):
-        lines += [
-            "",
-            "Excluded setup batch: " + json.dumps(plan["protocol"]["excluded_setup_batch"]),
-        ]
     for g in summaries:
         if g["task"] == "all":
             lines.append(
@@ -209,6 +215,19 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
                 f"{g['primary_n']}/{g['n']} | {g['strict_n']}/{g['n']} | "
                 f"{g['rmst_iterations']} |"
             )
+    if plan["protocol"].get("excluded_setup_batch"):
+        lines += [
+            "",
+            "Excluded setup batch: " + json.dumps(plan["protocol"]["excluded_setup_batch"]),
+        ]
+    if summary.get("technical_interruptions"):
+        lines += [
+            "",
+            "Technical interruptions are retained in coordinator_state.json and summary.json. "
+            "Affected jobs continued from their original saved work and submitted records, "
+            "without recovery feedback. Some required a replacement agent context when the "
+            "original runtime session became unavailable.",
+        ]
     lines += [
         "",
         "Primary recovery requires the complete defining structure, subgroup precision and "

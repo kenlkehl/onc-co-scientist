@@ -27,7 +27,7 @@ def prompt_for(job: dict) -> str:
 def run_one(job: dict, args) -> dict:
     workspace = Path(job["workspace"])
     if (workspace / "transcript.json").exists():
-        result = finalize_workspace(workspace)
+        result = finalize_workspace(workspace, write_output=False)
         if result.model_id != args.model:
             raise ValueError(
                 f"Existing {job['job_id']} used a different model. "

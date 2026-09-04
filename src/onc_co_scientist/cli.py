@@ -713,7 +713,10 @@ def score_run(
             "--evaluation-data",
             exists=True,
             dir_okay=False,
-            help="Independent evaluation Parquet. Omit for explicitly labeled in-sample reconfirmation.",
+            help=(
+                "Independent evaluation Parquet. Omit for explicitly labeled "
+                "in-sample reconfirmation."
+            ),
         ),
     ] = None,
 ) -> None:
@@ -825,15 +828,10 @@ def score_batch(
 ) -> None:
     """Batch-score structured recovery; LLM matching requires an explicit legacy flag.
 
-    Per (dataset, variant, replicate):
-      - novelty (named only): % of harness-proposed hypotheses the LLM
-        judge marks as going beyond paradigm consensus.
-      - buried-discovery iteration (both variants): earliest iteration the
-        pipeline both proposed and tested a hypothesis matching the
-        manifest's buried association; left absent when never uncovered.
-
-    Both ``named`` and ``anonymized`` bundles are scored; the named-vs-
-    anonymized gap on buried discovery is the primary outcome of the eval.
+    By default, both naming conditions receive deterministic primary and strict
+    recovery scores and first supported discovery iterations. No LLM is built
+    or called. Optional novelty judging is enabled only by --score-novelty.
+    --legacy-llm-matching restores the archived LLM matching/reporting path.
     """
     bundles = discover_bundles(synth_root)
     if not bundles:

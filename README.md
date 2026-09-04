@@ -23,7 +23,7 @@ The repo orchestrates synth → task brief → harness invocation → score, but
 uv pip install -e ".[dev]"
 ```
 
-Optional extras: `synthetic` (upstream causal-inference generator, heavy ML deps) and `providers` (LLM provider SDKs).
+Optional extras: `analysis` (research/plotting environment), `synthetic` (upstream causal-inference generator, heavy ML deps), and `providers` (LLM provider SDKs).
 
 ## Quickstart
 
@@ -40,7 +40,6 @@ OUT=../data/ds001 \
 HARNESS=claude \
 REPLICATES=5 \
 JOBS=4 \
-JUDGE=codex-cli \
 scripts/run_all.sh
 ```
 
@@ -55,12 +54,17 @@ scripts/run_all.sh
 | `JOBS`            | `4`                                | Bundles run in parallel                                     |
 | `REPLICATES`      | `5`                                | Replicate runs per bundle (idempotent top-up)               |
 | `PYTHON_ENV`      | `.venv`                            | Python env prepended to PATH per harness invocation         |
-| `JUDGE`           | `anthropic-vertex`                 | Scoring judge backend (`anthropic-vertex`, `claude-cli`, `codex-cli`, or `stub`) |
+| `SCORE_NOVELTY`   | `0`                               | Set to `1` to add optional LLM novelty scoring |
+| `JUDGE`           | `anthropic-vertex`                 | Optional judge backend; unused by default deterministic recovery |
 | `JUDGE_CLI`       | `auto`                             | CLI binary for `claude-cli`/`codex-cli` judges (`auto`, `claude`, `codex`, or a path) |
 | `JUDGE_MODEL`     | unset                              | Optional model id for `anthropic-vertex` or `codex-cli`     |
 
 `scripts/resume.sh` also accepts `SYNTH_ROOT` (default: `OUT`) for cases where
 the task runs live separately from the source bundles used for scoring.
+
+The presence of judge settings does not enable LLM scoring. The scoring CLI
+requires `--score-novelty` for optional novelty judging or `--legacy-llm-matching`
+to reproduce archived LLM recovery. Fresh Aim 1 recovery uses neither option.
 
 ## Running steps individually
 
