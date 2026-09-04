@@ -470,6 +470,91 @@ def test_adapter_retries_native_tool_arguments_that_fail_schema(tmp_path: Path) 
     assert audit["turns"][0]["api_attempts"] == 2
 
 
+@pytest.mark.parametrize("invalid_as_plain_content", [False, True])
+def test_native_artifact_schema_failure_enters_contract_repair_loop(
+    tmp_path: Path, invalid_as_plain_content: bool
+) -> None:
+    workspace = tmp_path / "workspace"
+    scratch = tmp_path / "run" / "scratch" / "session"
+    call_dir = tmp_path / "run" / "calls" / "call_0001"
+    workspace.mkdir(parents=True)
+    scratch.mkdir(parents=True)
+    request = {
+        "request_id": "run:c0001",
+        "experiment_id": "experiment",
+        "run_id": "run",
+        "task_id": "task",
+        "workflow_id": "persistent",
+        "model_profile": "gemma",
+        "model_id": "gemma4-31b",
+        "reasoning_effort": None,
+        "stage_id": "synthesis",
+        "require_final_answer": True,
+        "iteration_index": 1,
+        "max_iterations": 1,
+        "stage_index": 3,
+        "stage_position": 4,
+        "terminal": True,
+        "role": "synthesis scientist",
+        "agent_id": "agent",
+        "session_id": "persistent-session",
+        "prompt": "Return the required artifact.",
+        "workspace": str(workspace),
+        "scratch_dir": str(scratch),
+        "metadata": {},
+    }
+    request_file = call_dir / "request.json"
+    request_file.parent.mkdir(parents=True)
+    request_file.write_text(json.dumps(request), encoding="utf-8")
+    output = call_dir / "response.json"
+    invalid = _artifact(supported=True)
+    invalid.pop("summary")
+    invalid_response: Any
+    if invalid_as_plain_content:
+        invalid_response = _FakeResponse(json.dumps(invalid))
+    else:
+        invalid_response = _FakeToolResponse(
+            "submit_stage_artifact", invalid, call_id="invalid-artifact"
+        )
+    client = _FakeClient(
+        [
+            _FakeToolResponse(
+                "finish_stage", {"purpose": "ready"}, call_id="finish-1"
+            ),
+            invalid_response,
+            _FakeToolResponse(
+                "submit_stage_artifact",
+                _artifact(supported=True),
+                call_id="repaired-artifact",
+            ),
+        ]
+    )
+    args = _args(tmp_path, request_file, output)
+    args.interaction_mode = "native-tools"
+    args.min_tool_calls = 0
+    args.max_api_retries = 2
+
+    response = run_adapter(args, client=client)
+
+    assert response.artifact.final_answer is not None
+    assert len(client.chat.completions.requests) == 3
+    repair_request = client.chat.completions.requests[-1]
+    assert "CONTROLLER CONTRACT REPAIR" in repair_request["messages"][-1]["content"]
+    assert "'summary' is a required property" in repair_request["messages"][-1][
+        "content"
+    ]
+    audit = json.loads((call_dir / "vllm_call.json").read_text())
+    assert [turn["kind"] for turn in audit["turns"]] == [
+        "decision",
+        "artifact",
+        "contract_repair",
+    ]
+    assert audit["turns"][1]["status"] == "contract_rejected"
+    assert audit["turns"][1]["api_attempts"] == 1
+    assert audit["turns"][2]["status"] == "accepted"
+    assert audit["contract_repair_count"] == 1
+
+
 def test_adapter_accepts_exact_native_artifact_only_after_minimum_tools(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

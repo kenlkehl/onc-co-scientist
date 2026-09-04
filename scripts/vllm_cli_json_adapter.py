@@ -48,7 +48,7 @@ except ModuleNotFoundError:  # Direct execution puts ``scripts/`` on sys.path.
     )
 
 
-ADAPTER_PROTOCOL_VERSION = 5
+ADAPTER_PROTOCOL_VERSION = 6
 DEFAULT_API_TIMEOUT_SECONDS = 7_200.0
 DEFAULT_MAX_TOKENS = 100_000
 DECISION_SCHEMA: dict[str, Any] = {
@@ -566,6 +566,7 @@ def _native_tool_completion(
     content_fallback_name: str | None = None,
     content_fallback_validator: Callable[[str], None] | None = None,
     allow_unavailable_fallback_tool: bool = False,
+    defer_schema_validation: bool = False,
 ) -> tuple[
     dict[str, str],
     dict[str, Any],
@@ -684,7 +685,7 @@ def _native_tool_completion(
                         "vLLM invoked an unavailable native tool: "
                         f"{tool_call['name']}"
                     )
-            else:
+            elif not defer_schema_validation:
                 _schema_object_from_text(
                     tool_call["arguments"],
                     schema=tool_schema,
@@ -698,16 +699,20 @@ def _native_tool_completion(
                 and content_fallback_name is not None
             ):
                 try:
-                    fallback = _schema_object_from_content(
-                        _native_message_content(response),
-                        schema=content_fallback_schema,
-                        label=f"{content_fallback_name} content fallback",
-                    )
-                    arguments = json.dumps(
-                        fallback, ensure_ascii=False, separators=(",", ":")
-                    )
-                    if content_fallback_validator is not None:
-                        content_fallback_validator(arguments)
+                    fallback_content = _native_message_content(response)
+                    if defer_schema_validation:
+                        arguments = fallback_content.strip()
+                    else:
+                        fallback = _schema_object_from_content(
+                            fallback_content,
+                            schema=content_fallback_schema,
+                            label=f"{content_fallback_name} content fallback",
+                        )
+                        arguments = json.dumps(
+                            fallback, ensure_ascii=False, separators=(",", ":")
+                        )
+                        if content_fallback_validator is not None:
+                            content_fallback_validator(arguments)
                 except (RuntimeError, ValueError) as fallback_exc:
                     parse_error = RuntimeError(
                         f"{exc} Validated content fallback was rejected: {fallback_exc}"
@@ -1384,6 +1389,11 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                     max_tokens=args.max_tokens,
                     content_fallback_schema=stage_schema,
                     content_fallback_name="submit_stage_artifact",
+                    # Artifact schema/contract failures belong to the explicit
+                    # contract-repair loop below.  Keeping them out of this
+                    # helper's transport/protocol retry loop ensures Gemma sees
+                    # the exact validation error on a dedicated repair turn.
+                    defer_schema_validation=True,
                 )
                 if artifact_tool_call["name"] != "submit_stage_artifact":
                     raise ValueError(
@@ -1480,6 +1490,9 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
             history=new_history,
         )
         duration = time.monotonic() - started
+        contract_repair_count = sum(
+            turn.get("kind") == "contract_repair" for turn in root_audit["turns"]
+        )
         response = AgentResponse(
             request_id=request_id,
             artifact=artifact,
@@ -1509,10 +1522,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 "history_messages_saved": len(new_history),
                 "model_turns": model_turn,
                 "tool_calls": tool_calls,
-                "contract_repair_count": sum(
-                    turn.get("kind") == "contract_repair"
-                    for turn in root_audit["turns"]
-                ),
+                "contract_repair_count": contract_repair_count,
                 "audit_file": audit_path.name,
             },
         )
@@ -1523,6 +1533,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
             output_tokens=output_tokens,
             tool_calls=tool_calls,
             model_turns=model_turn,
+            contract_repair_count=contract_repair_count,
             history_messages_saved=len(new_history),
         )
         return response
@@ -1535,6 +1546,10 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
             output_tokens=output_tokens,
             tool_calls=tool_calls,
             model_turns=model_turn,
+            contract_repair_count=sum(
+                turn.get("kind") == "contract_repair"
+                for turn in root_audit["turns"]
+            ),
         )
         raise
 

@@ -297,7 +297,7 @@ def test_gemma4_vllm_template_locks_thinking_and_controller_runtime(
         )
 
 
-@pytest.mark.parametrize("version", ["v3", "v4"])
+@pytest.mark.parametrize("version", ["v3", "v4", "v5"])
 def test_gemma4_vllm_hardened_templates_lock_split_ceilings_and_sampling(
     version: str,
 ) -> None:
