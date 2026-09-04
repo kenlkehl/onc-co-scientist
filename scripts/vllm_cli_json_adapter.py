@@ -1014,6 +1014,28 @@ def _schema_object_from_content(
     return _schema_object_from_text(text, schema=schema, label=label)
 
 
+def _artifact_from_native_phase_text(
+    raw: str,
+    *,
+    schema: dict[str, Any],
+    response_mode: str,
+) -> AgentArtifact:
+    """Parse a deferred artifact without weakening its original wire contract."""
+    if response_mode == "validated_content_fallback":
+        payload = _schema_object_from_content(
+            raw,
+            schema=schema,
+            label="submit_stage_artifact content fallback",
+        )
+    else:
+        payload = _schema_object_from_text(
+            raw,
+            schema=schema,
+            label="submit_stage_artifact tool call",
+        )
+    return AgentArtifact.model_validate(payload)
+
+
 def _decision_from_text(raw: str) -> dict[str, str]:
     payload = _schema_object_from_text(
         raw, schema=DECISION_SCHEMA, label="controller decision"
@@ -1434,7 +1456,14 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
             raw_text = content
             messages.append(assistant_message)
             try:
-                candidate = _artifact_from_text(content, schema=stage_schema)
+                if args.interaction_mode == "native-tools":
+                    candidate = _artifact_from_native_phase_text(
+                        content,
+                        schema=stage_schema,
+                        response_mode=response_mode,
+                    )
+                else:
+                    candidate = _artifact_from_text(content, schema=stage_schema)
                 _validate_artifact_contract(
                     candidate, require_final_answer=require_final_answer
                 )

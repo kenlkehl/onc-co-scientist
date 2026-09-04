@@ -63,14 +63,14 @@ class _FakeToolResponse:
     def __init__(
         self,
         name: str,
-        arguments: dict[str, Any],
+        arguments: dict[str, Any] | str,
         *,
         call_id: str,
         input_tokens: int = 10,
         output_tokens: int = 5,
         finish_reason: str = "tool_calls",
     ):
-        encoded = json.dumps(arguments)
+        encoded = arguments if isinstance(arguments, str) else json.dumps(arguments)
         function = SimpleNamespace(name=name, arguments=encoded)
         tool_call = SimpleNamespace(id=call_id, function=function)
         self.choices = [
@@ -470,9 +470,18 @@ def test_adapter_retries_native_tool_arguments_that_fail_schema(tmp_path: Path) 
     assert audit["turns"][0]["api_attempts"] == 2
 
 
-@pytest.mark.parametrize("invalid_as_plain_content", [False, True])
+@pytest.mark.parametrize(
+    "invalid_mode",
+    [
+        "native_schema",
+        "plain_schema",
+        "native_malformed_json",
+        "native_markdown_fence",
+        "plain_unterminated_fence",
+    ],
+)
 def test_native_artifact_schema_failure_enters_contract_repair_loop(
-    tmp_path: Path, invalid_as_plain_content: bool
+    tmp_path: Path, invalid_mode: str
 ) -> None:
     workspace = tmp_path / "workspace"
     scratch = tmp_path / "run" / "scratch" / "session"
@@ -510,11 +519,25 @@ def test_native_artifact_schema_failure_enters_contract_repair_loop(
     invalid = _artifact(supported=True)
     invalid.pop("summary")
     invalid_response: Any
-    if invalid_as_plain_content:
+    if invalid_mode == "plain_schema":
         invalid_response = _FakeResponse(json.dumps(invalid))
-    else:
+    elif invalid_mode == "native_schema":
         invalid_response = _FakeToolResponse(
             "submit_stage_artifact", invalid, call_id="invalid-artifact"
+        )
+    elif invalid_mode == "native_malformed_json":
+        invalid_response = _FakeToolResponse(
+            "submit_stage_artifact", '{"summary":', call_id="invalid-artifact"
+        )
+    elif invalid_mode == "native_markdown_fence":
+        invalid_response = _FakeToolResponse(
+            "submit_stage_artifact",
+            "```json\n" + json.dumps(_artifact(supported=True)) + "\n```",
+            call_id="invalid-artifact",
+        )
+    else:
+        invalid_response = _FakeResponse(
+            "```json\n" + json.dumps(_artifact(supported=True))
         )
     client = _FakeClient(
         [
@@ -540,9 +563,16 @@ def test_native_artifact_schema_failure_enters_contract_repair_loop(
     assert len(client.chat.completions.requests) == 3
     repair_request = client.chat.completions.requests[-1]
     assert "CONTROLLER CONTRACT REPAIR" in repair_request["messages"][-1]["content"]
-    assert "'summary' is a required property" in repair_request["messages"][-1][
-        "content"
-    ]
+    if invalid_mode in {"native_schema", "plain_schema"}:
+        assert "'summary' is a required property" in repair_request["messages"][-1][
+            "content"
+        ]
+    elif invalid_mode == "plain_unterminated_fence":
+        assert "unterminated Markdown fence" in repair_request["messages"][-1][
+            "content"
+        ]
+    else:
+        assert "was not valid JSON" in repair_request["messages"][-1]["content"]
     audit = json.loads((call_dir / "vllm_call.json").read_text())
     assert [turn["kind"] for turn in audit["turns"]] == [
         "decision",
