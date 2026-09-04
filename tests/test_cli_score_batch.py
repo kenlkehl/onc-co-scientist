@@ -130,6 +130,7 @@ def test_score_batch_scores_named_and_anonymized_and_writes_report(tmp_path: Pat
         [
             "score",
             "batch",
+            "--legacy-llm-matching",
             "--synth-root",
             str(synth_root),
             "--tasks-root",
@@ -215,6 +216,7 @@ def test_score_batch_errors_when_no_transcripts(tmp_path: Path) -> None:
         [
             "score",
             "batch",
+            "--legacy-llm-matching",
             "--synth-root",
             str(synth_root),
             "--tasks-root",
@@ -245,6 +247,7 @@ def test_score_batch_explains_task_only_synth_root(tmp_path: Path) -> None:
         [
             "score",
             "batch",
+            "--legacy-llm-matching",
             "--synth-root",
             str(task_only_root),
             "--tasks-root",
@@ -278,6 +281,7 @@ def test_score_run_writes_single_replicate_report(tmp_path: Path) -> None:
         [
             "score",
             "run",
+            "--legacy-llm-matching",
             "--dataset",
             str(bundle),
             "--transcript",
@@ -298,3 +302,38 @@ def test_score_run_writes_single_replicate_report(tmp_path: Path) -> None:
     assert payload["n_replicates_total"] == 1
     assert payload["per_bundle"][0]["variant"] == "named"
     assert payload["per_bundle"][0]["frac_novel_mean"] == 1.0
+
+
+def test_default_scoring_never_builds_an_llm_judge(tmp_path, monkeypatch):
+    synth, tasks = _build_synth_and_tasks(tmp_path)
+    from onc_co_scientist.synthetic.io import discover_bundles
+
+    bundle = discover_bundles(synth)[0]
+    transcript = tasks / bundle.relative_to(synth) / "runs/run_001/transcript.json"
+    _write_transcript(transcript, read_manifest(bundle).dataset_id)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Primary recovery invoked an LLM")
+
+    monkeypatch.setattr("onc_co_scientist.cli._build_judge", forbidden)
+    out = tmp_path / "deterministic"
+    result = CliRunner().invoke(
+        app,
+        [
+            "score",
+            "run",
+            "--dataset",
+            str(bundle),
+            "--transcript",
+            str(transcript),
+            "--out",
+            str(out),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    scored = json.loads((out / "structured_scores.json").read_text())[0]
+    assert scored["scorer_version"] == "structured-recovery-v1"
+    assert scored["unstructured_claims"] == 1
+    assert not scored["primary_recovered"]
+    assert "novelty" not in scored
+    assert scored["evidence_design"] == "in_sample_reconfirmation"

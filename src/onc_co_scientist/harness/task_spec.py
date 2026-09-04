@@ -172,6 +172,9 @@ def _render_instructions(
 def _write_schema(out_path: Path) -> None:
     """Write the JSON schema for the Transcript model alongside the task."""
     schema = Transcript.model_json_schema()
+    hypothesis = schema["$defs"]["HypothesisRecord"]
+    hypothesis["required"] = sorted(set(hypothesis.get("required", [])) | {"finding"})
+    hypothesis["properties"]["finding"] = {"$ref": "#/$defs/StructuredFinding"}
     out_path.write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
 
 

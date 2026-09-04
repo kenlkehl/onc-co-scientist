@@ -10,11 +10,8 @@ The benchmark asks: when an agentic harness analyzes a synthetic oncology datase
   - `named/` — real clinical column names.
   - `anonymized/` — non-outcome columns renamed to `feature_NNN`.
 - **Harness-agnostic task builder (Aim 1.2).** Emits a generic data-mining brief that any external agent (Claude Code, Codex, custom ReAct, …) can execute against a parquet file.
-- **LLM-judged scorer (Aim 1.2).** Two metrics per `(harness, dataset, replicate)`:
-  - **Novelty %** — fraction of harness-proposed hypotheses an LLM judge marks as going beyond established oncology paradigm consensus.
-  - **Buried discovery iteration** — earliest iteration the pipeline both proposes and tests (with a direction-correct significant analysis) a hypothesis matching the buried finding. Reported only for replicates where the buried finding is uncovered.
-
-  Per-bundle scores are reported as mean ± SD across replicates; the pipeline-level figure is the unweighted mean of bundle means. Anonymized bundles are excluded from scoring (the LLM judge can't reason about `feature_NNN` columns).
+- **Deterministic recovery scorer (Aim 1.2 primary).** Agents submit explicit structured findings during research. Code checks target, subgroup structure, numerical overlap, effect direction, and statistical evidence. Optional LLM novelty scoring remains separate. Named and anonymized runs use the same canonical rules. See [deterministic recovery and backend instructions](docs/DETERMINISTIC_RECOVERY.md).
+- **Structured research runners.** Prepared jobs support fresh Luna subagents in ChatGPT Work or a user-provided OpenAI-compatible endpoint, including vLLM. Both emit the same structured iteration records. See [the Aim 1 pilot runner](experiments/aim1_recovery/run_batch.py).
 
 ## Scope
 
@@ -150,37 +147,18 @@ scripts/run_harness.sh "ollama launch claude --model qwen3.6:27b --yes" \
 
 ### 4. Score
 
-```bash
-ocs score batch \
-    --synth-root ../data/ds001 \
-    --tasks-root ../data/ds001/tasks \
-    --out ../data/ds001/score \
-    --judge claude-cli
-```
-
-The default `claude-cli` judge shells out to `claude --dangerously-skip-permissions -p`, using whatever Claude Code auth is already on the host (no API key plumbing). Judge calls are cached on disk under `~/.cache/onc-co-scientist/judge/`; pass `--no-judge-cache` to force every call to hit the LLM.
-
-You can also use `--judge codex-cli` to score through the OpenAI Codex CLI.
-That backend shells out to `codex exec` using existing Codex CLI auth.
+Primary recovery is deterministic by default:
 
 ```bash
 ocs score batch \
     --synth-root ../data/ds001 \
     --tasks-root ../data/ds001/tasks \
-    --out ../data/ds001/score \
-    --judge codex-cli \
-    --judge-model gpt-5.4
+    --out ../data/ds001/score
 ```
 
-For one-off scoring of a single transcript:
+For independent confirmation, supply `--evaluation-root` with evaluation Parquets in a mirrored bundle tree. Otherwise results are explicitly labeled in-sample reconfirmation. Add `--score-novelty --judge codex-cli` to run optional LLM novelty scoring. Use `--legacy-llm-matching` only to reproduce archived prose-based scores.
 
-```bash
-ocs score run \
-    --dataset ../data/ds001/nsclc_clinical/named \
-    --transcript ../data/ds001/tasks/nsclc_clinical/named/runs/run_001/transcript.json \
-    --out ../data/ds001/nsclc_clinical/named/score \
-    --judge codex-cli
-```
+New task schemas require `proposed_hypotheses[].finding`. Old prose-only transcripts receive no deterministic recovery credit; there is no implicit LLM translation or answer-key completion. See [the scoring definition, structured runner commands, and pilot regeneration workflow](docs/DETERMINISTIC_RECOVERY.md).
 
 ## Prototype: CAA paradigm-bias vectors
 
