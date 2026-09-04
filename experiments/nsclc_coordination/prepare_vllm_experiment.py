@@ -54,6 +54,7 @@ def _locked_model_manifest(
     expected_top_k: int | None = None,
     expected_repetition_penalty: float | None = None,
     expected_max_decision_tokens: int | None = None,
+    expected_python_memory_limit_mb: int | None = None,
 ) -> dict[str, Any]:
     if expected_thinking_mode not in {"server-default", "enabled", "disabled"}:
         raise ValueError(f"Unsupported thinking mode: {expected_thinking_mode}")
@@ -132,6 +133,10 @@ def _locked_model_manifest(
         expected["--repetition-penalty"] = str(expected_repetition_penalty)
     if expected_max_decision_tokens is not None:
         expected["--max-decision-tokens"] = str(expected_max_decision_tokens)
+    if expected_python_memory_limit_mb is not None:
+        expected["--python-memory-limit-mb"] = str(
+            expected_python_memory_limit_mb
+        )
     if expected_thinking_mode != "server-default":
         expected["--thinking-mode"] = expected_thinking_mode
     if expected_interaction_mode != "json-schema":
@@ -170,6 +175,10 @@ def _locked_model_manifest(
     }
     if expected_max_decision_tokens is not None:
         limits["max_decision_tokens"] = int(observed["--max-decision-tokens"])
+    if expected_python_memory_limit_mb is not None:
+        limits["python_memory_limit_mb"] = int(
+            observed["--python-memory-limit-mb"]
+        )
     return {
         "profile": str(model.get("id", "")),
         "id": str(model["model_id"]),
@@ -236,6 +245,8 @@ def _machine_manifest(
 
 
 def prepare(args: argparse.Namespace) -> dict[str, Any]:
+    if args.python_memory_limit_mb is not None and args.python_memory_limit_mb < 0:
+        raise ValueError("python_memory_limit_mb must be non-negative.")
     repo = args.repo.resolve(strict=True)
     source_paths = common._source_paths(repo)
     observed = {label: common._sha256(path) for label, path in source_paths.items()}
@@ -279,6 +290,19 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "__BWRAP__": str(bwrap),
     }
     main = common._replace_tokens(template, replacements)
+    if args.main_experiment_id is not None:
+        main["experiment_id"] = args.main_experiment_id
+    if args.model_profile_id is not None:
+        main["models"][0]["id"] = args.model_profile_id
+    if args.python_memory_limit_mb is not None:
+        extra_args = main["models"][0]["extra_args"]
+        flag = "--python-memory-limit-mb"
+        if flag in extra_args:
+            extra_args[extra_args.index(flag) + 1] = str(
+                args.python_memory_limit_mb
+            )
+        else:
+            extra_args.extend([flag, str(args.python_memory_limit_mb)])
     unresolved = re.findall(r"__[A-Z0-9_]+__", json.dumps(main))
     if unresolved:
         raise ValueError(f"Unresolved template tokens: {sorted(set(unresolved))}")
@@ -296,6 +320,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         expected_top_k=args.top_k,
         expected_repetition_penalty=args.repetition_penalty,
         expected_max_decision_tokens=args.max_decision_tokens,
+        expected_python_memory_limit_mb=args.python_memory_limit_mb,
     )
     smoke = json.loads(json.dumps(main))
     smoke["experiment_id"] = args.smoke_experiment_id
@@ -353,6 +378,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         },
         "machine_manifest": str(args.machine_manifest.resolve()),
         "endpoint_model_ids": sorted(served_ids),
+        "identity_overrides": {
+            "main_experiment_id": args.main_experiment_id,
+            "model_profile_id": args.model_profile_id,
+            "python_memory_limit_mb": args.python_memory_limit_mb,
+        },
     }
     preparation_path = args.public_root.resolve() / "preparation_manifest.json"
     preparation_path.write_text(json.dumps(preparation, indent=2) + "\n", encoding="utf-8")
@@ -402,6 +432,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--stub-experiment-id",
         default="nsclc-semantic-workflow-grid-qwen38-27b-vllm-v2-stub-gate",
     )
+    parser.add_argument("--main-experiment-id")
+    parser.add_argument("--model-profile-id")
     parser.add_argument(
         "--main-output-root",
         type=Path,
@@ -434,6 +466,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--top-k", type=int)
     parser.add_argument("--repetition-penalty", type=float)
     parser.add_argument("--max-decision-tokens", type=int)
+    parser.add_argument("--python-memory-limit-mb", type=int)
     parser.add_argument("--bwrap", default="bwrap")
     return parser.parse_args(argv)
 

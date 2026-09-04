@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -15,6 +18,7 @@ from onc_co_scientist.harness.runtime import (
     SubgroupPredicate,
     build_pi_command,
     parse_agent_artifact,
+    run_subprocess_in_group,
 )
 
 
@@ -147,6 +151,42 @@ args.output.write_text(json.dumps({
     assert response.artifact.evidence == ["public.txt"]
     saved_request = json.loads((tmp_path / "call" / "request.json").read_text())
     assert "call_dir" not in saved_request
+
+
+def test_grouped_subprocess_timeout_kills_nested_child(tmp_path: Path) -> None:
+    child_pid_path = tmp_path / "child.pid"
+    script = tmp_path / "spawn_child.py"
+    script.write_text(
+        (
+            "import pathlib, subprocess, time\n"
+            "child = subprocess.Popen(['sleep', '60'])\n"
+            f"pathlib.Path({str(child_pid_path)!r}).write_text(str(child.pid))\n"
+            "time.sleep(60)\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        run_subprocess_in_group(
+            [sys.executable, str(script)],
+            cwd=tmp_path,
+            env=os.environ.copy(),
+            timeout=0.5,
+        )
+
+    child_pid = int(child_pid_path.read_text())
+
+    def child_is_running() -> bool:
+        try:
+            state = Path(f"/proc/{child_pid}/stat").read_text().split()[2]
+        except (FileNotFoundError, IndexError, OSError):
+            return False
+        return state != "Z"
+
+    deadline = time.monotonic() + 2.0
+    while child_is_running() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert not child_is_running()
 
 
 def test_pi_command_defaults_to_cleanroom_resources_and_tool_allowlist() -> None:

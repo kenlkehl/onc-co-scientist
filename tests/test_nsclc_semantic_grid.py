@@ -96,7 +96,7 @@ def test_tracked_grid_template_locks_calls_timeouts_and_parallelism() -> None:
     assert template["models"][0]["reasoning_effort"] == "low"
 
 
-def test_medium_v6_template_locks_resilient_fast_reasoning_and_eight_hour_ceiling() -> None:
+def test_medium_v7_template_locks_resource_guarded_fast_reasoning_and_ceiling() -> None:
     template = yaml.safe_load(
         (EXPERIMENT / "nsclc_semantic_workflow_grid_medium.template.yaml").read_text(
             encoding="utf-8"
@@ -106,16 +106,17 @@ def test_medium_v6_template_locks_resilient_fast_reasoning_and_eight_hour_ceilin
     model = _locked_model_manifest(template)
 
     assert template["experiment_id"] == (
-        "nsclc-semantic-workflow-grid-luna-medium-fast-resilient-localenv-v6-20x5"
+        "nsclc-semantic-workflow-grid-luna-medium-fast-resource-guarded-v7-20x5"
     )
     assert model == {
-        "profile": "codex-luna-medium-fast-resilient-localenv-v6",
+        "profile": "codex-luna-medium-fast-resource-guarded-v7",
         "id": "gpt-5.6-luna",
         "adapter": "cli-json",
         "reasoning_effort": "medium",
         "service_tier": "fast",
         "max_contract_repairs": 2,
         "max_runtime_retries": 24,
+        "analysis_memory_limit_mb": 4096,
         "runtime_retry_initial_seconds": 30.0,
         "runtime_retry_max_seconds": 900.0,
         "runtime_retry_budget_seconds": 21_600.0,
@@ -150,6 +151,12 @@ def test_medium_v6_template_locks_resilient_fast_reasoning_and_eight_hour_ceilin
     args[args.index("--max-runtime-retries") + 1] = "-1"
     with pytest.raises(ValueError, match="runtime-retry limit"):
         _locked_model_manifest(invalid_runtime_retries)
+
+    invalid_memory_limit = json.loads(json.dumps(template))
+    args = invalid_memory_limit["models"][0]["extra_args"]
+    args[args.index("--analysis-memory-limit-mb") + 1] = "-1"
+    with pytest.raises(ValueError, match="analysis-memory limit"):
+        _locked_model_manifest(invalid_memory_limit)
 
 
 def test_prepare_smoke_parallelism_is_explicit() -> None:

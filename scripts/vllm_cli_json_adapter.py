@@ -48,7 +48,7 @@ except ModuleNotFoundError:  # Direct execution puts ``scripts/`` on sys.path.
     )
 
 
-ADAPTER_PROTOCOL_VERSION = 6
+ADAPTER_PROTOCOL_VERSION = 7
 DEFAULT_API_TIMEOUT_SECONDS = 7_200.0
 DEFAULT_MAX_TOKENS = 100_000
 DECISION_SCHEMA: dict[str, Any] = {
@@ -153,6 +153,7 @@ def _session_settings(args: argparse.Namespace, model_id: str) -> dict[str, Any]
         "max_tokens": args.max_tokens,
         "max_history_chars": args.max_history_chars,
         "max_controller_decisions": args.max_controller_decisions,
+        "python_memory_limit_mb": args.python_memory_limit_mb,
         "thinking_mode": args.thinking_mode,
         "interaction_mode": args.interaction_mode,
     }
@@ -818,10 +819,21 @@ def _analysis_python_roots(source: Path) -> tuple[Path, Path, Path]:
     return requested, environment_root, python_root
 
 
-def _resource_limits(python_timeout_seconds: int) -> None:
+def _resource_limits(
+    python_timeout_seconds: int,
+    python_memory_limit_mb: int,
+) -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (python_timeout_seconds + 5,) * 2)
     resource.setrlimit(resource.RLIMIT_FSIZE, (16 * 1024 * 1024,) * 2)
     resource.setrlimit(resource.RLIMIT_NOFILE, (256,) * 2)
+    if python_memory_limit_mb > 0:
+        memory_bytes = python_memory_limit_mb * 1024 * 1024
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        finite = [
+            value for value in (soft, hard) if value != resource.RLIM_INFINITY
+        ]
+        effective = min([memory_bytes, *finite])
+        resource.setrlimit(resource.RLIMIT_AS, (effective, effective))
 
 
 def _sandbox_command(
@@ -882,6 +894,18 @@ def _sandbox_command(
             "--setenv",
             "PYTHONDONTWRITEBYTECODE",
             "1",
+            "--setenv",
+            "OPENBLAS_NUM_THREADS",
+            "1",
+            "--setenv",
+            "OMP_NUM_THREADS",
+            "1",
+            "--setenv",
+            "MKL_NUM_THREADS",
+            "1",
+            "--setenv",
+            "NUMEXPR_NUM_THREADS",
+            "1",
             str(python),
             str(code_path),
         ]
@@ -900,6 +924,24 @@ def _read_tool_log(path: Path, max_chars: int) -> tuple[str, bool, int]:
     if truncated:
         text += "\n...[tool output truncated by adapter]"
     return text, truncated, size
+
+
+def _python_resource_failure(stderr: str, returncode: int | None) -> str | None:
+    diagnostic = stderr.lower()
+    if "memoryerror" in diagnostic:
+        return "python_memory_error"
+    if (
+        "unable to allocate" in diagnostic
+        or "cannot allocate memory" in diagnostic
+        or "std::bad_alloc" in diagnostic
+        or "out of memory" in diagnostic
+    ):
+        return "allocation_failure"
+    if returncode in {-9, 137}:
+        return "analysis_process_sigkill"
+    if returncode in {-11, 139} or "segmentation fault" in diagnostic:
+        return "analysis_process_sigsegv"
+    return None
 
 
 def _run_python_tool(
@@ -943,7 +985,10 @@ def _run_python_tool(
                 stderr=stderr,
                 timeout=args.python_timeout_seconds,
                 check=False,
-                preexec_fn=lambda: _resource_limits(args.python_timeout_seconds),
+                preexec_fn=lambda: _resource_limits(
+                    args.python_timeout_seconds,
+                    args.python_memory_limit_mb,
+                ),
             )
             returncode = completed.returncode
     except subprocess.TimeoutExpired:
@@ -955,6 +1000,7 @@ def _run_python_tool(
     stderr_text, stderr_truncated, stderr_bytes = _read_tool_log(
         stderr_path, args.max_tool_output_chars
     )
+    resource_failure = _python_resource_failure(stderr_text, returncode)
     result = {
         "tool": "python",
         "tool_number": tool_number,
@@ -967,7 +1013,14 @@ def _run_python_tool(
         "stderr_bytes": stderr_bytes,
         "stdout_truncated": stdout_truncated,
         "stderr_truncated": stderr_truncated,
+        "resource_failure": resource_failure,
     }
+    if resource_failure is not None:
+        result["retry_guidance"] = (
+            "Do not rerun this code unchanged. Inspect array shapes and broadcasting; "
+            "use explicit column dimensions, shape assertions, compact dtypes, or "
+            "chunked calculations before trying another Python action."
+        )
     _write_json_atomic(tool_dir / "result.json", result)
     return result
 
@@ -1124,6 +1177,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
         "max_tokens": args.max_tokens,
         "max_tool_calls": args.max_tool_calls,
         "max_controller_decisions": args.max_controller_decisions,
+        "python_memory_limit_mb": args.python_memory_limit_mb,
         "max_contract_repairs": args.max_contract_repairs,
         "max_api_retries": args.max_api_retries,
         "thinking_mode": args.thinking_mode,
@@ -1545,6 +1599,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 "repetition_penalty": args.repetition_penalty,
                 "max_decision_tokens": args.max_decision_tokens,
                 "max_artifact_tokens": args.max_tokens,
+                "python_memory_limit_mb": args.python_memory_limit_mb,
                 "session_action": session_action,
                 "session_sha256": _sha256(session_id),
                 "history_messages_loaded": len(history),
@@ -1596,6 +1651,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--api-timeout-seconds", type=float, default=DEFAULT_API_TIMEOUT_SECONDS
     )
     parser.add_argument("--python-timeout-seconds", type=int, default=300)
+    parser.add_argument(
+        "--python-memory-limit-mb",
+        type=int,
+        default=0,
+        help="Per-analysis-Python address-space ceiling in MiB; zero disables it.",
+    )
     parser.add_argument("--max-api-retries", type=int, default=2)
     parser.add_argument("--max-contract-repairs", type=int, default=2)
     parser.add_argument("--max-tool-calls", type=int, default=32)
@@ -1658,6 +1719,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         args.max_decision_tokens = args.max_tokens
     if args.timeout_seconds <= 0:
         parser.error("--timeout-seconds must be positive")
+    if args.python_timeout_seconds <= 0:
+        parser.error("--python-timeout-seconds must be positive")
+    if args.python_memory_limit_mb < 0:
+        parser.error("--python-memory-limit-mb must be non-negative")
     if not 0 < args.api_timeout_seconds < args.timeout_seconds:
         parser.error("--api-timeout-seconds must be positive and below the total timeout")
     for name in ("max_api_retries", "max_contract_repairs", "min_tool_calls"):

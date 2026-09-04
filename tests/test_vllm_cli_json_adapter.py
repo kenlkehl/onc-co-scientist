@@ -12,6 +12,7 @@ import scripts.vllm_cli_json_adapter as vllm_adapter
 from scripts.codex_cli_json_adapter import artifact_schema as codex_artifact_schema
 from scripts.vllm_cli_json_adapter import (
     _decision_from_text,
+    _python_resource_failure,
     _sandbox_command,
     _trim_history,
     artifact_schema,
@@ -182,6 +183,7 @@ def _args(tmp_path: Path, request_file: Path, output: Path) -> argparse.Namespac
         timeout_seconds=60,
         api_timeout_seconds=30.0,
         python_timeout_seconds=10,
+        python_memory_limit_mb=4096,
         max_api_retries=0,
         max_contract_repairs=2,
         max_tool_calls=3,
@@ -248,6 +250,32 @@ def test_sandbox_command_preserves_dynamic_loader_mount(tmp_path: Path) -> None:
         for index in range(len(command) - 2)
     )
     assert "--unshare-net" in command
+    for variable in (
+        "OPENBLAS_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        position = command.index(variable)
+        assert command[position - 1] == "--setenv"
+        assert command[position + 1] == "1"
+
+
+@pytest.mark.parametrize(
+    ("stderr", "returncode", "reason"),
+    [
+        ("MemoryError", 1, "python_memory_error"),
+        ("Unable to allocate 18.6 GiB", 1, "allocation_failure"),
+        ("", -9, "analysis_process_sigkill"),
+        ("Segmentation fault", 1, "analysis_process_sigsegv"),
+    ],
+)
+def test_python_resource_failure_is_reported_to_controller(
+    stderr: str,
+    returncode: int,
+    reason: str,
+) -> None:
+    assert _python_resource_failure(stderr, returncode) == reason
 
 
 def test_adapter_repairs_semantic_contract_and_saves_session(tmp_path: Path) -> None:

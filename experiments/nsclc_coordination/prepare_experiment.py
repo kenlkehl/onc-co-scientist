@@ -273,6 +273,13 @@ def _locked_model_manifest(config: dict[str, Any]) -> dict[str, Any]:
                 default="0",
             )
         )
+        analysis_memory_limit_mb = int(
+            _optional_flag_value(
+                extra_args,
+                "--analysis-memory-limit-mb",
+                default="0",
+            )
+        )
         runtime_retry_initial = float(
             _optional_flag_value(
                 extra_args,
@@ -318,6 +325,10 @@ def _locked_model_manifest(config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("The contract-repair limit must be non-negative.")
     if max_runtime_retries < 0:
         raise ValueError("The runtime-retry limit must be non-negative.")
+    if analysis_memory_limit_mb < 0:
+        raise ValueError("The analysis-memory limit must be non-negative.")
+    if analysis_memory_limit_mb > 0:
+        _one_flag_value(extra_args, "--analysis-python")
     if not 0 <= runtime_retry_initial <= runtime_retry_max:
         raise ValueError("The runtime-retry backoff limits are invalid.")
     if not 0 <= runtime_retry_budget <= adapter_timeout:
@@ -334,6 +345,7 @@ def _locked_model_manifest(config: dict[str, Any]) -> dict[str, Any]:
         "service_tier": service_tier,
         "max_contract_repairs": max_contract_repairs,
         "max_runtime_retries": max_runtime_retries,
+        "analysis_memory_limit_mb": analysis_memory_limit_mb,
         "runtime_retry_initial_seconds": runtime_retry_initial,
         "runtime_retry_max_seconds": runtime_retry_max,
         "runtime_retry_budget_seconds": runtime_retry_budget,

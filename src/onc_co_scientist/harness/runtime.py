@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -176,6 +177,60 @@ def _persist_runtime_success(request: AgentRequest, response: AgentResponse) -> 
     )
 
 
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    """Kill a timed-out subprocess and every child in its process group."""
+
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except (AttributeError, PermissionError, OSError):
+        # ``start_new_session`` is POSIX-only in practice, but retaining this
+        # fallback keeps the helper safe if the runtime is exercised elsewhere.
+        process.kill()
+
+
+def run_subprocess_in_group(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: float,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a command in a disposable process group.
+
+    ``subprocess.run`` kills only its direct child on timeout. Agent adapters
+    launch nested sandboxes and analysis interpreters, so that behavior can
+    leave expensive descendants alive after the harness has abandoned a call.
+    """
+
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(input=input_text, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process_group(process)
+        stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(
+            command,
+            timeout,
+            output=stdout,
+            stderr=stderr,
+        ) from exc
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
 def _strip_json_fence(text: str) -> str:
     stripped = text.strip()
     if stripped.startswith("```"):
@@ -332,14 +387,11 @@ class CliJsonRuntime:
         env = _runtime_environment(self.model)
         started = time.monotonic()
         try:
-            completed = subprocess.run(
+            completed = run_subprocess_in_group(
                 command,
                 cwd=request.workspace,
                 env=env,
-                capture_output=True,
-                text=True,
                 timeout=budget.max_runtime_seconds_per_call,
-                check=False,
             )
         except subprocess.TimeoutExpired as exc:
             raise TimeoutError(

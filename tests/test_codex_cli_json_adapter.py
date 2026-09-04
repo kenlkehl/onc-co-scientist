@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,8 +17,10 @@ from onc_co_scientist.harness.experiment import (
 from onc_co_scientist.harness.runtime import AgentArtifact, AgentRequest, CliJsonRuntime
 from scripts.codex_cli_json_adapter import (
     ARTIFACT_SCHEMA,
+    _analysis_guard_root,
     _artifact_from_text,
     _codex_runtime_root,
+    _resource_retry_reason,
     _validate_artifact_contract,
     artifact_schema,
     extract_codex_thread_id,
@@ -313,6 +317,58 @@ if not prior:
 
 artifact = {
     "summary": "recovered",
+    "handoff": "handoff",
+    "hypotheses": [],
+    "analyses": [],
+    "claims": [],
+    "evidence": [],
+    "concerns": [],
+    "minority_report": "",
+    "final_answer": None,
+}
+last_message.write_text(json.dumps(artifact), encoding="utf-8")
+print(json.dumps({
+    "type": "turn.completed",
+    "usage": {"input_tokens": 12, "output_tokens": 3},
+}))
+''',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def _write_resource_failure_then_success_fake_codex(path: Path) -> None:
+    path.write_text(
+        r'''#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+argv = sys.argv[1:]
+is_resume = argv[:2] == ["exec", "resume"]
+last_message = pathlib.Path(argv[argv.index("--output-last-message") + 1])
+prompt = sys.stdin.read()
+log_path = pathlib.Path(os.environ["FAKE_CODEX_LOG"])
+prior = log_path.read_text().splitlines() if log_path.exists() else []
+with log_path.open("a", encoding="utf-8") as stream:
+    stream.write(json.dumps({
+        "argv": argv,
+        "is_resume": is_resume,
+        "is_resource_retry": "controlled analysis-resource failure" in prompt,
+        "checks_shapes": "broadcasting operations" in prompt,
+    }) + "\n")
+
+if not prior:
+    print(json.dumps({"type": "thread.started", "thread_id": "thread-resource-001"}))
+    print(
+        "OCS_ANALYSIS_RESOURCE_LIMIT: memory ceiling 4096 MiB exceeded",
+        file=sys.stderr,
+    )
+    raise SystemExit(7)
+
+artifact = {
+    "summary": "recovered after fixing a broadcast",
     "handoff": "handoff",
     "hypotheses": [],
     "analyses": [],
@@ -679,6 +735,69 @@ def test_codex_adapter_retries_transient_exit_and_persists_failed_turn_thread(
     assert json.loads(session_file.read_text())["codex_thread_id"] == "thread-transient-001"
 
 
+def test_codex_adapter_retries_analysis_resource_failure_with_corrective_prompt(
+    tmp_path: Path, monkeypatch
+) -> None:
+    fake_codex = tmp_path / "fake-codex"
+    invocation_log = tmp_path / "fake_invocations.jsonl"
+    _write_resource_failure_then_success_fake_codex(fake_codex)
+    monkeypatch.setenv("FAKE_CODEX_LOG", str(invocation_log))
+    runtime = CliJsonRuntime(
+        ModelSpec(
+            id="luna-medium-fast",
+            model_id="gpt-5.6-luna",
+            adapter="cli-json",
+            command=[sys.executable, str(ADAPTER)],
+            extra_args=[
+                "--codex",
+                str(fake_codex),
+                "--reasoning-effort",
+                "medium",
+                "--max-runtime-retries",
+                "2",
+                "--runtime-retry-initial-seconds",
+                "0",
+                "--runtime-retry-max-seconds",
+                "0",
+                "--timeout-seconds",
+                "10",
+            ],
+            env_passthrough=["FAKE_CODEX_LOG"],
+        )
+    )
+
+    response = runtime.run(
+        _request(
+            tmp_path,
+            index=1,
+            prompt="ORIGINAL_PENDING_TASK",
+            reasoning_effort="medium",
+        ),
+        ResourceBudget(max_runtime_seconds_per_call=60),
+    )
+
+    assert response.artifact.summary == "recovered after fixing a broadcast"
+    assert response.runtime_metadata["runtime_retry_count"] == 1
+    assert response.runtime_metadata["transport_retry_count"] == 0
+    assert response.runtime_metadata["resource_retry_count"] == 1
+    invocations = [json.loads(line) for line in invocation_log.read_text().splitlines()]
+    assert invocations[1]["is_resume"] is True
+    assert invocations[1]["is_resource_retry"] is True
+    assert invocations[1]["checks_shapes"] is True
+
+    call_dir = tmp_path / "run" / "calls" / "call_0001"
+    audit = json.loads((call_dir / "codex_call.json").read_text())
+    assert audit["status"] == "accepted"
+    assert audit["transport_retry_count"] == 0
+    assert audit["resource_retry_count"] == 1
+    assert [item["status"] for item in audit["attempts"]] == [
+        "resource_retry_pending",
+        "accepted",
+    ]
+    assert audit["attempts"][0]["resource_retry_reason"] == "analysis_memory_limit"
+    assert not list(tmp_path.rglob(".codex_transport_circuit.json"))
+
+
 def test_codex_adapter_does_not_retry_nontransport_runtime_exit(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -826,6 +945,8 @@ def test_codex_adapter_configures_isolated_python_runtime(tmp_path: Path, monkey
                 str(fake_codex),
                 "--analysis-python",
                 sys.executable,
+                "--analysis-memory-limit-mb",
+                "4096",
             ],
             env_passthrough=["FAKE_CODEX_LOG"],
         )
@@ -845,10 +966,56 @@ def test_codex_adapter_configures_isolated_python_runtime(tmp_path: Path, monkey
     assert 'inherit="none"' in environment
     assert '"PYTHONPATH"=' in environment
     assert '"PYTHONNOUSERSITE"="1"' in environment
+    assert '"OCS_ANALYSIS_MEMORY_LIMIT_MB"="4096"' in environment
+    assert '"OPENBLAS_NUM_THREADS"="1"' in environment
     assert "python3." in environment
     assert invocation["pythonhome"] is None
     assert invocation["pythonpath"] is None
     assert '="read"' in profile
+    assert f'{json.dumps(str(_analysis_guard_root()))}="read"' in profile
+
+
+def test_analysis_python_guard_turns_large_allocation_into_marked_memory_error() -> None:
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(_analysis_guard_root())
+    environment["OCS_ANALYSIS_MEMORY_LIMIT_MB"] = "256"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import resource; "
+                "print(resource.getrlimit(resource.RLIMIT_AS)); "
+                "bytearray(512 * 1024 * 1024)"
+            ),
+        ],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "(268435456, 268435456)" in completed.stdout
+    assert "OCS_ANALYSIS_RESOURCE_LIMIT" in completed.stderr
+    assert "MemoryError" in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("diagnostic", "returncode", "reason"),
+    [
+        ("MemoryError", 1, "python_memory_error"),
+        ("Unable to allocate 18.6 GiB for an array", 1, "allocation_failure"),
+        ("", -9, "codex_process_sigkill"),
+        ('{"exit_code":137}', 1, "analysis_process_sigkill"),
+        ("segmentation fault", 1, "analysis_process_sigsegv"),
+    ],
+)
+def test_resource_retry_classifier(
+    diagnostic: str, returncode: int, reason: str
+) -> None:
+    assert _resource_retry_reason("", diagnostic, returncode) == reason
 
 
 def test_codex_event_parser_deduplicates_tools_and_accepts_nested_usage() -> None:

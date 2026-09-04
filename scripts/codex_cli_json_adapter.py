@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -27,7 +28,11 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from onc_co_scientist.harness.runtime import AgentArtifact, AgentResponse, AgentUsage
+from onc_co_scientist.harness.runtime import (
+    AgentArtifact,
+    AgentResponse,
+    AgentUsage,
+)
 
 SYNTHESIS_FINAL_ANSWER_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -216,6 +221,51 @@ TOOL_ITEM_TYPES = {
     "tool_call",
     "web_search",
 }
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    except (AttributeError, PermissionError, OSError):
+        process.kill()
+
+
+def run_subprocess_in_group(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    timeout: float,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run Codex in a group that can be fully reaped after a timeout."""
+
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(input=input_text, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process_group(process)
+        stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(
+            command,
+            timeout,
+            output=stdout,
+            stderr=stderr,
+        ) from exc
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 @dataclass(frozen=True)
@@ -498,6 +548,15 @@ def _analysis_python_runtime(source: Path) -> tuple[Path, Path, Path]:
     return executable, python_home, site_packages
 
 
+def _analysis_guard_root() -> Path:
+    """Return the read-only startup hook used by analysis Python processes."""
+
+    guard_root = Path(__file__).resolve().with_name("analysis_python_guard")
+    if not (guard_root / "sitecustomize.py").is_file():
+        raise ValueError(f"Analysis Python guard is missing: {guard_root}")
+    return guard_root
+
+
 def _codex_runtime_root(source: str) -> Path:
     """Return the non-secret installation root needed by Codex's sandbox helper."""
 
@@ -748,11 +807,65 @@ def _transport_retry_reason(stdout: str, stderr: str) -> str | None:
     return None
 
 
+def _resource_retry_reason(stdout: str, stderr: str, returncode: int) -> str | None:
+    """Recognize bounded-analysis failures that are safe to retry correctively."""
+
+    diagnostic = f"{stderr}\n{stdout}".lower()
+    patterns = (
+        ("analysis_memory_limit", r"ocs_analysis_resource_limit"),
+        ("python_memory_error", r"\bmemoryerror\b"),
+        (
+            "allocation_failure",
+            r"(?:unable|failed) to allocate [^\n]{0,160}(?:mib|gib|bytes?)"
+            r"|cannot allocate memory|std::bad_alloc",
+        ),
+        (
+            "out_of_memory",
+            r"\bout of memory\b|oom-kill|oom killer|killed process [^\n]{0,160}oom",
+        ),
+        (
+            "analysis_process_sigkill",
+            r"(?:exit(?:ed)?(?: with)?(?: code)?|returncode|exit_code)[\"': =-]*137\b"
+            r"|killed by signal 9|signal: 9 \(sigkill\)",
+        ),
+        (
+            "analysis_process_sigsegv",
+            r"(?:exit(?:ed)?(?: with)?(?: code)?|returncode|exit_code)[\"': =-]*139\b"
+            r"|segmentation fault|signal: 11 \(sigsegv\)",
+        ),
+    )
+    for reason, pattern in patterns:
+        if re.search(pattern, diagnostic, flags=re.DOTALL):
+            return reason
+    signal_reasons = {
+        -9: "codex_process_sigkill",
+        137: "codex_process_sigkill",
+        -11: "codex_process_sigsegv",
+        139: "codex_process_sigsegv",
+        -6: "codex_process_sigabrt",
+        134: "codex_process_sigabrt",
+    }
+    return signal_reasons.get(returncode)
+
+
 def _transport_retry_prompt(task_prompt: str, reason: str) -> str:
     return (
         "A transient controller transport failure interrupted the preceding attempt "
         f"({reason}). Complete the pending task below in this same session. Reuse any "
         "work already completed, but ensure the requested structured response is returned.\n\n"
+        "--- pending task ---\n"
+        f"{task_prompt}"
+    )
+
+
+def _resource_retry_prompt(task_prompt: str, reason: str) -> str:
+    return (
+        "The preceding attempt was interrupted by a controlled analysis-resource "
+        f"failure ({reason}). Continue the pending task in this session, but do not "
+        "rerun the failed analysis unchanged. First inspect all array/data-frame shapes "
+        "and broadcasting operations; use explicit column dimensions (for example, "
+        "vector[:, None]), shape assertions, compact dtypes, or chunked calculations as "
+        "appropriate. Reuse completed work and return the requested structured response.\n\n"
         "--- pending task ---\n"
         f"{task_prompt}"
     )
@@ -915,14 +1028,27 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
         "TMPDIR": str(scratch_dir),
     }
     if python_executable is not None and python_site_packages is not None:
+        python_path_entries = [str(python_site_packages)]
+        if args.analysis_memory_limit_mb > 0:
+            guard_root = _analysis_guard_root()
+            read_roots.append(guard_root)
+            python_path_entries.insert(0, str(guard_root))
         shell_environment.update(
             {
                 "PATH": f"{python_executable.parent}:/usr/bin:/bin:/usr/sbin:/sbin",
-                "PYTHONPATH": str(python_site_packages),
+                "PYTHONPATH": os.pathsep.join(python_path_entries),
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "PYTHONNOUSERSITE": "1",
+                "OPENBLAS_NUM_THREADS": "1",
+                "OMP_NUM_THREADS": "1",
+                "MKL_NUM_THREADS": "1",
+                "NUMEXPR_NUM_THREADS": "1",
             }
         )
+        if args.analysis_memory_limit_mb > 0:
+            shell_environment["OCS_ANALYSIS_MEMORY_LIMIT_MB"] = str(
+                args.analysis_memory_limit_mb
+            )
 
     call_dir = args.output.parent
     call_dir.mkdir(parents=True, exist_ok=True)
@@ -944,7 +1070,7 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
     )
     initial_session_action = "resumed" if thread_id is not None else "started"
     root_audit: dict[str, Any] = {
-        "schema_version": 3,
+        "schema_version": 4,
         "request_id": request_id,
         "prompt_sha256": _sha256(prompt),
         "model_id": model_id,
@@ -961,9 +1087,12 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
         "runtime_retry_budget_seconds": args.runtime_retry_budget_seconds,
         "transport_circuit_failure_threshold": args.transport_circuit_failure_threshold,
         "transport_circuit_cooldown_seconds": args.transport_circuit_cooldown_seconds,
+        "analysis_memory_limit_mb": args.analysis_memory_limit_mb,
         "attempt_count": 0,
         "contract_repair_count": 0,
         "runtime_retry_count": 0,
+        "transport_retry_count": 0,
+        "resource_retry_count": 0,
         "attempts": [],
         "status": "starting",
     }
@@ -986,10 +1115,13 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
     pending_artifact: AgentArtifact | None = None
     retry_not_before_epoch = 0.0
     retry_for_attempt: int | None = None
-    last_transport_reason: str | None = None
-    transport_retry_window_started: float | None = None
+    last_retry_kind: str | None = None
+    last_retry_reason: str | None = None
+    runtime_retry_window_started: float | None = None
     contract_repair_count = 0
     runtime_retry_count = 0
+    transport_retry_count = 0
+    resource_retry_count = 0
     artifact: AgentArtifact | None = None
     raw_text = ""
     final_command: list[str] = []
@@ -1001,6 +1133,8 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
                 "attempt_count": len(attempt_records),
                 "contract_repair_count": contract_repair_count,
                 "runtime_retry_count": runtime_retry_count,
+                "transport_retry_count": transport_retry_count,
+                "resource_retry_count": resource_retry_count,
                 "attempts": attempt_records,
                 "command": final_command,
                 "duration_seconds": time.monotonic() - overall_started,
@@ -1059,17 +1193,24 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
                 "transport_backoff",
                 transport_backoff_until_epoch=wake_epoch,
                 transport_backoff_remaining_seconds=max(0.0, wait_seconds),
-                last_transport_reason=last_transport_reason,
+                last_transport_reason=(
+                    last_retry_reason if last_retry_kind == "transport" else None
+                ),
             )
             time.sleep(min(wait_seconds, remaining_seconds, 30.0))
 
         attempt_number += 1
         prompt_kind = next_prompt_kind
-        current_prompt = (
-            _transport_retry_prompt(task_prompt, last_transport_reason or "transport_error")
-            if prompt_kind == "transport_retry" and thread_id is not None
-            else task_prompt
-        )
+        if prompt_kind == "transport_retry" and thread_id is not None:
+            current_prompt = _transport_retry_prompt(
+                task_prompt, last_retry_reason or "transport_error"
+            )
+        elif prompt_kind == "resource_retry":
+            current_prompt = _resource_retry_prompt(
+                task_prompt, last_retry_reason or "analysis_resource_failure"
+            )
+        else:
+            current_prompt = task_prompt
         attempt_dir = attempts_dir / f"attempt_{attempt_number:04d}"
         attempt_dir.mkdir(parents=True, exist_ok=True)
         schema_path = attempt_dir / "codex_agent_artifact.schema.json"
@@ -1106,17 +1247,24 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
             prompt_kind=prompt_kind,
             attempt_number=attempt_number,
         )
-        attempt_audit["schema_version"] = 3
+        attempt_audit["schema_version"] = 4
         attempt_audit["task_kind"] = task_kind
         attempt_audit["output_schema_sha256"] = _sha256(
             json.dumps(task_schema, sort_keys=True, separators=(",", ":"))
         )
         if task_kind != "original" and prior_validation_error is not None:
             attempt_audit["repair_for_error"] = prior_validation_error
-        if prompt_kind == "transport_retry":
+        if prompt_kind in {"transport_retry", "resource_retry"}:
             attempt_audit["retry_for_attempt"] = retry_for_attempt
-            attempt_audit["transport_retry_number"] = runtime_retry_count
-            attempt_audit["transport_retry_reason"] = last_transport_reason
+            attempt_audit["runtime_retry_number"] = runtime_retry_count
+            attempt_audit["runtime_retry_kind"] = last_retry_kind
+            attempt_audit["runtime_retry_reason"] = last_retry_reason
+            if prompt_kind == "transport_retry":
+                attempt_audit["transport_retry_number"] = transport_retry_count
+                attempt_audit["transport_retry_reason"] = last_retry_reason
+            else:
+                attempt_audit["resource_retry_number"] = resource_retry_count
+                attempt_audit["resource_retry_reason"] = last_retry_reason
         attempt_audit["status"] = "running"
         _write_json_atomic(attempt_audit_path, attempt_audit)
         _copy_attempt_outputs(attempt_dir, call_dir)
@@ -1150,15 +1298,12 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
 
         attempt_started = time.monotonic()
         try:
-            completed = subprocess.run(
+            completed = run_subprocess_in_group(
                 command,
-                input=current_prompt,
                 cwd=workspace,
                 env=child_env,
-                capture_output=True,
-                text=True,
                 timeout=remaining_seconds,
-                check=False,
+                input_text=current_prompt,
             )
         except subprocess.TimeoutExpired as exc:
             attempt_duration = time.monotonic() - attempt_started
@@ -1261,13 +1406,30 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
             raise RuntimeError("Resumed Codex call emitted a different thread ID.")
 
         if completed.returncode != 0:
-            retry_reason = _transport_retry_reason(completed.stdout, completed.stderr)
-            if retry_reason is not None and transport_retry_window_started is None:
-                transport_retry_window_started = time.monotonic()
+            transport_reason = _transport_retry_reason(
+                completed.stdout, completed.stderr
+            )
+            resource_reason = (
+                None
+                if transport_reason is not None
+                else _resource_retry_reason(
+                    completed.stdout,
+                    completed.stderr,
+                    completed.returncode,
+                )
+            )
+            retry_kind = (
+                "transport"
+                if transport_reason is not None
+                else ("resource" if resource_reason is not None else None)
+            )
+            retry_reason = transport_reason or resource_reason
+            if retry_reason is not None and runtime_retry_window_started is None:
+                runtime_retry_window_started = time.monotonic()
             retry_budget_used = (
                 0.0
-                if transport_retry_window_started is None
-                else time.monotonic() - transport_retry_window_started
+                if runtime_retry_window_started is None
+                else time.monotonic() - runtime_retry_window_started
             )
             retry_budget_available = (
                 args.runtime_retry_budget_seconds == 0
@@ -1287,7 +1449,7 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
                 if can_retry
                 else 0.0
             )
-            if retry_reason is not None:
+            if retry_kind == "transport" and retry_reason is not None:
                 circuit_state = _register_transport_failure(
                     call_dir=call_dir,
                     reason=retry_reason,
@@ -1300,47 +1462,76 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
             enough_deadline = deadline - time.monotonic() > retry_delay
             if can_retry and enough_deadline:
                 runtime_retry_count += 1
+                if retry_kind == "transport":
+                    transport_retry_count += 1
+                else:
+                    resource_retry_count += 1
+                retry_status = f"{retry_kind}_retry_pending"
                 attempt_audit.update(
                     {
-                        "status": "transport_retry_pending",
+                        "status": retry_status,
                         "error": "nonzero_exit",
-                        "transport_retry_reason": retry_reason,
-                        "next_transport_retry_number": runtime_retry_count,
+                        "runtime_retry_kind": retry_kind,
+                        "runtime_retry_reason": retry_reason,
+                        "next_runtime_retry_number": runtime_retry_count,
                         "retry_delay_seconds": retry_delay,
-                        "circuit_failure_streak": circuit_state.get("failure_streak"),
-                        "circuit_open_until_epoch": circuit_state.get(
-                            "open_until_epoch"
-                        ),
                     }
                 )
+                if retry_kind == "transport":
+                    attempt_audit.update(
+                        {
+                            "transport_retry_reason": retry_reason,
+                            "next_transport_retry_number": transport_retry_count,
+                            "circuit_failure_streak": circuit_state.get(
+                                "failure_streak"
+                            ),
+                            "circuit_open_until_epoch": circuit_state.get(
+                                "open_until_epoch"
+                            ),
+                        }
+                    )
+                else:
+                    attempt_audit.update(
+                        {
+                            "resource_retry_reason": retry_reason,
+                            "next_resource_retry_number": resource_retry_count,
+                        }
+                    )
                 _write_json_atomic(attempt_audit_path, attempt_audit)
                 _copy_attempt_outputs(attempt_dir, call_dir)
-                attempt_records.append(
-                    {
-                        "attempt_number": attempt_number,
-                        "prompt_kind": prompt_kind,
-                        "task_kind": task_kind,
-                        "status": "transport_retry_pending",
-                        "returncode": completed.returncode,
-                        "duration_seconds": attempt_duration,
-                        "input_tokens": stats.input_tokens,
-                        "output_tokens": stats.output_tokens,
-                        "tool_calls": stats.tool_calls,
-                        "transport_retry_reason": retry_reason,
-                        "retry_delay_seconds": retry_delay,
-                        "audit_file": str(attempt_audit_path.relative_to(call_dir)),
-                    }
-                )
+                attempt_record = {
+                    "attempt_number": attempt_number,
+                    "prompt_kind": prompt_kind,
+                    "task_kind": task_kind,
+                    "status": retry_status,
+                    "returncode": completed.returncode,
+                    "duration_seconds": attempt_duration,
+                    "input_tokens": stats.input_tokens,
+                    "output_tokens": stats.output_tokens,
+                    "tool_calls": stats.tool_calls,
+                    "runtime_retry_kind": retry_kind,
+                    "runtime_retry_reason": retry_reason,
+                    "retry_delay_seconds": retry_delay,
+                    "audit_file": str(attempt_audit_path.relative_to(call_dir)),
+                }
+                attempt_record[f"{retry_kind}_retry_reason"] = retry_reason
+                attempt_records.append(attempt_record)
+                root_retry_details = {
+                    "returncode": completed.returncode,
+                    "last_runtime_retry_kind": retry_kind,
+                    "last_runtime_retry_reason": retry_reason,
+                    "next_retry_delay_seconds": retry_delay,
+                }
+                root_retry_details[f"last_{retry_kind}_reason"] = retry_reason
                 update_root_audit(
-                    "transport_retry_pending",
-                    returncode=completed.returncode,
-                    last_transport_reason=retry_reason,
-                    next_retry_delay_seconds=retry_delay,
+                    retry_status,
+                    **root_retry_details,
                 )
                 retry_not_before_epoch = time.time() + retry_delay
                 retry_for_attempt = attempt_number
-                last_transport_reason = retry_reason
-                next_prompt_kind = "transport_retry"
+                last_retry_kind = retry_kind
+                last_retry_reason = retry_reason
+                next_prompt_kind = f"{retry_kind}_retry"
                 continue
 
             exhaustion = "nonretryable_runtime_error"
@@ -1354,9 +1545,12 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
                 {
                     "status": "runtime_error",
                     "error": exhaustion,
-                    "transport_retry_reason": retry_reason,
+                    "runtime_retry_kind": retry_kind,
+                    "runtime_retry_reason": retry_reason,
                 }
             )
+            if retry_kind is not None:
+                attempt_audit[f"{retry_kind}_retry_reason"] = retry_reason
             _write_json_atomic(attempt_audit_path, attempt_audit)
             _copy_attempt_outputs(attempt_dir, call_dir)
             attempt_records.append(
@@ -1377,14 +1571,15 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
                 "runtime_error",
                 returncode=completed.returncode,
                 error=exhaustion,
-                last_transport_reason=retry_reason,
+                last_runtime_retry_kind=retry_kind,
+                last_runtime_retry_reason=retry_reason,
             )
             diagnostic = completed.stderr[-1000:] or completed.stdout[-1000:]
             raise RuntimeError(f"Codex exited {completed.returncode}: {diagnostic}")
 
         if args.transport_circuit_failure_threshold > 0:
             _register_transport_success(call_dir)
-        transport_retry_window_started = None
+        runtime_retry_window_started = None
 
         observed_thread_id = extract_codex_thread_id(completed.stdout)
         if thread_id is None:
@@ -1612,6 +1807,9 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
             "attempt_count": len(attempt_records),
             "contract_repair_count": contract_repair_count,
             "runtime_retry_count": runtime_retry_count,
+            "transport_retry_count": transport_retry_count,
+            "resource_retry_count": resource_retry_count,
+            "analysis_memory_limit_mb": args.analysis_memory_limit_mb,
             "attempt_audit_files": [record["audit_file"] for record in attempt_records],
             "events_file": "codex_events.jsonl",
             "stderr_file": "codex_stderr.log",
@@ -1650,7 +1848,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--max-runtime-retries",
         type=int,
         default=0,
-        help="Maximum retries for classified transient Codex transport failures.",
+        help=(
+            "Maximum retries for classified transient transport failures or "
+            "controlled analysis-resource failures."
+        ),
     )
     parser.add_argument(
         "--runtime-retry-initial-seconds",
@@ -1697,6 +1898,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "site-packages are exposed read-only to isolated model subprocesses."
         ),
     )
+    parser.add_argument(
+        "--analysis-memory-limit-mb",
+        type=int,
+        default=0,
+        help=(
+            "Per-analysis-Python address-space ceiling in MiB; zero disables the "
+            "startup guard."
+        ),
+    )
     parser.add_argument("--timeout-seconds", type=int, default=900)
     args = parser.parse_args(argv)
     if args.timeout_seconds < 1:
@@ -1705,6 +1915,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--max-contract-repairs must be non-negative")
     if args.max_runtime_retries < 0:
         parser.error("--max-runtime-retries must be non-negative")
+    if args.analysis_memory_limit_mb < 0:
+        parser.error("--analysis-memory-limit-mb must be non-negative")
+    if args.analysis_memory_limit_mb > 0 and args.analysis_python is None:
+        parser.error("--analysis-memory-limit-mb requires --analysis-python")
     if args.runtime_retry_initial_seconds < 0:
         parser.error("--runtime-retry-initial-seconds must be non-negative")
     if args.runtime_retry_max_seconds < args.runtime_retry_initial_seconds:
