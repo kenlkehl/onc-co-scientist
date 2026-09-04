@@ -39,6 +39,17 @@ def _flag(extra_args: list[str], name: str) -> str:
     return common._one_flag_value(extra_args, name)
 
 
+def _set_model_identity(
+    config: dict[str, Any], *, model_id: str, profile_id: str | None
+) -> None:
+    models = config.get("models")
+    if not isinstance(models, list) or len(models) != 1 or not isinstance(models[0], dict):
+        raise ValueError("The vLLM grid requires exactly one model profile.")
+    models[0]["model_id"] = model_id
+    if profile_id is not None:
+        models[0]["id"] = profile_id
+
+
 def _locked_model_manifest(
     config: dict[str, Any],
     *,
@@ -292,8 +303,11 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
     main = common._replace_tokens(template, replacements)
     if args.main_experiment_id is not None:
         main["experiment_id"] = args.main_experiment_id
-    if args.model_profile_id is not None:
-        main["models"][0]["id"] = args.model_profile_id
+    _set_model_identity(
+        main,
+        model_id=args.model_id,
+        profile_id=args.model_profile_id,
+    )
     if args.python_memory_limit_mb is not None:
         extra_args = main["models"][0]["extra_args"]
         flag = "--python-memory-limit-mb"
@@ -381,6 +395,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "identity_overrides": {
             "main_experiment_id": args.main_experiment_id,
             "model_profile_id": args.model_profile_id,
+            "model_id": args.model_id,
             "python_memory_limit_mb": args.python_memory_limit_mb,
         },
     }

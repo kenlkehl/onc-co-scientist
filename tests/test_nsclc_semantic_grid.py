@@ -167,6 +167,27 @@ def test_prepare_smoke_parallelism_is_explicit() -> None:
     )
 
 
+def test_vllm_prepare_applies_endpoint_model_identity_override() -> None:
+    config = {
+        "models": [
+            {
+                "id": "template-profile",
+                "model_id": "template-model",
+                "adapter": "cli-json",
+            }
+        ]
+    }
+
+    prepare_vllm_module._set_model_identity(
+        config,
+        model_id="served/model-id",
+        profile_id="experiment-profile",
+    )
+
+    assert config["models"][0]["model_id"] == "served/model-id"
+    assert config["models"][0]["id"] == "experiment-profile"
+
+
 def test_qwen38_vllm_v2_template_locks_controller_sampling_and_isolation() -> None:
     template = yaml.safe_load(
         (
