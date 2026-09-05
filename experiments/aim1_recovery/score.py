@@ -15,7 +15,12 @@ import pandas as pd
 
 from onc_co_scientist.harness.structured_runner import finalize_workspace
 from onc_co_scientist.harness.transcript import Transcript
-from onc_co_scientist.scoring.structured_batch import score_transcript, write_structured_report
+from onc_co_scientist.scoring.structured_batch import (
+    LEGACY_SCORER_VERSION,
+    SCORER_VERSION,
+    score_transcript,
+    write_structured_report,
+)
 from onc_co_scientist.synthetic.schemas import DatasetManifest
 
 
@@ -36,6 +41,8 @@ def same_transcript_records(saved: Transcript, assembled: Transcript) -> bool:
 
 def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict:
     plan = json.loads(plan_path.read_text())
+    version = plan["protocol"].get("scorer_version", LEGACY_SCORER_VERSION)
+    v2 = version == SCORER_VERSION
     jobs = plan["jobs"]
     unfinished = [
         j["job_id"] for j in jobs if not (Path(j["workspace"]) / "transcript.json").exists()
@@ -57,6 +64,9 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
             or sha(ws / "agent_instructions.md") != job["instructions_sha256"]
         ):
             raise ValueError(f"Task input changed: {job['job_id']}")
+        for filename, expected in job.get("public_input_sha256", {}).items():
+            if sha(ws / filename) != expected:
+                raise ValueError(f"Task input changed: {job['job_id']}/{filename}")
         saved = Transcript.model_validate_json((ws / "transcript.json").read_text())
         assembled = finalize_workspace(
             ws, model_id=saved.model_id, harness_id=saved.harness_id, write_output=False
@@ -76,20 +86,25 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
             cache[job["task"]] = (manifest, frame, mapping)
         manifest, frame, mapping = cache[job["task"]]
         scored = score_transcript(
-            manifest, assembled, frame, column_mapping=mapping, evidence_design="heldout_20_percent"
+            manifest,
+            assembled,
+            frame,
+            column_mapping=mapping,
+            evidence_design="heldout_20_percent",
+            scorer_version=version,
         )
         scored.update({k: job[k] for k in ["job_id", "family", "task", "variant", "replicate"]})
         scores.append(scored)
         # Sensitivity changes overlap only, retaining the same evidence and alpha allocation.
         at95 = any(
-            c.get("heldout_supported")
+            (v2 or c.get("heldout_supported"))
             and c.get("score", {}).get("match_recovered")
             and c["score"]["functional"]["precision"] >= 0.95
             and c["score"]["functional"]["recall"] >= 0.95
             for c in scored["claim_scores"]
         )
         exact_membership = any(
-            c.get("heldout_supported")
+            (v2 or c.get("heldout_supported"))
             and c.get("score", {}).get("match_recovered")
             and c["score"]["functional"]["precision"] == 1
             and c["score"]["functional"]["recall"] == 1
@@ -116,6 +131,14 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
             ]
         }
         row["recovery_at_95"] = at95
+        if v2:
+            for field in (
+                "confirmed_recovered",
+                "confirmed_iteration",
+                "interaction_confirmed_recovered",
+                "interaction_confirmed_iteration",
+            ):
+                row[field] = scored[field]
         row["recovery_at_exact_membership"] = exact_membership
         row["capped_iterations"] = scored["primary_iteration"] or scored["max_iterations"]
         rows.append(row)
@@ -172,6 +195,11 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
                         else None,
                     }
                 )
+                if v2:
+                    summaries[-1].update(
+                        confirmed_n=int(part.confirmed_recovered.sum()),
+                        interaction_confirmed_n=int(part.interaction_confirmed_recovered.sum()),
+                    )
     summary = {
         "complete": not unfinished,
         "n_expected": len(jobs),
@@ -229,6 +257,56 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
     (out / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n")
     pd.DataFrame(summaries).to_csv(out / "group_scores.csv", index=False)
     plot(frame, out, complete=not unfinished)
+    if v2:
+        lines = [
+            "# Aim 1 structured recovery v2",
+            "",
+            f"Completed {len(frame)}/{len(jobs)} planned runs.",
+            "",
+            "Primary recovery measures complete subgroup identity, correct "
+            "outcome/exposure/direction "
+            "and ≥90% subgroup precision and recall. Clinical treatment effects"
+            " within the subgroup "
+            "and treatment interactions both qualify. Strict recovery requires "
+            "equivalent boundaries. "
+            "Statistical support does not gate either identity endpoint.",
+            "",
+            "Confirmation is secondary: finite linked discovery analysis plus "
+            "held-out, correctly signed "
+            "evidence for the candidate's declared contrast, with "
+            "alpha=0.05/[j(j+1)] per distinct claim. "
+            "Interaction confirmation counts only explicitly submitted treatment interactions. "
+            "Novelty judging is optional and was not used by this report.",
+            "",
+            "| Family | Condition | N | Identity | Strict identity | Confirmed "
+            "| Interaction confirmed |",
+            "|---|---|---:|---:|---:|---:|---:|",
+        ]
+        for g in summaries:
+            if g["task"] == "all":
+                lines.append(
+                    f"| {g['family']} | {g['variant']} | {g['n']} | {g['primary_n']} | "
+                    f"{g['strict_n']} | {g['confirmed_n']} | {g['interaction_confirmed_n']} |"
+                )
+        lines += [
+            "",
+            "Protocol and limitations",
+            "",
+            "All research runs must complete 25 clinical or 10 DepMap iterations, including "
+            "screening, multivariable exploration, refinement, and robustness. Records retain "
+            "script/output hashes; these checks do not establish equal tokens/compute or certify "
+            "scientific originality. Neutral examples are identical across naming conditions. "
+            "Research sessions receive no recovery feedback. This is a revised protocol on fixed "
+            "archived cohorts, not an isolated test of model ability or scoring alone.",
+            "",
+            f"Requested model: {plan['protocol'].get('model_id')}; "
+            f"reasoning: {plan['protocol'].get('reasoning_effort')}; "
+            f"service: {plan['protocol'].get('service_tier_requested')}. "
+            f"Actual models: {summary['actual_models']}. "
+            "See launch evidence and runtime metadata for capability/telemetry verification.",
+        ]
+        (out / "report.md").write_text("\n".join(lines) + "\n")
+        return summary
     lines = [
         "# Aim 1 structured recovery pilot",
         "",

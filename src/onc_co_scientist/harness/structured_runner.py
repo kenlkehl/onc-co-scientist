@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .research_budget import validate_completion, validate_step
 from .transcript import IterationRecord, Transcript
 
 MAX_OUTPUT = 16_000
@@ -89,7 +90,7 @@ class StructuredRunner:
         self.model = model
         self.api_key = api_key
         self.reasoning_effort = reasoning_effort
-        self.service_tier = service_tier
+        self.service_tier = "default" if service_tier == "standard" else service_tier
         self.timeout = timeout
         self.max_turns = max_turns
         self.max_tool_calls = max_tool_calls
@@ -138,6 +139,11 @@ class StructuredRunner:
                 except json.JSONDecodeError as exc:
                     raise RuntimeError("endpoint returned malformed JSON") from exc
                 self._log(body, result)
+                if self.service_tier == "default" and result.get("service_tier") not in {
+                    "default",
+                    "standard",
+                }:
+                    raise RuntimeError("endpoint did not verify requested Standard service tier")
                 return result
             except urllib.error.HTTPError as exc:
                 if exc.code not in (429, *range(500, 600)):
@@ -226,6 +232,19 @@ class StructuredRunner:
             hid not in allowed for analysis in record.analyses for hid in analysis.hypothesis_ids
         ):
             return "format error: analysis references unknown hypothesis"
+        metadata_path = self.workspace / "metadata.json"
+        metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
+        artifact_hashes = None
+        if metadata.get("fixed_research_budget"):
+            try:
+                artifact_hashes = validate_step(
+                    self.workspace,
+                    record,
+                    submitted,
+                    sequential_outputs=metadata.get("require_sequential_outputs", False),
+                )
+            except (ValueError, OSError) as exc:
+                return f"format error: {exc}"
         path = self.workspace / "iterations"
         path.mkdir(exist_ok=True)
         payload = json.dumps(record.model_dump(mode="json"), indent=2) + "\n"
@@ -237,6 +256,8 @@ class StructuredRunner:
             "sha256": hashlib.sha256(payload.encode()).hexdigest(),
             "utc": datetime.now(UTC).isoformat(),
         }
+        if artifact_hashes is not None:
+            event["research_artifact_sha256"] = artifact_hashes
         with (self.workspace / "submission_events.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(event, separators=(",", ":")) + "\n")
         return f"Accepted iteration {record.index}"
@@ -284,6 +305,20 @@ class StructuredRunner:
             messages.append(message)
             calls = message.get("tool_calls") or []
             if not calls:
+                if metadata.get("fixed_research_budget"):
+                    try:
+                        validate_completion(
+                            metadata, [IterationRecord.model_validate(x) for x in submitted]
+                        )
+                    except ValueError as exc:
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": str(exc)
+                                + ". Continue actual research; do not pad records.",
+                            }
+                        )
+                        continue
                 break
             for call in calls:
                 if tools >= self.max_tool_calls:
@@ -324,6 +359,7 @@ class StructuredRunner:
             raise RuntimeError("agent produced no submitted iterations")
         iterations = [IterationRecord.model_validate(x) for x in submitted]
         iterations.sort(key=lambda x: x.index)
+        validate_completion(metadata, iterations)
         transcript = Transcript(
             dataset_id=str(metadata["dataset_id"]),
             model_id=self.model,
@@ -384,6 +420,7 @@ def finalize_workspace(
     records.sort(key=lambda record: record.index)
     if [r.index for r in records] != list(range(1, len(records) + 1)):
         raise ValueError("missing iteration records")
+    validate_completion(meta, records)
     events = root / "submission_events.jsonl"
     if not events.exists():
         raise ValueError("submission event log is missing")
@@ -402,6 +439,16 @@ def finalize_workspace(
                 e.get("index") == record.index and e.get("sha256") == digest for e in entries
             ):
                 raise ValueError("iteration integrity event missing or mismatched")
+            if meta.get("fixed_research_budget"):
+                artifact_hashes = validate_step(
+                    root,
+                    record,
+                    [r.model_dump() for r in records if r.index < record.index],
+                    sequential_outputs=meta.get("require_sequential_outputs", False),
+                )
+                event = next(e for e in entries if e["index"] == record.index)
+                if event.get("research_artifact_sha256") != artifact_hashes:
+                    raise ValueError("research artifact integrity event missing or mismatched")
     seen = set()
     for record in records:
         current = [h.id for h in record.proposed_hypotheses]
@@ -437,7 +484,7 @@ def main() -> int:
     run.add_argument("--model", required=True)
     run.add_argument("--api-key-env", default="OPENAI_API_KEY")
     run.add_argument("--reasoning-effort")
-    run.add_argument("--service-tier", choices=["priority", "fast"])
+    run.add_argument("--service-tier", choices=["standard", "default", "priority", "fast"])
     run.add_argument("--timeout", type=float, default=120)
     run.add_argument("--max-turns", type=int, default=100)
     run.add_argument("--max-tool-calls", type=int, default=200)

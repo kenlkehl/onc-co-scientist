@@ -10,7 +10,7 @@ The benchmark asks: when an agentic harness analyzes a synthetic oncology datase
   - `named/` — real clinical column names.
   - `anonymized/` — non-outcome columns renamed to `feature_NNN`.
 - **Harness-agnostic task builder (Aim 1.2).** Emits a generic data-mining brief that any external agent (Claude Code, Codex, custom ReAct, …) can execute against a parquet file.
-- **Deterministic recovery scorer (Aim 1.2 primary).** Agents submit explicit structured findings during research. Code checks target, subgroup structure, numerical overlap, effect direction, and statistical evidence. Optional LLM novelty scoring remains separate. Named and anonymized runs use the same canonical rules. See [deterministic recovery and backend instructions](docs/DETERMINISTIC_RECOVERY.md).
+- **Deterministic recovery scorer (Aim 1.2 primary).** Agents submit explicit structured findings during research. Version 2 scores complete hypothesis identity and reports statistical confirmation separately; subgroup treatment effects and treatment interactions both qualify for clinical identity. Version 1 remains reproducible. Optional LLM novelty scoring remains separate. Named and anonymized runs use the same canonical rules. See [deterministic recovery and backend instructions](docs/DETERMINISTIC_RECOVERY.md).
 - **Structured research runners.** Prepared jobs support fresh Luna subagents in ChatGPT Work or a user-provided OpenAI-compatible endpoint, including vLLM. Both emit the same structured iteration records. See [the Aim 1 pilot runner](experiments/aim1_recovery/run_batch.py).
 
 ## Scope

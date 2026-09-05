@@ -54,7 +54,7 @@ from .scoring import (
     wrap_single,
     write_batch_report,
 )
-from .scoring.structured_batch import score_transcript, write_structured_report
+from .scoring.structured_batch import SCORER_VERSION, score_transcript, write_structured_report
 from .synthetic.cancer_types import CancerType, all_cancer_types
 from .synthetic.generator import GeneratorConfig
 from .synthetic.io import (
@@ -630,6 +630,7 @@ def _structured_cli_score(
     *,
     evaluation_path: Path | None,
     novelty_judge: Judge | None = None,
+    recovery_version: str = SCORER_VERSION,
 ) -> dict:
     mapping = load_column_mapping(bundle)
     inverse = {v: k for k, v in (mapping or {}).items()}
@@ -656,6 +657,7 @@ def _structured_cli_score(
         transcript,
         frame,
         column_mapping=mapping,
+        scorer_version=recovery_version,
         evidence_design="user_supplied_evaluation_data"
         if evaluation_path
         else "in_sample_reconfirmation",
@@ -687,6 +689,14 @@ def score_run(
         ),
     ],
     out: Annotated[Path, typer.Option("--out", help="Directory for the scoring report.")],
+    recovery_version: Annotated[
+        str,
+        typer.Option(
+            "--recovery-version",
+            help="structured-recovery-v2 (default) or structured-recovery-v1 "
+            "for frozen older criteria.",
+        ),
+    ] = SCORER_VERSION,
     judge_backend: JudgeOption = JudgeBackend.claude_cli,
     judge_cli: JudgeCliOption = "auto",
     judge_model: JudgeModelOption = None,
@@ -743,6 +753,7 @@ def score_run(
             _load_transcript(transcript_path),
             evaluation_path=evaluation_data,
             novelty_judge=novelty_judge,
+            recovery_version=recovery_version,
         )
         write_structured_report([result], out)
         console.print_json(json.dumps({k: v for k, v in result.items() if k != "claim_scores"}))
@@ -800,6 +811,14 @@ def score_batch(
         Path,
         typer.Option("--out", help="Directory for the batch scoring report."),
     ],
+    recovery_version: Annotated[
+        str,
+        typer.Option(
+            "--recovery-version",
+            help="structured-recovery-v2 (default) or structured-recovery-v1 "
+            "for frozen older criteria.",
+        ),
+    ] = SCORER_VERSION,
     judge_backend: JudgeOption = JudgeBackend.claude_cli,
     judge_cli: JudgeCliOption = "auto",
     judge_model: JudgeModelOption = None,
@@ -861,6 +880,7 @@ def score_batch(
                     if evaluation_root
                     else None,
                     novelty_judge=novelty_judge,
+                    recovery_version=recovery_version,
                 )
                 score["replicate"] = path.parent.name
                 scores.append(score)
