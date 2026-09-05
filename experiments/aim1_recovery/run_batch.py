@@ -12,6 +12,35 @@ from pathlib import Path
 from onc_co_scientist.harness.structured_runner import StructuredRunner, finalize_workspace
 
 
+def normalized_tier(value: str | None) -> str | None:
+    return {"default": "standard", "fast": "priority"}.get(value, value)
+
+
+def validate_launch(plan: dict, args) -> None:
+    """Freeze scientific model settings; a different endpoint URL may use the same model."""
+    protocol = plan["protocol"]
+    if protocol.get("schema_version") != "aim1-structured-v2":
+        return
+    for field, actual in (
+        ("model_id", args.model),
+        ("backend", args.backend),
+        ("reasoning_effort", args.reasoning_effort),
+    ):
+        if protocol.get(field) != actual:
+            raise ValueError(f"{field} differs from frozen protocol; prepare a new experiment")
+    if normalized_tier(args.service_tier) != normalized_tier(
+        protocol.get("service_tier_requested")
+    ):
+        raise ValueError("service tier differs from frozen protocol; prepare a new experiment")
+    if args.backend == "work" and normalized_tier(args.work_advertised_tier) != normalized_tier(
+        args.service_tier
+    ):
+        raise ValueError(
+            "Work tool's advertised tier does not verify the requested service tier; "
+            "do not dispatch"
+        )
+
+
 def prompt_for(job: dict) -> str:
     return (
         f"Run the independent research protocol in {job['workspace']}. "
@@ -66,19 +95,33 @@ def main() -> None:
     p.add_argument("--plan", type=Path, required=True)
     p.add_argument("--backend", choices=["work", "endpoint"], required=True)
     p.add_argument("--base-url")
-    p.add_argument("--model", default="gpt-5.6-luna")
+    p.add_argument("--model")
     p.add_argument("--api-key-env", default="OPENAI_API_KEY")
     p.add_argument("--reasoning-effort")
-    p.add_argument("--service-tier", choices=["priority", "fast"])
+    p.add_argument("--service-tier", choices=["standard", "default", "priority", "fast"])
+    p.add_argument(
+        "--work-advertised-tier",
+        choices=["standard", "default", "priority", "fast"],
+        help="Actual tier advertised by the current Work model tool, not a requested setting",
+    )
     p.add_argument("--jobs", type=int, default=4)
     p.add_argument("--limit", type=int)
-    p.add_argument("--max-turns", type=int, default=100)
-    p.add_argument("--max-tool-calls", type=int, default=200)
-    p.add_argument("--max-generated-tokens", type=int, default=100000)
+    p.add_argument("--max-turns", type=int, default=200)
+    p.add_argument("--max-tool-calls", type=int, default=400)
+    p.add_argument("--max-generated-tokens", type=int, default=200000)
     p.add_argument("--max-tokens-per-call", type=int, default=4096)
     p.add_argument("--python-timeout", type=float, default=30)
     args = p.parse_args()
     plan = json.loads(args.plan.read_text())
+    protocol = plan["protocol"]
+    args.model = args.model or protocol.get("model_id", "gpt-5.6-luna")
+    if protocol.get("schema_version") == "aim1-structured-v2":
+        args.reasoning_effort = args.reasoning_effort or protocol.get("reasoning_effort")
+        args.service_tier = args.service_tier or protocol.get("service_tier_requested")
+    try:
+        validate_launch(plan, args)
+    except ValueError as exc:
+        p.error(str(exc))
     # Check completed jobs before filtering: otherwise a new backend/model could
     # silently top up a partially completed experiment with mixed model labels.
     for job in plan["jobs"]:
@@ -104,6 +147,7 @@ def main() -> None:
                         "reasoning_effort": args.reasoning_effort or "medium",
                         "fork_turns": "none",
                         "service_tier_requested": args.service_tier or "priority",
+                        "service_tier_advertised": args.work_advertised_tier,
                         "message": prompt_for(job),
                     }
                 )

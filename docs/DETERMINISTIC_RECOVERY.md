@@ -8,6 +8,14 @@ structured claim. Use `--legacy-llm-matching` only to reproduce archived scoring
 
 ## Definition
 
+The default is **structured-recovery-v2**. Primary recovery measures hypothesis
+identity and completeness. Statistical confirmation is a separate secondary
+endpoint. `--recovery-version structured-recovery-v1` reproduces the previous
+deterministic definition, including its original contrast and evidence gates.
+Existing Aim 1 plans without a scorer version automatically select v1 when
+regenerated with `experiments/aim1_recovery/score.py`. Older runs and reports are
+preserved; a v2 rescore belongs in a new directory.
+
 A finding specifies `outcome`, nullable `exposure`, `contrast`, signed `direction`
 (-1, 0, 1), and a conjunction of `subgroup` predicates. Predicates contain
 `column`, `operator`, and `value`. The schema admits equality, inequality,
@@ -23,8 +31,9 @@ Supported contrasts are:
 | `treatment_effect` | Exposed minus unexposed outcome mean inside the subgroup |
 | `treatment_interaction` | Inside treatment difference minus outside treatment difference |
 
-Treatment contrasts require a binary 0/1 exposure. The pilot's clinical planted
-subgroup effects require a treatment interaction; DepMap requires a subgroup
+Treatment contrasts require a binary 0/1 exposure. In v2 the clinical planted
+subgroup effects accept either a treatment effect within the complete subgroup
+or a treatment interaction. V1 requires the interaction. DepMap requires a subgroup
 mean difference. Censored survival estimands, nonlinear continuous exposures,
 arbitrary Boolean expressions, multi-treatment contrasts, and equivalence tests
 for null findings need additional explicitly defined adapters. An ordinary
@@ -45,8 +54,12 @@ Welch tests for two groups and a four-group Welch-Satterthwaite contrast for
 interactions, at least 10 observations per cell. Missing subgroup covariates
 are excluded from both inside and outside groups. Nonbinary treatment values
 are rejected. The reported `significant` flag never confers recovery credit.
-A linked discovery-data analysis with code, a finite effect estimate, and a
-valid p-value must be present in the run record.
+For secondary confirmation, a linked discovery-data analysis with code, a finite
+effect estimate, and a valid p-value must be present in the run record. Neither
+this requirement nor held-out significance gates v2 hypothesis identity. Thus
+a proposed complete hypothesis can receive identity credit before it is tested;
+it is not thereby a confirmed discovery. Reports retain the number of submitted
+claims and show identity, strict identity, and confirmation together.
 
 Across distinct submitted claims, alpha is allocated as `0.05 / (j * (j + 1))`
 for claim index j. The sum is bounded by 0.05. Repeated identical claims reuse
@@ -54,6 +67,12 @@ the original allocation. This avoids retrospectively changing discovery times
 when later candidates are submitted. The evaluator provides no feedback during
 the research run. This protects held-out confirmation from adaptive feedback;
 it does not make arbitrary exploratory p-values valid.
+
+`primary_iteration` is the first complete hypothesis submission in v2.
+`confirmed_iteration` is the earliest submission with linked analysis and
+held-out support. `interaction_confirmed_recovered` counts only submitted
+treatment interactions with confirmation; it does not relabel a treatment
+effect as evidence of heterogeneity. No LLM scores any of these endpoints.
 
 ## Single or batch scoring
 
@@ -98,8 +117,8 @@ Prepare the 200 clinical and 50 DepMap runs from the archived preliminary cohort
 ```
 
 The same original rows are split 80% for discovery and 20% for evaluation, with
-identical splits in both naming conditions. Clinical tasks retain 25-iteration
-caps and 20 repeats per condition per cohort; DepMap retains a 10-iteration cap
+identical splits in both naming conditions. V2 clinical tasks require 25 research
+iterations and 20 repeats per condition per cohort; DepMap requires 10 iterations
 and 25 repeats per condition. Workspaces contain copies of discovery data and
 neutral instructions/examples, never the answer key or evaluation data.
 
@@ -108,7 +127,8 @@ neutral instructions/examples, never the answer key or evaluation data.
 ```bash
 .venv/bin/python experiments/aim1_recovery/run_batch.py \
   --plan data/aim1_new/plan.json --backend work \
-  --model gpt-5.6-luna --reasoning-effort medium --service-tier priority
+  --model gpt-5.6-luna --reasoning-effort medium --service-tier standard \
+  --work-advertised-tier standard
 ```
 
 This exports one JSON task prompt per pending replicate. The **Work orchestrator**
@@ -116,7 +136,12 @@ launches each with a fresh `fork_turns=none` subagent and the requested model.
 The Python process cannot call Work's collaboration tools. Never process multiple
 scientific replicates in the same agent context. Fast mode is exposed by Work's
 advertised priority service tier; actual response-level tier/token telemetry is
-not available through this subagent interface.
+not available through this subagent interface. The `--work-advertised-tier` value
+must describe the actual tool capability; it does not select or change a tier.
+The exporter refuses a tier mismatch. If the tool advertises only priority,
+Standard requests must wait for a Standard-capable session. Do not relabel a
+priority run by editing metadata. Model, reasoning, backend, and tier must match
+the frozen v2 plan. A changed endpoint URL may still serve the same frozen model.
 
 During research, each iteration is submitted before starting the next:
 
@@ -132,11 +157,25 @@ checks record integrity and hypothesis references. Receipts establish consistenc
 of retained artifacts, not an adversarial security boundary against an agent
 with unrestricted filesystem access.
 
+V2 finalization also requires the full iteration count and all four research
+actions: screening, multivariable exploration, refinement, and robustness.
+Each record carries `research_step` with `action`, `rationale`, `script_path`,
+and `output_path`. Each iteration must link an analysis, retain its executed
+script and output, and preserve their receipt hashes. Exact script reuse and
+empty iterations are rejected. These checks cannot certify scientific
+originality, prove execution, or establish equal token/compute budgets. Review
+a separate setup pilot for protocol adherence and stopping behavior before
+launching the formal batch, without selecting or tuning on recovery outcomes.
+
 ### User-provided endpoint, including vLLM
 
 Use a **new** prepared experiment directory for a different model/backend:
 
 ```bash
+.venv/bin/python experiments/aim1_recovery/prepare.py \
+  --out data/aim1_local --python .venv/bin/python \
+  --backend endpoint --model YOUR_SERVED_MODEL \
+  --reasoning-effort unspecified --service-tier unspecified
 .venv/bin/python experiments/aim1_recovery/run_batch.py \
   --plan data/aim1_local/plan.json --backend endpoint \
   --base-url http://YOUR_HOST:8000/v1 --model YOUR_SERVED_MODEL --jobs 4
@@ -146,8 +185,11 @@ The endpoint must support OpenAI-compatible Chat Completions with native tool
 calls and usage accounting. Configure the model-appropriate tool parser/chat
 template on vLLM; those are model-specific server choices. An optional credential
 is read from `OPENAI_API_KEY`, or the variable named by `--api-key-env`.
-Reasoning effort and service tier are omitted unless explicitly supplied, so
-local models do not receive unsupported OpenAI-specific options by default.
+The example explicitly omits reasoning effort and service tier, so local models
+do not receive unsupported OpenAI-specific options. For an endpoint that supports
+Standard processing, prepare with `--service-tier standard`; the runner sends
+`service_tier: "default"` and requires matching returned tier metadata. Missing
+or conflicting tier telemetry stops that run and remains in the request log.
 The requested model and the endpoint-returned model are recorded. No model
 fallback occurs. The runner has configurable per-call tokens, total generated
 tokens, model turns, tool calls, request deadlines, and Python execution timeouts.
@@ -197,3 +239,7 @@ and neutral examples differ from the archived pilot. The 0.90 threshold was a
 development choice made after inspecting archived examples and frozen before
 fresh runs, not an independently preregistered threshold. Keep primary, strict,
 and 0.95 sensitivity results together when interpreting the naming-condition gap.
+
+The [post hoc v2 rescore](../experiments/aim1_recovery/results/luna_20260904_v2_rescore/README.md)
+reuses the completed September 4 priority runs and isolates the scoring change.
+It is separate from the new Standard-service, fixed-budget experiment.

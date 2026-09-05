@@ -38,6 +38,10 @@ def prepare(
     clinical_repeats: int = 20,
     depmap_repeats: int = 25,
     seed: int = 20260904,
+    model: str = "gpt-5.6-luna",
+    backend: str = "work",
+    reasoning_effort: str | None = "medium",
+    service_tier: str | None = "standard",
 ) -> dict:
     if (out / "plan.json").exists():
         raise ValueError(
@@ -134,10 +138,11 @@ def prepare(
         metadata = {
             "dataset_id": job["dataset_id"],
             "max_iterations": job["max_iterations"],
-            "model_id": "gpt-5.6-luna",
-            "harness_id": "chatgpt-work-structured-v1",
-            "reasoning_effort": "medium",
-            "service_tier": "priority",
+            "model_id": model,
+            "harness_id": f"{backend}-structured-v2",
+            "reasoning_effort": reasoning_effort,
+            "service_tier": service_tier,
+            "fixed_research_budget": True,
             "job_id": job["job_id"],
             "python": str(python.absolute()),
         }
@@ -151,13 +156,20 @@ def prepare(
             "dataset_description.md",
             str(python.absolute().parent.parent),
         )
+        instructions = instructions.replace(
+            f"Protocol (up to {job['max_iterations']} iterations)",
+            f"Protocol (exactly {job['max_iterations']} research iterations)",
+        ).replace(
+            "Stop when you have thoroughly probed the dataset or when you reach the iteration cap.",
+            "Complete the full iteration budget, continuing to test refinements and alternatives "
+            "after an initial finding. Early completion does not satisfy this experiment protocol.",
+        )
         instructions += "\n## Contemporaneous submissions\n\n"
         instructions += (
             "Submit each iteration before beginning the next using the submission command below. "
             "Do not reconstruct or renumber iterations after completing the investigation. "
             "A new iteration must respond to evidence or test a new/refined hypothesis; do not "
-            "pad the transcript with repeated findings. You may finish before the cap when "
-            "justified. "
+            "pad the transcript with repeated findings. Complete the full fixed budget. "
             "Keep all executed analysis scripts and results in this workspace. Do not read "
             "any other "
             "job, prior transcript, repository source, answer key, or external source. "
@@ -174,19 +186,111 @@ def prepare(
             "Write analysis_summary.txt and then finalize. Only syntax/record validation feedback "
             "is available; no scientific evaluation feedback is provided during a run.\n"
         )
+        instructions += (
+            "\n## Fixed exploration budget\n\n"
+            "Plan substantive research across the full budget. Use approximately the first 20% "
+            "for broad outcome/exposure screening, the next 40% for multivariable and nested "
+            "subgroup exploration, the next 25% for refining candidate rules and continuous "
+            "cutoffs, and the remainder for robustness and alternative explanations. Search "
+            "both the presence and absence of modifiers. Test whether adding or removing a "
+            "condition changes the result; do not assume the first useful subgroup is complete. "
+            "Apply this process to the supplied data without guessing a hidden answer.\n\n"
+            "Each iteration must include a research_step object with action (screen, "
+            "multivariable, refine, or robustness), rationale, script_path, and output_path. "
+            "Save and execute a separate substantive script for that iteration and save its "
+            "output BEFORE submitting. Use workspace-relative paths and reference script_path "
+            "in the linked analysis code field. Preserve submitted scripts and outputs. All four "
+            "actions must appear before finalization; empty iterations or identical script reuse "
+            "are rejected. A negative result is useful; do not manufacture significant findings. "
+            "The supplied transcript_example.json uses fictional columns to illustrate the "
+            "format only. Its numbers are fictional, not suggested analyses or results.\n"
+        )
+        write_json(
+            ws / "transcript_example.json",
+            {
+                **{
+                    k: metadata[k]
+                    for k in ("dataset_id", "model_id", "harness_id", "max_iterations")
+                },
+                "iterations": [
+                    {
+                        "index": 1,
+                        "research_step": {
+                            "action": "screen",
+                            "rationale": "Illustration of testing a candidate relationship.",
+                            "script_path": "analysis_001.py",
+                            "output_path": "result_001.txt",
+                        },
+                        "proposed_hypotheses": [
+                            {
+                                "id": "h1",
+                                "text": "Fictional outcome is higher in the fictional subgroup.",
+                                "finding": {
+                                    "outcome": "outcome_example",
+                                    "exposure": None,
+                                    "contrast": "subgroup_difference",
+                                    "direction": 1,
+                                    "subgroup": [
+                                        {"column": "feature_example", "operator": "eq", "value": 1}
+                                    ],
+                                },
+                            }
+                        ],
+                        "analyses": [
+                            {
+                                "hypothesis_ids": ["h1"],
+                                "code": "analysis_001.py",
+                                "result_summary": "Fictional format illustration only.",
+                                "p_value": 0.4,
+                                "effect_estimate": 0.1,
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
         (ws / "agent_instructions.md").write_text(instructions)
         job["workspace"] = str(ws.resolve())
         job["data_sha256"] = digest(ws / "dataset.parquet")
         job["instructions_sha256"] = digest(ws / "agent_instructions.md")
+        job["public_input_sha256"] = {
+            f: digest(ws / f)
+            for f in (
+                "metadata.json",
+                "transcript_schema.json",
+                "transcript_example.json",
+                "dataset_description.md",
+            )
+        }
         job["status"] = "pending"
     protocol = {
-        "schema_version": "aim1-structured-v1",
+        "schema_version": "aim1-structured-v2",
+        "scorer_version": "structured-recovery-v2",
         "split_seed": seed,
         "discovery_fraction": 0.8,
-        "model_id": "gpt-5.6-luna",
-        "reasoning_effort": "medium",
-        "service_tier_requested": "priority",
-        "service_tier_evidence": "Work model tool advertises priority; not per-response telemetry",
+        "model_id": model,
+        "backend": backend,
+        "reasoning_effort": reasoning_effort,
+        "service_tier_requested": service_tier,
+        "service_tier_evidence": (
+            "Not launched; verify backend capability before dispatch, retain "
+            "returned endpoint telemetry when available"
+        ),
+        "fixed_research_budget": {"clinical": 25, "depmap": 10},
+        "budget_limitations": (
+            "Matched iteration budgets and required research actions; not equal "
+            "tokens, compute, or proof of scientific originality"
+        ),
+        "primary_definition": (
+            "Complete correctly directed subgroup identity; treatment effect within"
+            " subgroup or treatment interaction accepted; statistical confirmation "
+            "separate"
+        ),
+        "secondary_confirmation": (
+            "Candidate's declared contrast, finite linked discovery analysis, held-"
+            "out signed evidence and online alpha spending; report interaction "
+            "confirmation separately"
+        ),
         "new_session_per_replicate": True,
         "context_fork": "none",
         "isolation": (
@@ -200,7 +304,9 @@ def prepare(
             "online alpha/[j(j+1)] per distinct structured submitted claim; no future look-ahead"
         ),
         "minimum_group_n": 10,
-        "time_endpoint": "earliest submitted supported complete finding; censor at task cap",
+        "time_endpoint": (
+            "earliest submitted complete finding; separate time to confirmation; censor at task cap"
+        ),
         "threshold_status": (
             "development choice after archived-pilot inspection; frozen before these fresh runs"
         ),
@@ -211,7 +317,7 @@ def prepare(
             "selected by recovery"
         ),
         "comparability": (
-            "new model, structured output, heldout confirmation, and neutral examples; not a "
+            "new model, structured output, fixed exploration budget and neutral examples; not a "
             "causal comparison with legacy pilot"
         ),
     }
@@ -227,6 +333,16 @@ def main() -> None:
     parser.add_argument("--python", type=Path, required=True)
     parser.add_argument("--clinical-repeats", type=int, default=20)
     parser.add_argument("--depmap-repeats", type=int, default=25)
+    parser.add_argument("--model", default="gpt-5.6-luna")
+    parser.add_argument("--backend", choices=["work", "endpoint"], default="work")
+    parser.add_argument(
+        "--reasoning-effort", default="medium", help="Use unspecified to omit for local endpoints"
+    )
+    parser.add_argument(
+        "--service-tier",
+        choices=["standard", "priority", "fast", "unspecified"],
+        default="standard",
+    )
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[2]
     result = prepare(
@@ -235,6 +351,10 @@ def main() -> None:
         args.python,
         clinical_repeats=args.clinical_repeats,
         depmap_repeats=args.depmap_repeats,
+        model=args.model,
+        backend=args.backend,
+        reasoning_effort=None if args.reasoning_effort == "unspecified" else args.reasoning_effort,
+        service_tier=None if args.service_tier == "unspecified" else args.service_tier,
     )
     print(json.dumps({"jobs": len(result["jobs"]), "plan": str(args.out / "plan.json")}))
 

@@ -7,7 +7,8 @@ import pytest
 from onc_co_scientist.harness.structured_runner import StructuredRunner, finalize_workspace
 
 
-def test_endpoint_tool_turns_and_immutable_submission(tmp_path):
+@pytest.mark.parametrize("tier", [None, "standard"])
+def test_endpoint_tool_turns_and_immutable_submission(tmp_path, tier):
     (tmp_path / "metadata.json").write_text(
         json.dumps({"dataset_id": "d", "max_iterations": 1, "model_id": "m", "harness_id": "h"})
     )
@@ -90,13 +91,17 @@ def test_endpoint_tool_turns_and_immutable_submission(tmp_path):
             model="local-served-model",
             max_turns=5,
             max_generated_tokens=20,
+            service_tier=tier,
         ).run()
     finally:
         server.shutdown()
     assert [it.index for it in result.iterations] == [1]
     assert result.model_id == "local-served-model"
     assert seen[0]["model"] == "local-served-model"
-    assert "service_tier" not in seen[0]
+    if tier is None:
+        assert "service_tier" not in seen[0]
+    else:
+        assert seen[0]["service_tier"] == "default"
     assert "reasoning_effort" not in seen[0]
     assert seen[1]["max_completion_tokens"] < seen[0]["max_completion_tokens"]
     from jsonschema import Draft202012Validator
@@ -110,6 +115,22 @@ def test_endpoint_tool_turns_and_immutable_submission(tmp_path):
     finalized = finalize_workspace(tmp_path)
     assert finalized.iterations[0].index == 1
     assert finalized.model_id == "local-served-model"
+
+
+@pytest.mark.parametrize("returned", [None, "priority", "fast"])
+def test_standard_tier_requires_matching_response(tmp_path, monkeypatch, returned):
+    import io
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **kw: io.BytesIO(json.dumps({"service_tier": returned}).encode()),
+    )
+    runner = StructuredRunner(
+        tmp_path, base_url="http://localhost", model="m", service_tier="standard"
+    )
+    with pytest.raises(RuntimeError, match="verify requested Standard"):
+        runner._request([])
+    assert (tmp_path / "runner_transcript.jsonl").exists()
 
 
 def test_unknown_tool_and_malformed_arguments_are_safe(tmp_path):

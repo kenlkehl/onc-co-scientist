@@ -332,7 +332,7 @@ def test_default_scoring_never_builds_an_llm_judge(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, result.output
     scored = json.loads((out / "structured_scores.json").read_text())[0]
-    assert scored["scorer_version"] == "structured-recovery-v1"
+    assert scored["scorer_version"] == "structured-recovery-v2"
     assert scored["unstructured_claims"] == 1
     assert not scored["primary_recovered"]
     assert "novelty" not in scored

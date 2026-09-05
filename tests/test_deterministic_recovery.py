@@ -290,5 +290,82 @@ def test_nonfinite_discovery_analysis_cannot_confer_recovery(scenario, field):
     assert score_transcript(manifest, Transcript.model_validate(payload), df)["primary_recovered"]
     analysis[field] = float("nan")
     scored = score_transcript(manifest, Transcript.model_validate(payload), df)
-    assert not scored["primary_recovered"]
+    assert scored["primary_recovered"]
+    assert not scored["confirmed_recovered"]
+    legacy = score_transcript(
+        manifest, Transcript.model_validate(payload), df, scorer_version="structured-recovery-v1"
+    )
+    assert not legacy["primary_recovered"]
     assert not scored["claim_scores"][0]["training_evidence_present"]
+
+
+@pytest.mark.parametrize("contrast", ["treatment_effect", "treatment_interaction"])
+@pytest.mark.parametrize("masked", [False, True])
+def test_v2_identity_and_confirmation_are_distinct(scenario, contrast, masked):
+    import copy
+
+    from onc_co_scientist.harness.transcript import Transcript
+    from onc_co_scientist.scoring.structured_batch import score_transcript
+
+    df, _, manifest, finding = scenario
+    finding["contrast"] = contrast
+    mapping = {c: f"feature_{i}" for i, c in enumerate(df.columns)}
+    if masked:
+        finding = copy.deepcopy(finding)
+        for key in ("outcome", "exposure"):
+            finding[key] = mapping[finding[key]]
+        for pred in finding["subgroup"]:
+            pred["column"] = mapping[pred["column"]]
+    payload = dict(
+        dataset_id=manifest.dataset_id,
+        model_id="m",
+        harness_id="h",
+        max_iterations=2,
+        iterations=[
+            dict(
+                index=1,
+                proposed_hypotheses=[dict(id="h1", text="Candidate", finding=finding)],
+                analyses=[],
+            )
+        ],
+    )
+    first = score_transcript(
+        manifest, Transcript.model_validate(payload), df, column_mapping=mapping
+    )
+    assert first["primary_recovered"] and first["strict_recovered"]
+    assert first["primary_iteration"] == 1 and not first["confirmed_recovered"]
+    payload["iterations"].append(
+        dict(
+            index=2,
+            proposed_hypotheses=[],
+            analyses=[
+                dict(
+                    hypothesis_ids=["h1"],
+                    code="analysis.py",
+                    result_summary="Tested",
+                    effect_estimate=5,
+                    p_value=1e-10,
+                )
+            ],
+        )
+    )
+    after = score_transcript(
+        manifest, Transcript.model_validate(payload), df, column_mapping=mapping
+    )
+    assert after["primary_iteration"] == 1 and after["confirmed_iteration"] == 2
+    assert after["interaction_confirmed_recovered"] == (contrast == "treatment_interaction")
+    legacy = score_transcript(
+        manifest,
+        Transcript.model_validate(payload),
+        df,
+        column_mapping=mapping,
+        scorer_version="structured-recovery-v1",
+    )
+    assert legacy["primary_recovered"] == (contrast == "treatment_interaction")
+    if contrast == "treatment_interaction":
+        assert legacy["primary_iteration"] == 2
+    # A missing gate still fails even when the treatment contrast is accepted.
+    payload["iterations"][0]["proposed_hypotheses"][0]["finding"]["subgroup"].pop(0)
+    assert not score_transcript(
+        manifest, Transcript.model_validate(payload), df, column_mapping=mapping
+    )["primary_recovered"]

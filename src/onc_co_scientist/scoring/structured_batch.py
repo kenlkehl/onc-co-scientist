@@ -14,7 +14,8 @@ from ..harness.transcript import Transcript
 from ..synthetic.schemas import DatasetManifest, ParadigmClass
 from .deterministic import score_finding
 
-SCORER_VERSION = "structured-recovery-v1"
+LEGACY_SCORER_VERSION = "structured-recovery-v1"
+SCORER_VERSION = "structured-recovery-v2"
 
 
 def canonical_claim(finding: dict, mapping: dict[str, str] | None = None) -> str:
@@ -44,6 +45,7 @@ def score_transcript(
     column_mapping: dict[str, str] | None = None,
     config: dict[str, Any] | None = None,
     evidence_design: str = "unspecified",
+    scorer_version: str = SCORER_VERSION,
 ) -> dict[str, Any]:
     """Score claims at their actual submission time with online alpha spending.
 
@@ -53,6 +55,9 @@ def score_transcript(
     original allocation and cannot obtain extra tests of the held-out data.
     Novelty is intentionally absent and may be scored independently.
     """
+    if scorer_version not in {LEGACY_SCORER_VERSION, SCORER_VERSION}:
+        raise ValueError(f"Unknown scorer version: {scorer_version}")
+    v2 = scorer_version == SCORER_VERSION
     if manifest.dataset_id != transcript.dataset_id:
         raise ValueError("Transcript and manifest dataset IDs differ.")
     cfg = {
@@ -63,6 +68,9 @@ def score_transcript(
         "numeric_atol": 1e-9,
         **(config or {}),
     }
+    if "allow_subgroup_treatment_effect" in cfg:
+        raise ValueError("Select a scorer version instead of overriding its contrast definition.")
+    match_cfg = {**cfg, "allow_subgroup_treatment_effect": v2}
     indexes = [it.index for it in transcript.iterations]
     if indexes != list(range(1, len(indexes) + 1)) or any(
         i > transcript.max_iterations for i in indexes
@@ -100,7 +108,7 @@ def score_transcript(
     associations = []
     rows = []
     for spec in manifest.associations_by_class(ParadigmClass.hidden_novel):
-        primary_times, strict_times = [], []
+        primary_times, strict_times, confirmed_times, interaction_times = [], [], [], []
         for iteration, h in flat:
             if h.finding is None:
                 rows.append(
@@ -116,7 +124,12 @@ def score_transcript(
                 )
                 continue
             scored = score_finding(
-                h.finding, spec, manifest, evaluation_df, column_mapping=column_mapping, config=cfg
+                h.finding,
+                spec,
+                manifest,
+                evaluation_df,
+                column_mapping=column_mapping,
+                config=match_cfg,
             )
             order, alpha = allocations[keys[h.id]]
             evidence = scored.get("functional", {})
@@ -127,8 +140,10 @@ def score_transcript(
             )
             signed = finite and (effect * spec.direction > 0 if spec.direction else False)
             support = bool(h.id in linked and signed and p < alpha)
-            primary = bool(scored.get("match_recovered", False) and support)
-            strict = bool(scored.get("strict_match", False) and support)
+            matched = bool(scored.get("match_recovered", False))
+            confirmed = matched and support
+            primary = matched if v2 else confirmed
+            strict = bool(scored.get("strict_match", False) and (v2 or support))
             discovered = max(iteration, linked[h.id]) if h.id in linked else None
             rows.append(
                 {
@@ -146,10 +161,22 @@ def score_transcript(
                     "score": scored,
                 }
             )
+            if v2:
+                rows[-1].update(
+                    confirmed_recovery=confirmed,
+                    confirmation_contrast=h.finding.contrast,
+                    interaction_confirmed_recovery=(
+                        confirmed and h.finding.contrast == "treatment_interaction"
+                    ),
+                )
+            if confirmed:
+                confirmed_times.append(discovered)
+                if h.finding.contrast == "treatment_interaction":
+                    interaction_times.append(discovered)
             if primary:
-                primary_times.append(discovered)
+                primary_times.append(iteration if v2 else discovered)
             if strict:
-                strict_times.append(discovered)
+                strict_times.append(iteration if v2 else discovered)
         associations.append(
             {
                 "association_id": spec.id,
@@ -159,10 +186,19 @@ def score_transcript(
                 "strict_iteration": min(strict_times) if strict_times else None,
             }
         )
+        if v2:
+            associations[-1].update(
+                confirmed_recovered=bool(confirmed_times),
+                confirmed_iteration=min(confirmed_times) if confirmed_times else None,
+                interaction_confirmed_recovered=bool(interaction_times),
+                interaction_confirmed_iteration=min(interaction_times)
+                if interaction_times
+                else None,
+            )
     times = [a["primary_iteration"] for a in associations if a["primary_recovered"]]
     strict_times = [a["strict_iteration"] for a in associations if a["strict_recovered"]]
-    return {
-        "scorer_version": SCORER_VERSION,
+    result = {
+        "scorer_version": scorer_version,
         "primary_scoring_backend": "deterministic",
         "dataset_id": transcript.dataset_id,
         "model_id": transcript.model_id,
@@ -182,6 +218,17 @@ def score_transcript(
         "per_association": associations,
         "claim_scores": rows,
     }
+    if v2:
+        result["primary_definition"] = (
+            "Correct outcome, exposure, direction and complete subgroup at fixed membership "
+            "tolerance; subgroup treatment effect or interaction accepted. Statistical "
+            "confirmation is a separate secondary endpoint."
+        )
+        for prefix in ("confirmed", "interaction_confirmed"):
+            found = [a[f"{prefix}_iteration"] for a in associations if a[f"{prefix}_recovered"]]
+            result[f"{prefix}_recovered"] = bool(found)
+            result[f"{prefix}_iteration"] = min(found) if found else None
+    return result
 
 
 def write_structured_report(scores: list[dict], out: Path) -> None:
@@ -192,9 +239,10 @@ def write_structured_report(scores: list[dict], out: Path) -> None:
     lines = [
         "# Deterministic structured recovery",
         "",
-        "Primary recovery uses complete subgroup structure, fixed membership tolerance, "
-        "and recomputed statistical evidence. Strict recovery additionally requires "
-        "equivalent boundaries.",
+        "Version 2 primary recovery measures complete hypothesis identity at fixed membership "
+        "tolerance; statistical confirmation is separate. Version 1 additionally gates primary "
+        "recovery on evidence and the original contrast. Strict recovery requires equivalent "
+        "boundaries under the selected version. Each JSON record identifies its version.",
         "",
         "| Dataset | Condition | Primary | Strict | First primary iteration | Evidence |",
         "|---|---|---:|---:|---:|---|",
@@ -208,4 +256,17 @@ def write_structured_report(scores: list[dict], out: Path) -> None:
             f"{first} | "
             f"{score['evidence_design']} |"
         )
+    if any(s["scorer_version"] == SCORER_VERSION for s in scores):
+        lines += [
+            "",
+            "| Dataset | Condition | Confirmed | Interaction confirmed |",
+            "|---|---|---:|---:|",
+        ]
+        for s in scores:
+            if s["scorer_version"] == SCORER_VERSION:
+                lines.append(
+                    f"| {s['dataset_id']} | {s.get('variant', '')} | "
+                    f"{int(s['confirmed_recovered'])} | "
+                    f"{int(s['interaction_confirmed_recovered'])} |"
+                )
     (out / "structured_scores.md").write_text("\n".join(lines) + "\n")

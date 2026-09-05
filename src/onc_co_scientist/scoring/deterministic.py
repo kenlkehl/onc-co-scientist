@@ -332,7 +332,14 @@ def score_finding(
         structure.update(
             target=canonical_name(f.outcome, column_mapping) == spec.outcome,
             exposure=canonical_name(f.exposure, column_mapping) == exposure,
-            contrast=f.contrast == expected_contrast,
+            contrast=(
+                f.contrast == expected_contrast
+                or (
+                    cfg.get("allow_subgroup_treatment_effect", False)
+                    and expected_contrast == "treatment_interaction"
+                    and f.contrast == "treatment_effect"
+                )
+            ),
             direction=f.direction == spec.direction,
         )
         target = all(structure[k] for k in ["target", "exposure", "contrast", "direction"])
