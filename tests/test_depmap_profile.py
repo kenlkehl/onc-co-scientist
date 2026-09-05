@@ -140,7 +140,10 @@ def test_depmap_anonymized_description_and_task_prompt_use_cell_line_context(tmp
     assert "commercial healthcare" not in instructions_lower
     assert "treatment-effect heterogeneity" not in instructions_lower
     example = task.example_path.read_text(encoding="utf-8")
-    assert "dependency_KIF18A" in example
+    assert "outcome_example" in example
+    assert "dependency_KIF18A" not in example
+    assert "wnt_activity_score" not in example
+    assert "colorectal" not in example
     assert "treatment_pembrolizumab" not in example
 
 

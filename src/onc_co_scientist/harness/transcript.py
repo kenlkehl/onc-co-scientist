@@ -17,6 +17,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .structured import StructuredFinding
+
 HypothesisKind = Literal["novel", "refined"]
 
 
@@ -28,6 +30,10 @@ class HypothesisRecord(BaseModel):
     id: str = Field(description="Stable within a transcript.")
     text: str = Field(description="Natural-language statement of the hypothesis.")
     kind: HypothesisKind = "novel"
+    finding: StructuredFinding | None = Field(
+        default=None,
+        description="Machine-readable claim. Required for deterministic recovery; legacy prose remains readable but receives no deterministic recovery credit.",
+    )
 
 
 class AnalysisRecord(BaseModel):

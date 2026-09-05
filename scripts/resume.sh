@@ -25,6 +25,7 @@ PYTHON_ENV="${PYTHON_ENV:-.venv}"
 JUDGE="${JUDGE:-anthropic-vertex}"
 JUDGE_CLI="${JUDGE_CLI:-auto}"
 JUDGE_MODEL="${JUDGE_MODEL:-}"
+SCORE_NOVELTY="${SCORE_NOVELTY:-0}"
 
 TASKS_ROOT="$OUT/tasks"
 SCORE_ROOT="$OUT/score"
@@ -91,7 +92,7 @@ scripts/run_harness.sh "${harness_args[@]}"
 
 # ---- step C: score ----------------------------------------------------
 
-echo "[3/3] Scoring (judge=$JUDGE) → $SCORE_ROOT" >&2
+echo "[3/3] Scoring (deterministic recovery; optional novelty=$SCORE_NOVELTY) → $SCORE_ROOT" >&2
 score_args=(
     score
     batch
@@ -104,6 +105,9 @@ score_args=(
 if [[ -n "$JUDGE_MODEL" ]]; then
     score_args+=( --judge-model "$JUDGE_MODEL" )
 fi
+if [[ "$SCORE_NOVELTY" == "1" ]]; then
+    score_args+=( --score-novelty )
+fi
 ocs "${score_args[@]}"
 
-echo "Resume complete. Report: $SCORE_ROOT/batch_score.md" >&2
+echo "Resume complete. Report: $SCORE_ROOT/structured_scores.md" >&2

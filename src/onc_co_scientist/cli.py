@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Annotated
 
 import numpy as np
+import pandas as pd
 import typer
 import yaml
 from pydantic import ValidationError
@@ -53,6 +54,7 @@ from .scoring import (
     wrap_single,
     write_batch_report,
 )
+from .scoring.structured_batch import score_transcript, write_structured_report
 from .synthetic.cancer_types import CancerType, all_cancer_types
 from .synthetic.generator import GeneratorConfig
 from .synthetic.io import (
@@ -67,6 +69,7 @@ from .synthetic.multi import (
     write_multi_bundle,
     write_multi_bundle_pair,
 )
+from .synthetic.schemas import DatasetManifest
 
 
 class DatasetVariant(StrEnum):
@@ -514,7 +517,7 @@ JudgeOption = Annotated[
     JudgeBackend,
     typer.Option(
         "--judge",
-        help="LLM backend for novelty + match judgments. 'claude-cli' shells "
+        help="LLM backend for optional novelty or explicit legacy matching. 'claude-cli' shells "
         "out to `claude --dangerously-skip-permissions -p` (uses existing "
         "Claude Code auth on the host; note: the CLI's pre-screen classifier "
         "may refuse oncology hypothesis prompts). 'codex-cli' shells out to "
@@ -621,6 +624,48 @@ def _no_source_bundles_message(synth_root: Path, tasks_root: Path) -> str:
     return message
 
 
+def _structured_cli_score(
+    bundle: Path,
+    transcript: Transcript,
+    *,
+    evaluation_path: Path | None,
+    novelty_judge: Judge | None = None,
+) -> dict:
+    mapping = load_column_mapping(bundle)
+    inverse = {v: k for k, v in (mapping or {}).items()}
+    raw = read_manifest(bundle).model_dump(mode="json")
+    for key in (
+        "columns",
+        "treatment_columns",
+        "outcome_columns",
+        "covariate_columns",
+        "id_columns",
+    ):
+        raw[key] = [inverse.get(x, x) for x in raw[key]]
+    for spec in raw["associations"]:
+        spec["variables"] = [inverse.get(x, x) for x in spec["variables"]]
+        spec["outcome"] = inverse.get(spec["outcome"], spec["outcome"])
+        if spec.get("subgroup"):
+            spec["subgroup"]["predicate"] = {
+                inverse.get(k, k): v for k, v in spec["subgroup"]["predicate"].items()
+            }
+    frame_path = evaluation_path or bundle / "public" / "dataset.parquet"
+    frame = pd.read_parquet(frame_path).rename(columns=inverse)
+    result = score_transcript(
+        DatasetManifest.model_validate(raw),
+        transcript,
+        frame,
+        column_mapping=mapping,
+        evidence_design="user_supplied_evaluation_data"
+        if evaluation_path
+        else "in_sample_reconfirmation",
+    )
+    result["variant"] = _infer_variant(bundle)
+    if novelty_judge is not None and result["variant"] == "named":
+        result["novelty"] = score_novelty(transcript, novelty_judge).to_dict()
+    return result
+
+
 @score_app.command("run")
 def score_run(
     dataset: Annotated[
@@ -649,12 +694,60 @@ def score_run(
     cache_dir: CacheDirOption = None,
     no_judge_cache: NoJudgeCacheOption = False,
     stub_config: StubConfigOption = None,
+    legacy_llm_matching: Annotated[
+        bool,
+        typer.Option(
+            "--legacy-llm-matching", help="Explicitly reproduce archived prose-based LLM matching."
+        ),
+    ] = False,
+    score_novelty_flag: Annotated[
+        bool,
+        typer.Option(
+            "--score-novelty",
+            help="Also run the optional novelty judge; primary recovery stays deterministic.",
+        ),
+    ] = False,
+    evaluation_data: Annotated[
+        Path | None,
+        typer.Option(
+            "--evaluation-data",
+            exists=True,
+            dir_okay=False,
+            help=(
+                "Independent evaluation Parquet. Omit for explicitly labeled "
+                "in-sample reconfirmation."
+            ),
+        ),
+    ] = None,
 ) -> None:
-    """Score a single transcript: novelty % + buried-finding discovery.
+    """Score structured recovery deterministically; optionally score novelty.
 
     Variant is inferred from the bundle directory's name (``named`` or
     ``anonymized``); novelty scoring is skipped for the anonymized variant.
     """
+    if not legacy_llm_matching:
+        novelty_judge = (
+            _build_judge(
+                judge_backend,
+                judge_cli=judge_cli,
+                judge_model=judge_model,
+                batch_size=judge_batch_size,
+                cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
+                stub_config_path=stub_config,
+            )
+            if score_novelty_flag
+            else None
+        )
+        result = _structured_cli_score(
+            dataset,
+            _load_transcript(transcript_path),
+            evaluation_path=evaluation_data,
+            novelty_judge=novelty_judge,
+        )
+        write_structured_report([result], out)
+        console.print_json(json.dumps({k: v for k, v in result.items() if k != "claim_scores"}))
+        console.print(f"[green]Deterministic report written to[/green] {out}")
+        return
     manifest = read_manifest(dataset)
     transcript = _load_transcript(transcript_path)
     variant = _infer_variant(dataset)
@@ -714,22 +807,70 @@ def score_batch(
     cache_dir: CacheDirOption = None,
     no_judge_cache: NoJudgeCacheOption = False,
     stub_config: StubConfigOption = None,
+    legacy_llm_matching: Annotated[
+        bool,
+        typer.Option(
+            "--legacy-llm-matching", help="Explicitly reproduce archived prose-based LLM matching."
+        ),
+    ] = False,
+    score_novelty_flag: Annotated[
+        bool, typer.Option("--score-novelty", help="Run optional novelty judging separately.")
+    ] = False,
+    evaluation_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--evaluation-root",
+            exists=True,
+            file_okay=False,
+            help="Independent data at <root>/<bundle-relative-path>/evaluation.parquet.",
+        ),
+    ] = None,
 ) -> None:
-    """Batch-score every replicate transcript across a tasks tree.
+    """Batch-score structured recovery; LLM matching requires an explicit legacy flag.
 
-    Per (dataset, variant, replicate):
-      - novelty (named only): % of harness-proposed hypotheses the LLM
-        judge marks as going beyond paradigm consensus.
-      - buried-discovery iteration (both variants): earliest iteration the
-        pipeline both proposed and tested a hypothesis matching the
-        manifest's buried association; left absent when never uncovered.
-
-    Both ``named`` and ``anonymized`` bundles are scored; the named-vs-
-    anonymized gap on buried discovery is the primary outcome of the eval.
+    By default, both naming conditions receive deterministic primary and strict
+    recovery scores and first supported discovery iterations. No LLM is built
+    or called. Optional novelty judging is enabled only by --score-novelty.
+    --legacy-llm-matching restores the archived LLM matching/reporting path.
     """
     bundles = discover_bundles(synth_root)
     if not bundles:
         raise typer.BadParameter(_no_source_bundles_message(synth_root, tasks_root))
+
+    if not legacy_llm_matching:
+        novelty_judge = (
+            _build_judge(
+                judge_backend,
+                judge_cli=judge_cli,
+                judge_model=judge_model,
+                batch_size=judge_batch_size,
+                cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
+                stub_config_path=stub_config,
+            )
+            if score_novelty_flag
+            else None
+        )
+        scores = []
+        for bundle in bundles:
+            rel = bundle.relative_to(synth_root)
+            for path in sorted((tasks_root / rel / "runs").glob("run_*/transcript.json")):
+                score = _structured_cli_score(
+                    bundle,
+                    _load_transcript(path),
+                    evaluation_path=evaluation_root / rel / "evaluation.parquet"
+                    if evaluation_root
+                    else None,
+                    novelty_judge=novelty_judge,
+                )
+                score["replicate"] = path.parent.name
+                scores.append(score)
+        if not scores:
+            raise typer.BadParameter(f"No replicate transcripts found under {tasks_root}.")
+        write_structured_report(scores, out)
+        console.print(
+            f"[green]Scored {len(scores)} runs deterministically[/green]; reports in {out}"
+        )
+        return
 
     judge = _build_judge(
         judge_backend,
