@@ -360,6 +360,22 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
             f"Actual models: {summary['actual_models']}. "
             "See launch evidence and runtime metadata for capability/telemetry verification.",
         ]
+        if summary.get("validation_notes"):
+            lines += ["", "Restoration and protocol limitations", ""]
+            lines += [str(value) for value in summary["validation_notes"].values()]
+        if summary.get("technical_resume_sensitivity"):
+            lines += [
+                "",
+                "Sensitivity excluding documented or potentially reset-affected jobs",
+                "",
+                "| Family | Condition | Excluded | Remaining N | Identity | Strict |",
+                "|---|---|---:|---:|---:|---:|",
+            ]
+            for group in summary["technical_resume_sensitivity"]:
+                lines.append(
+                    f"| {group['family']} | {group['variant']} | {group['excluded_resumed_n']} | "
+                    f"{group['n']} | {group['primary_n']} | {group['strict_n']} |"
+                )
         (out / "report.md").write_text("\n".join(lines) + "\n")
         return summary
     lines = [
