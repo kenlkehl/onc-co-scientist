@@ -150,7 +150,17 @@ class AgentRuntime(Protocol):
 def _runtime_environment(model: ModelSpec) -> dict[str, str]:
     """Build a small inherited environment plus explicitly allowed credentials."""
 
-    inherited = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")
+    inherited = (
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "LANG",
+        "LC_ALL",
+        # Transport-only failover controls used by the vLLM CLI adapter. They do
+        # not alter the frozen experiment spec or conversational session identity.
+        "OCS_VLLM_BASE_URL_OVERRIDE",
+        "OCS_VLLM_MODEL_ID_OVERRIDE",
+    )
     keys = {*inherited, *model.env_passthrough}
     return {key: value for key in keys if (value := os.environ.get(key)) is not None}
 

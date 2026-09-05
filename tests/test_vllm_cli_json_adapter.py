@@ -211,6 +211,23 @@ def test_vllm_adapter_uses_exact_codex_stage_schema() -> None:
     )
 
 
+def test_api_target_override_preserves_frozen_session_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = SimpleNamespace(base_url="http://old-server:8060/v1")
+    model_id = "RedHatAI/Gemma-4-31B-IT-FP8-Dynamic"
+    monkeypatch.setenv(
+        vllm_adapter.BASE_URL_OVERRIDE_ENV,
+        "http://172.24.216.113:8001/v1/",
+    )
+    monkeypatch.setenv(vllm_adapter.MODEL_ID_OVERRIDE_ENV, "gemma4-31b")
+
+    assert vllm_adapter._api_target(args, model_id) == (
+        "http://172.24.216.113:8001/v1",
+        "gemma4-31b",
+    )
+
+
 def test_decision_schema_rejects_extra_fields() -> None:
     with pytest.raises(ValueError, match="controller decision failed"):
         _decision_from_text(

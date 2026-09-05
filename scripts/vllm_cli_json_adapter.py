@@ -51,6 +51,8 @@ except ModuleNotFoundError:  # Direct execution puts ``scripts/`` on sys.path.
 ADAPTER_PROTOCOL_VERSION = 7
 DEFAULT_API_TIMEOUT_SECONDS = 7_200.0
 DEFAULT_MAX_TOKENS = 100_000
+BASE_URL_OVERRIDE_ENV = "OCS_VLLM_BASE_URL_OVERRIDE"
+MODEL_ID_OVERRIDE_ENV = "OCS_VLLM_MODEL_ID_OVERRIDE"
 DECISION_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "Sandboxed scientific-agent controller decision",
@@ -212,7 +214,21 @@ def _save_session(
     )
 
 
-def _build_client(args: argparse.Namespace):
+def _api_target(args: argparse.Namespace, model_id: str) -> tuple[str, str]:
+    """Resolve a transport-only failover target without changing frozen settings.
+
+    Session compatibility and experiment fingerprints remain tied to the configured
+    endpoint and checkpoint ID.  These environment overrides are intentionally applied
+    only to outbound API traffic so an interrupted run can move between equivalent
+    vLLM replicas (including replicas that expose a different served-model alias).
+    """
+
+    base_url = os.environ.get(BASE_URL_OVERRIDE_ENV, "").strip() or args.base_url
+    api_model_id = os.environ.get(MODEL_ID_OVERRIDE_ENV, "").strip() or model_id
+    return base_url.rstrip("/"), api_model_id
+
+
+def _build_client(args: argparse.Namespace, *, base_url: str | None = None):
     try:
         from openai import OpenAI
     except ImportError as exc:  # pragma: no cover - environment validation covers this.
@@ -220,7 +236,7 @@ def _build_client(args: argparse.Namespace):
             "The vLLM adapter requires the OpenAI Python client in its runtime environment."
         ) from exc
     return OpenAI(
-        base_url=args.base_url,
+        base_url=base_url or args.base_url,
         api_key=args.api_key,
         timeout=args.api_timeout_seconds,
         max_retries=0,
@@ -1136,6 +1152,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
     request_id = _required_string(request, "request_id")
     session_id = _required_string(request, "session_id")
     model_id = _required_string(request, "model_id")
+    api_base_url, api_model_id = _api_target(args, model_id)
     require_final_answer = _required_bool(request, "require_final_answer")
     prompt = _required_string(request, "prompt")
     workspace = Path(_required_string(request, "workspace")).resolve(strict=True)
@@ -1163,6 +1180,8 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
         "request_id": request_id,
         "model_id": model_id,
         "base_url": args.base_url,
+        "api_model_id": api_model_id,
+        "api_base_url": api_base_url,
         "prompt_sha256": _sha256(prompt),
         "output_schema_sha256": schema_hash,
         "require_final_answer": require_final_answer,
@@ -1200,7 +1219,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
 
     update_audit("starting")
     if client is None:
-        client = _build_client(args)
+        client = _build_client(args, base_url=api_base_url)
     system_prompt = (
         NATIVE_TOOL_SYSTEM_PROMPT
         if args.interaction_mode == "native-tools"
@@ -1258,7 +1277,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 ) = _native_tool_completion(
                     client=client,
                     args=args,
-                    model_id=model_id,
+                    model_id=api_model_id,
                     messages=decision_messages,
                     tools=_controller_tools(),
                     tool_choice="required",
@@ -1299,7 +1318,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 content, _, used_in, used_out, duration, attempts = _chat_completion(
                     client=client,
                     args=args,
-                    model_id=model_id,
+                    model_id=api_model_id,
                     messages=decision_messages,
                     schema=DECISION_SCHEMA,
                     schema_name="scientific_agent_decision",
@@ -1451,7 +1470,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 ) = _native_tool_completion(
                     client=client,
                     args=args,
-                    model_id=model_id,
+                    model_id=api_model_id,
                     messages=messages,
                     tools=_artifact_tool(stage_schema),
                     tool_choice={
@@ -1481,7 +1500,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 content, _, used_in, used_out, duration, attempts = _chat_completion(
                     client=client,
                     args=args,
-                    model_id=model_id,
+                    model_id=api_model_id,
                     messages=messages,
                     schema=stage_schema,
                     schema_name=schema_name,
@@ -1591,6 +1610,8 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 "adapter_protocol_version": ADAPTER_PROTOCOL_VERSION,
                 "base_url": args.base_url,
                 "model_id": model_id,
+                "api_base_url": api_base_url,
+                "api_model_id": api_model_id,
                 "thinking_mode": args.thinking_mode,
                 "interaction_mode": args.interaction_mode,
                 "temperature": args.temperature,
