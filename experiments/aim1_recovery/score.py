@@ -39,13 +39,52 @@ def same_transcript_records(saved: Transcript, assembled: Transcript) -> bool:
     )
 
 
+def failed_run_score(job: dict, protocol: dict, failure: dict) -> dict:
+    """Retain a documented terminal failure without scoring its artifacts."""
+    if (
+        failure.get("retain_in_denominator") is not True
+        or failure.get("recovery_credit") is not False
+    ):
+        raise ValueError("Terminal failures must remain in the denominator with no recovery credit")
+    if not failure.get("reason") or failure.get("job_id") != job["job_id"]:
+        raise ValueError("Terminal failure needs a matching job ID and reason")
+    result = {
+        "scorer_version": protocol.get("scorer_version", LEGACY_SCORER_VERSION),
+        "primary_scoring_backend": "deterministic",
+        "dataset_id": job["dataset_id"],
+        "model_id": protocol["model_id"],
+        "harness_id": "work-structured-v2"
+        if protocol["backend"] == "work"
+        else "endpoint-structured-v2",
+        "evidence_design": "terminal failure; no claims evaluated",
+        "max_iterations": job["max_iterations"],
+        "submitted_iterations": len(list((Path(job["workspace"]) / "iterations").glob("*.json"))),
+        "structured_claims": 0,
+        "unique_structured_claims": 0,
+        "unstructured_claims": 0,
+        "per_association": [],
+        "claim_scores": [],
+        "terminal_failure": failure,
+    }
+    for prefix in ("primary", "strict", "confirmed", "interaction_confirmed"):
+        result[prefix + "_recovered"] = False
+        result[prefix + "_iteration"] = None
+    return result
+
+
 def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict:
     plan = json.loads(plan_path.read_text())
     version = plan["protocol"].get("scorer_version", LEGACY_SCORER_VERSION)
     v2 = version == SCORER_VERSION
     jobs = plan["jobs"]
+    failure_path = plan_path.parent / "terminal_failures.json"
+    failures = json.loads(failure_path.read_text()) if failure_path.exists() else {}
+    if not isinstance(failures, dict) or set(failures) - {j["job_id"] for j in jobs}:
+        raise ValueError("Terminal failure ledger contains unknown jobs or has invalid format")
     unfinished = [
-        j["job_id"] for j in jobs if not (Path(j["workspace"]) / "transcript.json").exists()
+        j["job_id"]
+        for j in jobs
+        if j["job_id"] not in failures and not (Path(j["workspace"]) / "transcript.json").exists()
     ]
     if unfinished and not allow_incomplete:
         raise ValueError(
@@ -57,7 +96,7 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
     rows = []
     for job in jobs:
         ws = Path(job["workspace"])
-        if not (ws / "transcript.json").exists():
+        if job["job_id"] not in failures and not (ws / "transcript.json").exists():
             continue
         if (
             sha(ws / "dataset.parquet") != job["data_sha256"]
@@ -67,32 +106,35 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
         for filename, expected in job.get("public_input_sha256", {}).items():
             if sha(ws / filename) != expected:
                 raise ValueError(f"Task input changed: {job['job_id']}/{filename}")
-        saved = Transcript.model_validate_json((ws / "transcript.json").read_text())
-        assembled = finalize_workspace(
-            ws, model_id=saved.model_id, harness_id=saved.harness_id, write_output=False
-        )
-        if not same_transcript_records(saved, assembled):
-            raise ValueError("Transcript differs from submitted records")
-        ev = Path(job["evaluator"])
-        if job["task"] not in cache:
-            manifest = DatasetManifest.model_validate_json((ev / "manifest.json").read_text())
-            frame = pd.read_parquet(ev / "evaluation.parquet")
-            mapping = json.loads((ev / "column_mapping.json").read_text())
-            source = next(s for s in plan["sources"] if s["task"] == job["task"])
-            if sha(ev / "evaluation.parquet") != source["evaluation_sha256"]:
-                raise ValueError("Evaluation data changed")
-            if sha(ev / "manifest.json") != source["manifest_sha256"]:
-                raise ValueError("Answer key changed")
-            cache[job["task"]] = (manifest, frame, mapping)
-        manifest, frame, mapping = cache[job["task"]]
-        scored = score_transcript(
-            manifest,
-            assembled,
-            frame,
-            column_mapping=mapping,
-            evidence_design="heldout_20_percent",
-            scorer_version=version,
-        )
+        if job["job_id"] in failures:
+            scored = failed_run_score(job, plan["protocol"], failures[job["job_id"]])
+        else:
+            saved = Transcript.model_validate_json((ws / "transcript.json").read_text())
+            assembled = finalize_workspace(
+                ws, model_id=saved.model_id, harness_id=saved.harness_id, write_output=False
+            )
+            if not same_transcript_records(saved, assembled):
+                raise ValueError("Transcript differs from submitted records")
+            ev = Path(job["evaluator"])
+            if job["task"] not in cache:
+                manifest = DatasetManifest.model_validate_json((ev / "manifest.json").read_text())
+                frame = pd.read_parquet(ev / "evaluation.parquet")
+                mapping = json.loads((ev / "column_mapping.json").read_text())
+                source = next(s for s in plan["sources"] if s["task"] == job["task"])
+                if sha(ev / "evaluation.parquet") != source["evaluation_sha256"]:
+                    raise ValueError("Evaluation data changed")
+                if sha(ev / "manifest.json") != source["manifest_sha256"]:
+                    raise ValueError("Answer key changed")
+                cache[job["task"]] = (manifest, frame, mapping)
+            manifest, frame, mapping = cache[job["task"]]
+            scored = score_transcript(
+                manifest,
+                assembled,
+                frame,
+                column_mapping=mapping,
+                evidence_design="heldout_20_percent",
+                scorer_version=version,
+            )
         scored.update({k: job[k] for k in ["job_id", "family", "task", "variant", "replicate"]})
         scores.append(scored)
         # Sensitivity changes overlap only, retaining the same evidence and alpha allocation.
@@ -130,6 +172,7 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
                 "strict_iteration",
             ]
         }
+        row["terminal_failure"] = job["job_id"] in failures
         row["recovery_at_95"] = at95
         if v2:
             for field in (
@@ -152,7 +195,7 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
         ]:
             if (ws / filename).exists():
                 shutil.copyfile(ws / filename, exported / filename)
-        if not (exported / "iterations").exists():
+        if (ws / "iterations").exists() and not (exported / "iterations").exists():
             shutil.copytree(ws / "iterations", exported / "iterations")
         # Preserve executable analyses and their output without duplicating the
         # input parquet, which is reproducible from the recorded source and split.
@@ -203,7 +246,9 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
     summary = {
         "complete": not unfinished,
         "n_expected": len(jobs),
-        "n_completed": len(frame),
+        "n_completed": len(frame) - len(failures),
+        "n_terminal": len(frame),
+        "terminal_failures": failures,
         "unfinished": unfinished,
         "protocol": plan["protocol"],
         "sources": plan["sources"],
@@ -223,6 +268,9 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
         "implementation_for_scoring.json",
         "environment.json",
         "verification.json",
+        "terminal_failures.json",
+        "runtime_reset_recovery.json",
+        "restoration_20260905.json",
     ]:
         source_path = plan_path.parent / filename
         if source_path.exists():
@@ -232,7 +280,11 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
         state = json.loads(state_path.read_text())
         summary["technical_interruptions"] = state.get("technical_interruptions", [])
         shutil.copyfile(state_path, out / state_path.name)
-        resumed = {j for event in summary["technical_interruptions"] for j in event["jobs"]}
+        resumed = {
+            j
+            for event in summary["technical_interruptions"]
+            for j in event.get("jobs", event.get("affected_jobs", []))
+        }
         sensitivity = []
         for (family, variant), group in frame.groupby(["family", "variant"]):
             uninterrupted = group[~group.job_id.isin(resumed)]
@@ -261,7 +313,10 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
         lines = [
             "# Aim 1 structured recovery v2",
             "",
-            f"Completed {len(frame)}/{len(jobs)} planned runs.",
+            f"Finalized {len(frame)}/{len(jobs)} planned attempts: "
+            f"{len(frame) - len(failures)} completed and "
+            f"{len(failures)} terminal failures. "
+            "Failures remain in every primary denominator with zero recovery credit.",
             "",
             "Primary recovery measures complete subgroup identity, correct "
             "outcome/exposure/direction "
@@ -305,12 +360,31 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
             f"Actual models: {summary['actual_models']}. "
             "See launch evidence and runtime metadata for capability/telemetry verification.",
         ]
+        if summary.get("validation_notes"):
+            lines += ["", "Restoration and protocol limitations", ""]
+            lines += [str(value) for value in summary["validation_notes"].values()]
+        if summary.get("technical_resume_sensitivity"):
+            lines += [
+                "",
+                "Sensitivity excluding documented or potentially reset-affected jobs",
+                "",
+                "| Family | Condition | Excluded | Remaining N | Identity | Strict |",
+                "|---|---|---:|---:|---:|---:|",
+            ]
+            for group in summary["technical_resume_sensitivity"]:
+                lines.append(
+                    f"| {group['family']} | {group['variant']} | {group['excluded_resumed_n']} | "
+                    f"{group['n']} | {group['primary_n']} | {group['strict_n']} |"
+                )
         (out / "report.md").write_text("\n".join(lines) + "\n")
         return summary
     lines = [
         "# Aim 1 structured recovery pilot",
         "",
-        f"Completed {len(frame)}/{len(jobs)} planned runs.",
+        f"Finalized {len(frame)}/{len(jobs)} planned attempts: "
+        f"{len(frame) - len(failures)} completed and "
+        f"{len(failures)} terminal failures. "
+        "Failures remain in every primary denominator with zero recovery credit.",
         "",
         f"Models recorded in transcripts: {', '.join(summary['actual_models'])}. "
         f"Harnesses: {', '.join(summary['actual_harnesses'])}.",
