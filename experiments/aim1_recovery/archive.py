@@ -11,8 +11,17 @@ import tarfile
 from pathlib import Path
 
 
-def pack(root: Path, archive_path: Path) -> None:
+def pack(root: Path, archive_path: Path, *, require_idle: bool = False) -> None:
     """Preserve private inputs and all research artifacts, omitting duplicate datasets."""
+    if require_idle:
+        state = json.loads((root / "coordinator_state.json").read_text())
+        active = [
+            job
+            for job, entry in state["jobs"].items()
+            if entry["status"] not in {"completed", "failed"}
+        ]
+        if active:
+            raise ValueError(f"Refusing checkpoint while workers are active: {active}")
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive_path, "w:gz") as archive:
         for source, prefix in [
@@ -63,12 +72,13 @@ def main() -> None:
     create = sub.add_parser("pack")
     create.add_argument("--root", type=Path, required=True)
     create.add_argument("--archive", type=Path, required=True)
+    create.add_argument("--require-idle", action="store_true")
     unpack = sub.add_parser("restore")
     unpack.add_argument("--archive", type=Path, required=True)
     unpack.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "pack":
-        pack(args.root, args.archive)
+        pack(args.root, args.archive, require_idle=args.require_idle)
         print(args.archive)
     else:
         print(restore(args.archive, args.out))

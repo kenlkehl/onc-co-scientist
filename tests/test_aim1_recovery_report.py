@@ -98,3 +98,18 @@ def test_terminal_failure_retains_denominator_without_reading_corrupt_claims(tmp
     ledger.write_text(json.dumps({"unknown_job": failure}))
     with pytest.raises(ValueError, match="unknown jobs"):
         score.generate(plan, tmp_path / "out2")
+
+
+def test_checkpoint_guard_preserves_existing_archive_while_workers_are_active(tmp_path):
+    from experiments.aim1_recovery.archive import pack
+
+    root = tmp_path / "experiment"
+    root.mkdir()
+    (root / "coordinator_state.json").write_text(
+        json.dumps({"jobs": {"job_0001": {"status": "running"}}})
+    )
+    archive = tmp_path / "checkpoint.tar.gz"
+    archive.write_bytes(b"previous verified checkpoint")
+    with pytest.raises(ValueError, match="workers are active"):
+        pack(root, archive, require_idle=True)
+    assert archive.read_bytes() == b"previous verified checkpoint"
