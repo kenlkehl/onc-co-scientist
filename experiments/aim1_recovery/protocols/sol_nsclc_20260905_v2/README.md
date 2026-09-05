@@ -14,7 +14,12 @@ Each research session is a fresh Sol 5.6 agent with medium reasoning and no
 inherited conversation. Work advertises priority service; per-response tier
 and token telemetry are unavailable. The coordinator previously inspected the
 Luna results and answer key; these are excluded from research-agent context.
-No scientific recovery scores are examined during formal dispatch.
+At launch, the plan specified no scientific recovery scoring during formal dispatch.
+The user subsequently requested interim discovery rates among completed runs.
+Those inspections are recorded in the results' `interim_inspections.jsonl`;
+workers received no outcome feedback, and inputs, scoring, dispatch order,
+sample size, and stopping rules stayed fixed. The original protocol and launch
+snapshot are retained unchanged.
 
 All original attempts are retained. Checkpoints are packed only when workers
 are idle. A technical interruption resumes the original work rather than
