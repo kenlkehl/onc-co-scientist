@@ -23,6 +23,17 @@ def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def same_transcript_records(saved: Transcript, assembled: Transcript) -> bool:
+    """Compare retained values without treating a failed analysis's NaN as a change.
+
+    Keep NaN distinct from null and finite values. The recovery scorer separately
+    rejects nonfinite evidence; this comparison only checks record consistency.
+    """
+    return json.dumps(saved.model_dump(mode="json"), sort_keys=True, allow_nan=True) == json.dumps(
+        assembled.model_dump(mode="json"), sort_keys=True, allow_nan=True
+    )
+
+
 def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict:
     plan = json.loads(plan_path.read_text())
     jobs = plan["jobs"]
@@ -50,7 +61,7 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
         assembled = finalize_workspace(
             ws, model_id=saved.model_id, harness_id=saved.harness_id, write_output=False
         )
-        if saved.model_dump() != assembled.model_dump():
+        if not same_transcript_records(saved, assembled):
             raise ValueError("Transcript differs from submitted records")
         ev = Path(job["evaluator"])
         if job["task"] not in cache:
@@ -211,6 +222,10 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
     supplemental = plan_path.parent / "supplemental_analysis_plan.json"
     if supplemental.exists():
         shutil.copyfile(supplemental, out / supplemental.name)
+    validation_notes = plan_path.parent / "validation_notes.json"
+    if validation_notes.exists():
+        summary["validation_notes"] = json.loads(validation_notes.read_text())
+        shutil.copyfile(validation_notes, out / validation_notes.name)
     (out / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n")
     pd.DataFrame(summaries).to_csv(out / "group_scores.csv", index=False)
     plot(frame, out, complete=not unfinished)
@@ -291,6 +306,11 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
         "and hashes are recorded separately in implementation_for_scoring.json; software "
         "versions are in environment.json. The frozen scientific criteria are in "
         "protocol.json.",
+        "",
+        "Validation notes, when present, are retained in validation_notes.json. Failed "
+        "analyses recorded as NaN remain unchanged in the original records and cannot "
+        "satisfy the finite-evidence requirement. Record comparison treats matching NaNs "
+        "as identical while distinguishing them from null and finite values.",
         "",
         "Work sessions share a filesystem; task isolation was implemented through separate "
         "copies and explicit instructions, not an OS access boundary. Archived cohorts and "

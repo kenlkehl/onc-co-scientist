@@ -258,3 +258,37 @@ def test_missing_and_nonbinary_exposure(scenario):
     df.loc[100, "t"] = 2
     with pytest.raises(ValueError, match="binary"):
         evaluate_finding(f, df)
+
+
+@pytest.mark.parametrize("field", ["p_value", "effect_estimate"])
+def test_nonfinite_discovery_analysis_cannot_confer_recovery(scenario, field):
+    from onc_co_scientist.harness.transcript import Transcript
+    from onc_co_scientist.scoring.structured_batch import score_transcript
+
+    df, _, manifest, finding = scenario
+    analysis = {
+        "hypothesis_ids": ["h1"],
+        "code": "# Retained executed analysis",
+        "result_summary": "Claimed support",
+        "p_value": 1e-10,
+        "effect_estimate": 5.0,
+        "significant": True,
+    }
+    payload = {
+        "dataset_id": manifest.dataset_id,
+        "model_id": "fixture",
+        "harness_id": "fixture",
+        "max_iterations": 1,
+        "iterations": [
+            {
+                "index": 1,
+                "proposed_hypotheses": [{"id": "h1", "text": "Claim", "finding": finding}],
+                "analyses": [analysis],
+            }
+        ],
+    }
+    assert score_transcript(manifest, Transcript.model_validate(payload), df)["primary_recovered"]
+    analysis[field] = float("nan")
+    scored = score_transcript(manifest, Transcript.model_validate(payload), df)
+    assert not scored["primary_recovered"]
+    assert not scored["claim_scores"][0]["training_evidence_present"]
