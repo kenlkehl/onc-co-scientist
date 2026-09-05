@@ -40,7 +40,7 @@ def same_transcript_records(saved: Transcript, assembled: Transcript) -> bool:
 
 
 def failed_run_score(job: dict, protocol: dict, failure: dict) -> dict:
-    """Retain a documented terminal technical failure without scoring its artifacts."""
+    """Retain a documented terminal failure without scoring its artifacts."""
     if (
         failure.get("retain_in_denominator") is not True
         or failure.get("recovery_credit") is not False
@@ -56,7 +56,7 @@ def failed_run_score(job: dict, protocol: dict, failure: dict) -> dict:
         "harness_id": "work-structured-v2"
         if protocol["backend"] == "work"
         else "endpoint-structured-v2",
-        "evidence_design": "terminal technical failure; no claims evaluated",
+        "evidence_design": "terminal failure; no claims evaluated",
         "max_iterations": job["max_iterations"],
         "submitted_iterations": len(list((Path(job["workspace"]) / "iterations").glob("*.json"))),
         "structured_claims": 0,
@@ -315,7 +315,7 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
             "",
             f"Finalized {len(frame)}/{len(jobs)} planned attempts: "
             f"{len(frame) - len(failures)} completed and "
-            f"{len(failures)} terminal technical failures. "
+            f"{len(failures)} terminal failures. "
             "Failures remain in every primary denominator with zero recovery credit.",
             "",
             "Primary recovery measures complete subgroup identity, correct "
@@ -383,7 +383,7 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
         "",
         f"Finalized {len(frame)}/{len(jobs)} planned attempts: "
         f"{len(frame) - len(failures)} completed and "
-        f"{len(failures)} terminal technical failures. "
+        f"{len(failures)} terminal failures. "
         "Failures remain in every primary denominator with zero recovery credit.",
         "",
         f"Models recorded in transcripts: {', '.join(summary['actual_models'])}. "
