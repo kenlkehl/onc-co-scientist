@@ -79,6 +79,17 @@ def main() -> None:
     p.add_argument("--python-timeout", type=float, default=30)
     args = p.parse_args()
     plan = json.loads(args.plan.read_text())
+    # Check completed jobs before filtering: otherwise a new backend/model could
+    # silently top up a partially completed experiment with mixed model labels.
+    for job in plan["jobs"]:
+        transcript_path = Path(job["workspace"]) / "transcript.json"
+        if transcript_path.exists():
+            saved = json.loads(transcript_path.read_text())
+            if saved.get("model_id") != args.model:
+                p.error(
+                    f"Existing {job['job_id']} used {saved.get('model_id')!r}; "
+                    "prepare a fresh experiment directory for a different model."
+                )
     jobs = [j for j in plan["jobs"] if not (Path(j["workspace"]) / "transcript.json").exists()]
     if args.limit is not None:
         jobs = jobs[: args.limit]

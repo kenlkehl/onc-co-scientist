@@ -186,6 +186,24 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
         state = json.loads(state_path.read_text())
         summary["technical_interruptions"] = state.get("technical_interruptions", [])
         shutil.copyfile(state_path, out / state_path.name)
+        resumed = {j for event in summary["technical_interruptions"] for j in event["jobs"]}
+        sensitivity = []
+        for (family, variant), group in frame.groupby(["family", "variant"]):
+            uninterrupted = group[~group.job_id.isin(resumed)]
+            sensitivity.append(
+                {
+                    "family": family,
+                    "variant": variant,
+                    "excluded_resumed_n": len(group) - len(uninterrupted),
+                    "n": len(uninterrupted),
+                    "primary_n": int(uninterrupted.primary_recovered.sum()),
+                    "strict_n": int(uninterrupted.strict_recovered.sum()),
+                }
+            )
+        summary["technical_resume_sensitivity"] = sensitivity
+    supplemental = plan_path.parent / "supplemental_analysis_plan.json"
+    if supplemental.exists():
+        shutil.copyfile(supplemental, out / supplemental.name)
     (out / "summary.json").write_text(json.dumps(summary, indent=2, allow_nan=False) + "\n")
     pd.DataFrame(summaries).to_csv(out / "group_scores.csv", index=False)
     plot(frame, out, complete=not unfinished)
@@ -228,6 +246,19 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
             "without recovery feedback. Some required a replacement agent context when the "
             "original runtime session became unavailable.",
         ]
+        lines += [
+            "",
+            "Sensitivity excluding jobs that required replacement agent contexts "
+            "(the primary figure retains all planned runs):",
+            "",
+            "| Family | Condition | Excluded | Remaining N | Primary | Strict |",
+            "|---|---|---:|---:|---:|---:|",
+        ]
+        for g in summary["technical_resume_sensitivity"]:
+            lines.append(
+                f"| {g['family']} | {g['variant']} | {g['excluded_resumed_n']} | "
+                f"{g['n']} | {g['primary_n']}/{g['n']} | {g['strict_n']}/{g['n']} |"
+            )
     lines += [
         "",
         "Primary recovery requires the complete defining structure, subgroup precision and "
