@@ -13,6 +13,7 @@ sys.path.insert(0, str(EXPERIMENT))
 import freeze_provenance as freeze_module  # noqa: E402
 import prepare_experiment as prepare_module  # noqa: E402
 import prepare_vllm_experiment as prepare_vllm_module  # noqa: E402
+from gate_validation import require_codex_command_locks  # noqa: E402
 from prepare_experiment import (  # noqa: E402
     EXPECTED_HASHES,
     EXPECTED_SHAPE,
@@ -186,6 +187,58 @@ def test_vllm_prepare_applies_endpoint_model_identity_override() -> None:
 
     assert config["models"][0]["model_id"] == "served/model-id"
     assert config["models"][0]["id"] == "experiment-profile"
+
+
+def test_gate_command_validation_preserves_quoted_environment_locks() -> None:
+    site_packages = "/home/example/thisenv/lib/python3.13/site-packages"
+    memory_assignment = '"OCS_ANALYSIS_MEMORY_LIMIT_MB"="4096"'
+    command = [
+        "/opt/codex/bin/codex.js",
+        "exec",
+        "--model",
+        "gpt-5.6-luna",
+        "-c",
+        "model_reasoning_effort=medium",
+        "-c",
+        'service_tier="fast"',
+        "-c",
+        (
+            'shell_environment_policy={inherit="none",set={'
+            f'"PYTHONPATH"="{site_packages}",'
+            f"{memory_assignment}" + "}}"
+        ),
+    ]
+
+    # This demonstrates the old false negative: json.dumps escapes the quotes.
+    assert memory_assignment not in json.dumps(command)
+    require_codex_command_locks(
+        command,
+        context=Path("call_0001"),
+        pinned_executable="/opt/codex/bin/codex.js",
+        model_id="gpt-5.6-luna",
+        reasoning_effort="medium",
+        service_tier="fast",
+        required_paths=(site_packages,),
+        forbidden_paths=("/repo/.venv",),
+        required_environment={"OCS_ANALYSIS_MEMORY_LIMIT_MB": "4096"},
+    )
+
+    missing_guard = [
+        argument.replace(memory_assignment, '"OTHER_LIMIT"="4096"')
+        for argument in command
+    ]
+    with pytest.raises(RuntimeError, match="Missing environment lock"):
+        require_codex_command_locks(
+            missing_guard,
+            context=Path("call_0001"),
+            pinned_executable="/opt/codex/bin/codex.js",
+            model_id="gpt-5.6-luna",
+            reasoning_effort="medium",
+            service_tier="fast",
+            required_paths=(site_packages,),
+            forbidden_paths=("/repo/.venv",),
+            required_environment={"OCS_ANALYSIS_MEMORY_LIMIT_MB": "4096"},
+        )
 
 
 def test_qwen38_vllm_v2_template_locks_controller_sampling_and_isolation() -> None:
