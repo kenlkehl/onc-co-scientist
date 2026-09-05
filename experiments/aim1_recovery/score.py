@@ -177,7 +177,14 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
             "results."
         ),
     }
-    for filename in ["plan.json", "protocol.json", "implementation_at_launch.json"]:
+    for filename in [
+        "plan.json",
+        "protocol.json",
+        "implementation_at_launch.json",
+        "implementation_for_scoring.json",
+        "environment.json",
+        "verification.json",
+    ]:
         source_path = plan_path.parent / filename
         if source_path.exists():
             shutil.copyfile(source_path, out / filename)
@@ -280,6 +287,11 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
         "selected during development after inspecting archived examples and frozen before "
         "fresh experiments; this is not an independently preregistered validation.",
         "",
+        "The retained launch hashes are historical. The scoring implementation commit "
+        "and hashes are recorded separately in implementation_for_scoring.json; software "
+        "versions are in environment.json. The frozen scientific criteria are in "
+        "protocol.json.",
+        "",
         "Work sessions share a filesystem; task isolation was implemented through separate "
         "copies and explicit instructions, not an OS access boundary. Archived cohorts and "
         "public column/value semantics were retained, including category labels in masked "
@@ -314,7 +326,7 @@ def plot(frame: pd.DataFrame, out: Path, *, complete: bool) -> None:
     )
     fig, axes = plt.subplots(1, 2, figsize=(8.4, 3.65), sharey=True)
     for ax, family, title in zip(
-        axes, ["clinical", "depmap"], ["Clinical cohorts", "DepMap cohort"], strict=True
+        axes, ["clinical", "depmap"], ["A  Clinical cohorts", "B  DepMap cohort"], strict=True
     ):
         part = frame[frame.family.eq(family)]
         for offset, variant in zip([-0.18, 0.18], ["named", "anonymized"], strict=True):

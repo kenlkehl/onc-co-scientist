@@ -109,10 +109,12 @@ def scenario():
     return df, spec, manifest, finding
 
 
-def test_exact_and_masked_invariant(scenario):
+@pytest.mark.parametrize("cutoff", [1.0, 0.95, 0.819])
+def test_exact_and_approximate_masked_invariant(scenario, cutoff):
     import copy
 
     df, spec, manifest, f = scenario
+    f["subgroup"][-1]["value"] = cutoff
     named = score_finding(f, spec, manifest, df)
     mapping = {
         "x": "feature_1",
@@ -128,7 +130,8 @@ def test_exact_and_masked_invariant(scenario):
         p["column"] = mapping[p["column"]]
     scored = score_finding(masked, spec, manifest, df, column_mapping=mapping)
     assert named == scored
-    assert scored["recovered"] and scored["strict_match"]
+    assert scored["strict_match"] is (cutoff == 1.0)
+    assert scored["recovered"] is (cutoff >= 0.95)
     # A named finding stays named even when a map is supplied.
     assert score_finding(f, spec, manifest, df, column_mapping=mapping) == named
 
