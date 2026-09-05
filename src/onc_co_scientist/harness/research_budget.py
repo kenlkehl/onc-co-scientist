@@ -7,6 +7,8 @@ scientific originality or equal token/compute use across agents.
 from __future__ import annotations
 
 import hashlib
+import json
+from datetime import datetime
 from pathlib import Path
 
 from .transcript import IterationRecord
@@ -14,7 +16,9 @@ from .transcript import IterationRecord
 ACTIONS = {"screen", "multivariable", "refine", "robustness"}
 
 
-def validate_step(root: Path, record: IterationRecord, prior: list[dict]) -> dict[str, str]:
+def validate_step(
+    root: Path, record: IterationRecord, prior: list[dict], *, sequential_outputs: bool = False
+) -> dict[str, str]:
     step = record.model_extra.get("research_step", {})
     if not isinstance(step, dict) or step.get("action") not in ACTIONS:
         raise ValueError("research_step.action must be screen, multivariable, refine or robustness")
@@ -42,6 +46,26 @@ def validate_step(root: Path, record: IterationRecord, prior: list[dict]) -> dic
             and hashlib.sha256((root / old).read_bytes()).hexdigest() == hashes[step["script_path"]]
         ):
             raise ValueError("exact script reuse does not count as a new research iteration")
+        if sequential_outputs:
+            old_output = previous.get("research_step", {}).get("output_path")
+            if (
+                old_output
+                and (root / old_output).resolve() == (root / step["output_path"]).resolve()
+            ):
+                raise ValueError("each iteration requires a separate saved output file")
+    if sequential_outputs and record.index > 1:
+        events = [
+            json.loads(line) for line in (root / "submission_events.jsonl").read_text().splitlines()
+        ]
+        previous_event = next((e for e in events if e["index"] == record.index - 1), None)
+        if previous_event is None:
+            raise ValueError("previous submission receipt is missing")
+        previous_time = datetime.fromisoformat(previous_event["utc"]).timestamp()
+        if (root / step["output_path"]).stat().st_mtime < previous_time - 0.01:
+            raise ValueError(
+                "analysis output predates the previous submission; execute this iteration's "
+                "analysis after submitting the preceding iteration and save its own output"
+            )
     return hashes
 
 

@@ -237,7 +237,12 @@ class StructuredRunner:
         artifact_hashes = None
         if metadata.get("fixed_research_budget"):
             try:
-                artifact_hashes = validate_step(self.workspace, record, submitted)
+                artifact_hashes = validate_step(
+                    self.workspace,
+                    record,
+                    submitted,
+                    sequential_outputs=metadata.get("require_sequential_outputs", False),
+                )
             except (ValueError, OSError) as exc:
                 return f"format error: {exc}"
         path = self.workspace / "iterations"
@@ -436,7 +441,10 @@ def finalize_workspace(
                 raise ValueError("iteration integrity event missing or mismatched")
             if meta.get("fixed_research_budget"):
                 artifact_hashes = validate_step(
-                    root, record, [r.model_dump() for r in records if r.index < record.index]
+                    root,
+                    record,
+                    [r.model_dump() for r in records if r.index < record.index],
+                    sequential_outputs=meta.get("require_sequential_outputs", False),
                 )
                 event = next(e for e in entries if e["index"] == record.index)
                 if event.get("research_artifact_sha256") != artifact_hashes:

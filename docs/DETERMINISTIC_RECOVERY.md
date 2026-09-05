@@ -167,6 +167,13 @@ originality, prove execution, or establish equal token/compute budgets. Review
 a separate setup pilot for protocol adherence and stopping behavior before
 launching the formal batch, without selecting or tuning on recovery outcomes.
 
+New prepared workspaces also set `require_sequential_outputs=true`. They reject
+reused output paths and output files predating the preceding submission receipt
+(10 ms filesystem timestamp tolerance). This catches accidental backfilling at
+submission time. Earlier workspaces remain readable under their recorded
+metadata. The first priority setup pilot exposed one such sequencing error;
+its original records are retained, and a separate setup repeat tests the guard.
+
 ### User-provided endpoint, including vLLM
 
 Use a **new** prepared experiment directory for a different model/backend:

@@ -1,4 +1,5 @@
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -142,4 +143,53 @@ def test_endpoint_continues_after_attempted_early_finish(tmp_path, monkeypatch):
     transcript = runner.run()
     assert len(transcript.iterations) == 4
     assert "fixed research budget requires 4" in requests[1][-1]["content"]
+    assert len(finalize_workspace(tmp_path, write_output=False).iterations) == 4
+
+
+def test_new_protocol_rejects_precomputed_and_reused_outputs(tmp_path):
+    (tmp_path / "metadata.json").write_text(
+        json.dumps(
+            dict(
+                dataset_id="d",
+                max_iterations=4,
+                fixed_research_budget=True,
+                require_sequential_outputs=True,
+            )
+        )
+    )
+    runner = StructuredRunner(tmp_path, base_url="http://localhost", model="m")
+    prior = []
+    for i, action in enumerate(("screen", "multivariable", "refine", "robustness"), 1):
+        script, output = f"step{i}.py", f"step{i}.txt"
+        (tmp_path / script).write_text(f"print({i})\n")
+        (tmp_path / output).write_text(f"{i}\n")
+        record = dict(
+            index=i,
+            research_step=dict(
+                action=action, rationale=f"Question {i}", script_path=script, output_path=output
+            ),
+            proposed_hypotheses=[
+                dict(
+                    id=f"h{i}",
+                    text="Candidate",
+                    finding=dict(
+                        outcome="y",
+                        exposure=None,
+                        contrast="subgroup_difference",
+                        direction=1,
+                        subgroup=[],
+                    ),
+                )
+            ],
+            analyses=[dict(hypothesis_ids=[f"h{i}"], code=script, result_summary="Result")],
+        )
+        if i == 2:
+            record["research_step"]["output_path"] = "step1.txt"
+            assert "separate saved output" in runner._submit(record, prior, 4)
+            record["research_step"]["output_path"] = output
+            os.utime(tmp_path / output, (1, 1))
+            assert "predates the previous submission" in runner._submit(record, prior, 4)
+            assert not (tmp_path / "iterations/002.json").exists()
+            (tmp_path / output).write_text("fresh output\n")
+        assert runner._submit(record, prior, 4).startswith("Accepted")
     assert len(finalize_workspace(tmp_path, write_output=False).iterations) == 4

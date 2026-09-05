@@ -18,6 +18,7 @@ def pack(root: Path, archive_path: Path) -> None:
         for source, prefix in [
             (root, "experiment"),
             (root.with_name(root.name + "_setup"), "excluded_setup"),
+            (root.with_name(root.name + "_setup_sequence"), "setup_sequence"),
         ]:
             if not source.exists():
                 continue

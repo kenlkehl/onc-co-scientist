@@ -143,6 +143,7 @@ def prepare(
             "reasoning_effort": reasoning_effort,
             "service_tier": service_tier,
             "fixed_research_budget": True,
+            "require_sequential_outputs": True,
             "job_id": job["job_id"],
             "python": str(python.absolute()),
         }
@@ -199,7 +200,11 @@ def prepare(
             "multivariable, refine, or robustness), rationale, script_path, and output_path. "
             "Save and execute a separate substantive script for that iteration and save its "
             "output BEFORE submitting. Use workspace-relative paths and reference script_path "
-            "in the linked analysis code field. Preserve submitted scripts and outputs. All four "
+            "in the linked analysis code field. Preserve submitted scripts and outputs. The "
+            "research_step rationales should describe their specific iteration's question and "
+            "how earlier results motivated it where relevant; avoid generic repeated rationales. "
+            "Each output file must be distinct and generated after the preceding iteration was "
+            "submitted; precomputed output or a reused output file will be rejected. All four "
             "actions must appear before finalization; empty iterations or identical script reuse "
             "are rejected. A negative result is useful; do not manufacture significant findings. "
             "The supplied transcript_example.json uses fictional columns to illustrate the "
@@ -277,6 +282,10 @@ def prepare(
             "returned endpoint telemetry when available"
         ),
         "fixed_research_budget": {"clinical": 25, "depmap": 10},
+        "submission_integrity": (
+            "Distinct outputs generated after the preceding submission; 10ms filesystem "
+            "timestamp tolerance; not proof of execution or an adversarial boundary"
+        ),
         "budget_limitations": (
             "Matched iteration budgets and required research actions; not equal "
             "tokens, compute, or proof of scientific originality"
