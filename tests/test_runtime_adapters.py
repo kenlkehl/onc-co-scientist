@@ -16,10 +16,34 @@ from onc_co_scientist.harness.runtime import (
     CliJsonRuntime,
     ScientificClaim,
     SubgroupPredicate,
+    _runtime_environment,
     build_pi_command,
     parse_agent_artifact,
     run_subprocess_in_group,
 )
+
+
+def test_runtime_inherits_vllm_transport_failover_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "OCS_VLLM_BASE_URL_OVERRIDE", "http://172.24.216.113:8001/v1"
+    )
+    monkeypatch.setenv("OCS_VLLM_MODEL_ID_OVERRIDE", "gemma4-31b")
+
+    environment = _runtime_environment(
+        ModelSpec(
+            id="test",
+            model_id="test-model",
+            adapter="cli-json",
+            command=["true"],
+        )
+    )
+
+    assert environment["OCS_VLLM_BASE_URL_OVERRIDE"] == (
+        "http://172.24.216.113:8001/v1"
+    )
+    assert environment["OCS_VLLM_MODEL_ID_OVERRIDE"] == "gemma4-31b"
 
 
 def test_parse_agent_artifact_accepts_fenced_or_plain_output() -> None:
