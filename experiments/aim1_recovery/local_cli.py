@@ -77,6 +77,7 @@ def prepare_local(
                 "src/onc_co_scientist/harness/treatment_roles.py",
                 "src/onc_co_scientist/harness/task_spec.py",
                 "src/onc_co_scientist/harness/templates/agent_instructions.md.j2",
+                "src/onc_co_scientist/synthetic/anonymize.py",
                 "src/onc_co_scientist/scoring/deterministic.py",
                 "src/onc_co_scientist/scoring/structured_batch.py",
             )

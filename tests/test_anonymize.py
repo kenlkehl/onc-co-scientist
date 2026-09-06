@@ -10,10 +10,14 @@ description-leak prevention, and bundle IO.
 import json
 import re
 
+import pandas as pd
+import pytest
+
 from onc_co_scientist.harness.task_spec import build_task
 from onc_co_scientist.synthetic.anonymize import (
     anonymize_bundle,
     build_column_mapping,
+    extend_outcome_mapping,
 )
 from onc_co_scientist.synthetic.generator import GeneratorConfig, generate_dataset
 from onc_co_scientist.synthetic.io import (
@@ -188,6 +192,41 @@ def test_anonymize_seed_changes_assignments():
     assert set(mapping_a) == set(mapping_b)
     # Same set of new names (the prefix scheme is identical).
     assert set(mapping_a.values()) == set(mapping_b.values())
+
+
+@pytest.mark.parametrize("profile", [
+    "depmap", "nsclc_depmap", "crc_depmap", "breast_depmap", "prostate_depmap", "aml_depmap",
+])
+def test_depmap_masks_outcomes_and_preserves_private_manifest_and_values(profile):
+    bundle = generate_dataset(_small_buried_config(cancer_type=profile))
+    anon, mapping = anonymize_bundle(bundle, seed=42)
+    assert mapping == anonymize_bundle(bundle, seed=42)[1]
+    assert mapping != anonymize_bundle(bundle, seed=43)[1]
+    features = build_column_mapping(
+        list(bundle.frame.columns), bundle.manifest.outcome_columns,
+        id_columns=tuple(bundle.manifest.id_columns), seed=42,
+    )
+    assert all(mapping[key] == value for key, value in features.items())
+    expected_outcomes = [mapping[name] for name in bundle.manifest.outcome_columns]
+    assert anon.manifest.outcome_columns == expected_outcomes
+    assert all(re.fullmatch(r"outcome_\d{3,}", name) for name in expected_outcomes)
+    assert not set(bundle.manifest.outcome_columns) & set(anon.frame.columns)
+    assert set(expected_outcomes) <= set(anon.frame.columns)
+    assert not set(expected_outcomes) & set(anon.manifest.covariate_columns)
+    assert anon.manifest.treatment_columns == []
+    for original, renamed in zip(
+        bundle.manifest.associations, anon.manifest.associations, strict=True
+    ):
+        assert renamed.outcome == mapping[original.outcome]
+        assert renamed.outcome in renamed.variables
+        assert set(renamed.variables) <= set(anon.frame.columns)
+    for outcome in bundle.manifest.outcome_columns:
+        assert outcome not in anon.public_description
+    assert "### Dependency outcomes" in anon.public_description
+    pd.testing.assert_frame_equal(
+        bundle.frame, anon.frame.rename(columns={v: k for k, v in mapping.items()})
+    )
+    assert extend_outcome_mapping(mapping, bundle.manifest.outcome_columns, seed=99) == mapping
 
 
 def test_build_task_against_anonymized_bundle_reads_renamed_columns(tmp_path):

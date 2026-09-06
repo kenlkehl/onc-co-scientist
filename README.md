@@ -11,7 +11,7 @@ The benchmark asks: when an agentic harness analyzes a synthetic oncology datase
 
 - **Synthetic dataset generator (Aim 1.1).** Clinical profiles contain 50,000 patients by default; DepMap profiles contain 2,000 models each (10,000 model records across NSCLC, CRC, breast, prostate, and AML). The DepMap generator includes lineage-aware demographics, growth pattern, coherent omics and overlapping CRISPR-library profiles, and correlated screen-QC measures calibrated to DepMap Public 26Q1. Each bundle contains a single buried multi-feature finding: a treatment exceptional only inside a 3-4 feature conjunction for clinical cohorts, or a gene dependency concentrated in a multi-feature cell-line subgroup for DepMap profiles. Each bundle ships in two parallel forms:
   - `named/` — real clinical column names.
-  - `anonymized/` — non-outcome columns renamed to `feature_NNN`.
+  - `anonymized/` — predictors renamed to `feature_NNN`; DepMap gene dependency outcomes also renamed to `outcome_NNN`. Clinical outcome names and identifiers are preserved.
 - **Harness-agnostic task builder (Aim 1.2).** Emits a generic data-mining brief that any external agent (Claude Code, Codex, custom ReAct, …) can execute against a parquet file.
 - **Deterministic recovery scorer (Aim 1.2 primary).** Agents submit explicit structured findings during research. Version 2 scores complete hypothesis identity and reports statistical confirmation separately; subgroup treatment effects and treatment interactions both qualify for clinical identity. Version 1 remains reproducible. Optional LLM novelty scoring remains separate. Named and anonymized runs use the same canonical rules. See [deterministic recovery and backend instructions](docs/DETERMINISTIC_RECOVERY.md).
 - **Structured research runners.** Prepared jobs support fresh Luna subagents in ChatGPT Work or a user-provided OpenAI-compatible endpoint, including vLLM. Both emit the same structured iteration records. See [the Aim 1 pilot runner](experiments/aim1_recovery/run_batch.py).
@@ -93,7 +93,7 @@ Per dataset profile, this writes:
 │       └── dataset_description.md
 └── anonymized/
     ├── manifest.json
-    ├── column_mapping.json              # real → feature_NNN map
+    ├── column_mapping.json              # real → opaque feature/outcome map
     └── public/
         ├── dataset.parquet              # agent-safe; opaque names
         └── dataset_description.md
@@ -103,6 +103,14 @@ Use `--cancer-types nsclc_clinical,crc_depmap` (etc.) to restrict the run, or `-
 
 For a reproducible aggregate report across the five generated DepMap profiles,
 run `python scripts/summarize_depmap_metadata.py <synth-output-root>`.
+
+Masked DepMap descriptions identify which opaque columns are dependency outcomes
+and explain that more negative scores mean stronger dependency after knockout.
+They do not name the knocked-out genes. The private mapping and manifest include
+the outcome aliases so named and masked findings can be scored equivalently.
+This applies to newly generated bundles and newly prepared Aim 1 experiments;
+historical bundles and frozen runs keep their original naming scheme. When using
+the generic task builder with an older bundle, regenerate its masked twin first.
 
 #### DepMap metadata calibration
 

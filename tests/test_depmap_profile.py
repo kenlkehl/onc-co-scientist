@@ -125,7 +125,9 @@ def test_depmap_anonymized_description_and_task_prompt_use_cell_line_context(tmp
     anon_desc = read_description(anon_dir).lower()
     assert "crispr knockout dependency screen" in anon_desc
     assert "feature_001" in anon_desc
-    assert "dependency_kif18a" in anon_desc
+    assert "dependency_kif18a" not in anon_desc
+    assert "outcome_001" in anon_desc
+    assert "more negative dependency scores indicate stronger dependency" in anon_desc
     assert "apc_mutation" not in anon_desc
     assert "commercial healthcare" not in anon_desc
 
@@ -146,6 +148,14 @@ def test_depmap_anonymized_description_and_task_prompt_use_cell_line_context(tmp
     assert "wnt_activity_score" not in example
     assert "colorectal" not in example
     assert "treatment_pembrolizumab" not in example
+
+    masked_task = build_task(anon_dir, tmp_path / "masked_task", max_iterations=3)
+    for path in (
+        masked_task.instructions_path, masked_task.description_path, masked_task.example_path
+    ):
+        text = path.read_text()
+        for outcome in bundle.manifest.outcome_columns:
+            assert outcome not in text
 
 
 def test_depmap_buried_dependency_scores_with_existing_matcher():

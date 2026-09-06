@@ -26,6 +26,19 @@ DepMap has no treatment columns and receives no treatment-role section.
 The disclosure is recorded as `explicit-treatment-columns-v1` in new Aim 1
 protocols and metadata. Existing runs retain their original inputs and scores.
 
+New masked DepMap inputs also hide knockout target identities: dependency outcomes
+use `outcome_NNN` aliases, while predictors use `feature_NNN`. Their public
+description retains the dependency-outcome role and score direction. Clinical
+outcome names remain visible. The private column mapping covers both predictors
+and dependency outcomes, and scoring canonicalizes the submitted outcome before
+checking identity or computing evidence on the named evaluation data.
+
+Aim 1 preparation upgrades older feature-only masked DepMap source bundles in the
+new experiment's copies, preserves feature aliases and data values, and freezes
+the expanded private mapping. It records `depmap-features-and-outcomes-v1`, the
+outcome masking seed, and the mapping hash. It does not rewrite archived sources
+or previous experiments. Already masked outcome aliases are preserved.
+
 A finding specifies `outcome`, nullable `exposure`, `contrast`, signed `direction`
 (-1, 0, 1), and a conjunction of `subgroup` predicates. Predicates contain
 `column`, `operator`, and `value`. The schema admits equality, inequality,

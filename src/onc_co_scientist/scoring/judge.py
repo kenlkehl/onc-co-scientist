@@ -124,9 +124,9 @@ A hypothesis MATCHES if all the following hold:
 1. It points at the same set of feature/variable column(s) and the same \
 outcome column listed in the spec. Each variable below is shown with \
 both its clinical name and the corresponding anonymized identifier \
-(``feature_NNN``) where applicable; the analyst was given only one of \
+(``feature_NNN`` or ``outcome_NNN``) where applicable; the analyst was given only one of \
 these two name spaces, so a hypothesis that uses either name is referring \
-to the same underlying column. Treat clinical names and ``feature_NNN`` \
+to the same underlying column. Treat the paired original names and opaque \
 identifiers as fully interchangeable.
 2. It describes (or proposes to investigate) the same relationship. \
 Paraphrasing, synonyms, brand-vs-generic names, and mechanism-class \
@@ -205,9 +205,8 @@ def _bilingual_name(
     sides are available; otherwise return ``col`` verbatim.
 
     ``forward`` is ``{clinical → feature_NNN}``; ``inverse`` is its reverse.
-    Outcome and id columns are excluded from anonymization (they appear
-    verbatim in both spaces) and so end up in neither map — those return
-    ``col`` unchanged.
+    Dependency outcomes also have aliases (``outcome_NNN``). Clinical outcomes
+    and identifiers are preserved and return ``col`` unchanged.
     """
     if forward is None:
         return col
@@ -233,7 +232,7 @@ def _render_spec_block(
     inverse = {v: k for k, v in column_mapping.items()} if column_mapping is not None else None
 
     lines: list[str] = []
-    lines.append(f"- Outcome column: {spec.outcome}")
+    lines.append(f"- Outcome column: {_bilingual_name(spec.outcome, column_mapping, inverse)}")
     lines.append("- Variables involved:")
     for v in spec.variables:
         lines.append(f"    * {_bilingual_name(v, column_mapping, inverse)}")

@@ -23,6 +23,11 @@ from onc_co_scientist.harness.treatment_roles import (
     TREATMENT_ROLE_VERSION,
     visible_treatment_columns,
 )
+from onc_co_scientist.synthetic.anonymize import (
+    DEPMAP_MASKING_VERSION,
+    extend_outcome_mapping,
+    masked_depmap_description,
+)
 
 
 def digest(path: Path) -> str:
@@ -80,6 +85,18 @@ def prepare(
         named = pd.read_parquet(source / "named/public/dataset.parquet")
         masked = pd.read_parquet(source / "anonymized/public/dataset.parquet")
         mapping = json.loads((source / "anonymized/column_mapping.json").read_text())
+        manifest = json.loads((source / "named/manifest.json").read_text())
+        kind = manifest.get(
+            "dataset_kind", "crispr_depmap" if family == "depmap" else "clinical_cohort"
+        )
+        # Upgrade fresh experiments sourced from older feature-only masked bundles.
+        # Preserve the archive and freeze the expanded mapping with this experiment.
+        if kind == "crispr_depmap":
+            expanded = extend_outcome_mapping(mapping, manifest["outcome_columns"], seed=seed)
+            masked = masked.rename(columns={
+                mapping.get(name, name): expanded[name] for name in manifest["outcome_columns"]
+            })
+            mapping = expanded
         inverse = {v: k for k, v in mapping.items()}
         pd.testing.assert_frame_equal(named, masked.rename(columns=inverse)[named.columns])
         rng = np.random.default_rng(seed)
@@ -90,7 +107,7 @@ def prepare(
         ev.mkdir(parents=True, exist_ok=True)
         named.iloc[heldout].to_parquet(ev / "evaluation.parquet", index=False)
         shutil.copyfile(source / "named/manifest.json", ev / "manifest.json")
-        shutil.copyfile(source / "anonymized/column_mapping.json", ev / "column_mapping.json")
+        write_json(ev / "column_mapping.json", mapping)
         write_json(
             ev / "split.json",
             {
@@ -100,8 +117,6 @@ def prepare(
                 "index_basis": "original zero-based row",
             },
         )
-        manifest = json.loads((ev / "manifest.json").read_text())
-        kind = "crispr_depmap" if family == "depmap" else "clinical_cohort"
         for variant, frame in (("named", named), ("anonymized", masked)):
             treatment_columns = visible_treatment_columns(
                 manifest["treatment_columns"], list(frame.columns),
@@ -109,6 +124,17 @@ def prepare(
             )
             discfile = ev / f"discovery_{variant}.parquet"
             frame.iloc[discovery].to_parquet(discfile, index=False)
+            outcomes = [
+                mapping.get(column, column) if variant == "anonymized" else column
+                for column in manifest["outcome_columns"]
+            ]
+            description = source / variant / "public/dataset_description.md"
+            if kind == "crispr_depmap" and variant == "anonymized":
+                description = ev / "masked_dataset_description.md"
+                description.write_text(masked_depmap_description(
+                    manifest["dataset_id"], len(discovery), list(frame.columns), outcomes,
+                    tuple(manifest.get("id_columns", ["cell_line_id"])),
+                ) + "\n")
             for repeat in range(1, repeats + 1):
                 jobs.append(
                     {
@@ -120,10 +146,14 @@ def prepare(
                         "dataset_id": manifest["dataset_id"],
                         "dataset_kind": kind,
                         "treatment_columns": treatment_columns,
-                        "discovery_source": str(discfile.resolve()),
-                        "description_source": str(
-                            (source / variant / "public/dataset_description.md").resolve()
+                        "outcome_columns": outcomes,
+                        "outcome_masking": (
+                            DEPMAP_MASKING_VERSION
+                            if kind == "crispr_depmap" and variant == "anonymized"
+                            else "original-outcome-names"
                         ),
+                        "discovery_source": str(discfile.resolve()),
+                        "description_source": str(description.resolve()),
                         "evaluator": str(ev.resolve()),
                     }
                 )
@@ -134,6 +164,7 @@ def prepare(
                 "source": str(source.relative_to(repo)),
                 "source_sha256": digest(source / "named/public/dataset.parquet"),
                 "manifest_sha256": digest(ev / "manifest.json"),
+                "column_mapping_sha256": digest(ev / "column_mapping.json"),
                 "evaluation_sha256": digest(ev / "evaluation.parquet"),
                 "source_n": len(named),
                 "discovery_n": len(discovery),
@@ -162,6 +193,8 @@ def prepare(
             "job_id": job["job_id"],
             "python": str(python.absolute()),
             "treatment_columns": job["treatment_columns"],
+            "outcome_columns": job["outcome_columns"],
+            "outcome_masking": job["outcome_masking"],
             "treatment_role_version": TREATMENT_ROLE_VERSION,
         }
         write_json(ws / "metadata.json", metadata)
@@ -291,6 +324,8 @@ def prepare(
         "scorer_version": "structured-recovery-v2",
         "treatment_role_version": TREATMENT_ROLE_VERSION,
         "treatment_role_disclosure": "All treatment columns, using only public column names",
+        "depmap_masking_version": DEPMAP_MASKING_VERSION,
+        "outcome_masking_seed": seed,
         "split_seed": seed,
         "discovery_fraction": 0.8,
         "model_id": model,

@@ -44,6 +44,14 @@ def _spec(
     )
 
 
+@pytest.mark.parametrize("outcome", ["dependency_KIF18A", "outcome_003"])
+def test_match_prompt_resolves_masked_dependency_outcome(outcome):
+    spec = _spec(outcome=outcome, variables=["apc_mutation"])
+    mapping = {"dependency_KIF18A": "outcome_003", "apc_mutation": "feature_001"}
+    block = judge_module._render_spec_block(spec, "anonymized", mapping)
+    assert "Outcome column: dependency_KIF18A (anonymized: outcome_003)" in block
+
+
 def test_extract_json_array_handles_plain_array():
     payload = '[{"is_novel": true, "rationale": "x"}]'
     assert _extract_json_array(payload) == [{"is_novel": True, "rationale": "x"}]

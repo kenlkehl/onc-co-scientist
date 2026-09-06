@@ -1,8 +1,9 @@
 """Produce an anonymized twin of a ``DatasetBundle``.
 
-The anonymized variant preserves rows, outcome column names, and identifier
-columns verbatim while renaming every other column to a deterministic ``feature_NNN``
-identifier. The same generated bundle can therefore be served in two parallel
+The anonymized variant preserves rows, clinical outcome names, and identifier
+columns while renaming predictors to deterministic ``feature_NNN`` identifiers.
+DepMap dependency outcomes are also masked, using ``outcome_NNN`` identifiers.
+The same generated bundle can therefore be served in two parallel
 forms — one with real clinical names, one stripped of any semantic prior — so
 the eval can compare an agent's behaviour with and without domain anchoring.
 
@@ -22,6 +23,7 @@ from .generator import DatasetBundle, GeneratorConfig
 from .schemas import AssociationSpec, DatasetManifest, SubgroupSpec
 
 DEFAULT_ID_COLUMNS: tuple[str, ...] = ("patient_id",)
+DEPMAP_MASKING_VERSION = "depmap-features-and-outcomes-v1"
 
 
 def build_column_mapping(
@@ -49,6 +51,19 @@ def build_column_mapping(
     return {original: f"{prefix}{(i + 1):0{needed_width}d}" for i, original in enumerate(order)}
 
 
+def extend_outcome_mapping(
+    mapping: dict[str, str], outcome_columns: list[str], *, seed: int = 0
+) -> dict[str, str]:
+    """Mask outcome identities without changing existing feature/outcome aliases."""
+    outcomes = build_column_mapping(
+        outcome_columns, [], id_columns=(), seed=seed, prefix="outcome_"
+    )
+    extended = {**outcomes, **mapping}
+    if len(set(extended.values())) != len(extended):
+        raise ValueError("Outcome masking would create duplicate column aliases")
+    return extended
+
+
 def _rename_predicate(predicate: dict[str, object], mapping: dict[str, str]) -> dict[str, object]:
     return {mapping.get(k, k): v for k, v in predicate.items()}
 
@@ -56,6 +71,7 @@ def _rename_predicate(predicate: dict[str, object], mapping: dict[str, str]) -> 
 def _rename_association(spec: AssociationSpec, mapping: dict[str, str]) -> AssociationSpec:
     new = spec.model_copy(deep=True)
     new.variables = [mapping.get(v, v) for v in spec.variables]
+    new.outcome = mapping.get(spec.outcome, spec.outcome)
     if spec.subgroup is not None:
         new.subgroup = SubgroupSpec(
             name=spec.subgroup.name,
@@ -75,11 +91,43 @@ def _rename_manifest(manifest: DatasetManifest, mapping: dict[str, str]) -> Data
         id_columns=list(manifest.id_columns),
         columns=[mapping.get(c, c) for c in manifest.columns],
         treatment_columns=[mapping.get(c, c) for c in manifest.treatment_columns],
-        outcome_columns=list(manifest.outcome_columns),
+        outcome_columns=[mapping.get(c, c) for c in manifest.outcome_columns],
         covariate_columns=[mapping.get(c, c) for c in manifest.covariate_columns],
         associations=[_rename_association(a, mapping) for a in manifest.associations],
         generator_version=manifest.generator_version,
         notes=manifest.notes,
+    )
+
+
+def masked_depmap_description(
+    dataset_id: str,
+    record_n: int,
+    columns: list[str],
+    outcomes: list[str],
+    id_columns: tuple[str, ...],
+) -> str:
+    """Describe public column roles and score direction without knockout identities."""
+    features = [c for c in columns if c not in set(outcomes) | set(id_columns)]
+    identifiers = [c for c in columns if c in id_columns]
+
+    def bullet(names: list[str]) -> str:
+        return "\n".join(f"- `{name}`" for name in names)
+
+    return (
+        f"# CRISPR dependency map `{dataset_id}`\n\n"
+        f"This dataset contains {record_n} cancer cell-line records "
+        "from a CRISPR knockout dependency screen with CCLE-style molecular "
+        "annotations. Cell-line feature names have been replaced with opaque "
+        "labels (`feature_001`, `feature_002`, ...); dependency outcomes use "
+        "opaque labels (`outcome_001`, `outcome_002`, ...). Each dependency "
+        "outcome measures the effect of knocking out a different gene. More negative "
+        "dependency scores indicate stronger dependency after knockout.\n\n"
+        "## Columns\n\n"
+        f"### Identifiers\n{bullet(identifiers)}\n\n"
+        f"### Cell-line features\n{bullet(features)}\n\n"
+        f"### Dependency outcomes\n{bullet(outcomes)}\n\n"
+        "Each row represents one cancer cell line. Inspect the supplied data for "
+        "missing values in metadata and screen-QC fields."
     )
 
 
@@ -91,27 +139,11 @@ def _anonymized_description(
     dataset_kind: str,
 ) -> str:
     feature_cols = [c for c in columns if c not in set(outcomes) and c not in set(id_columns)]
-    id_bullet = "\n".join(f"- `{c}`" for c in columns if c in set(id_columns))
     bullet = "\n".join(f"- `{c}`" for c in feature_cols)
     outcome_bullet = "\n".join(f"- `{c}`" for c in outcomes)
     if dataset_kind == "crispr_depmap":
-        return (
-            f"# CRISPR dependency map `{config.dataset_id}`\n\n"
-            f"This dataset contains {config.patient_n} cancer cell-line records "
-            "from a CRISPR knockout dependency screen with CCLE-style molecular "
-            "annotations. Cell-line feature names have been replaced with opaque "
-            "labels (`feature_001`, `feature_002`, ...); dependency outcome "
-            "columns retain their original gene names. More negative dependency "
-            "scores indicate stronger dependency after knockout.\n\n"
-            "## Columns\n\n"
-            "### Identifiers\n"
-            f"{id_bullet}\n\n"
-            "### Cell-line features\n"
-            f"{bullet}\n\n"
-            "### Dependency outcomes\n"
-            f"{outcome_bullet}\n\n"
-            "Each row represents one cancer cell line. Selected metadata and "
-            "screen-QC fields include calibrated source-like missingness."
+        return masked_depmap_description(
+            config.dataset_id, config.patient_n, columns, outcomes, id_columns
         )
     return (
         f"# Oncology patient cohort `{config.dataset_id}`\n\n"
@@ -140,11 +172,13 @@ def anonymize_bundle(
     The original bundle is not mutated. The returned bundle has:
 
     - the same rows in the same order,
-    - the same outcome column names and id columns,
-    - every other column renamed to ``feature_NNN`` per
+    - the same clinical outcome column names and id columns,
+    - DepMap dependency outcomes renamed to ``outcome_NNN``,
+    - every predictor column renamed to ``feature_NNN`` per
       ``build_column_mapping(seed=seed)``,
     - a manifest whose ``columns``, ``treatment_columns``,
-      ``covariate_columns`` and per-``AssociationSpec`` ``variables`` /
+      ``outcome_columns``, ``covariate_columns`` and per-``AssociationSpec`` ``outcome``,
+      ``variables`` /
       ``subgroup.predicate`` keys are remapped consistently.
     """
     active_id_columns = tuple(bundle.manifest.id_columns) if id_columns is None else id_columns
@@ -154,6 +188,8 @@ def anonymize_bundle(
         id_columns=active_id_columns,
         seed=seed,
     )
+    if bundle.manifest.dataset_kind == "crispr_depmap":
+        mapping = extend_outcome_mapping(mapping, bundle.manifest.outcome_columns, seed=seed)
     new_frame = bundle.frame.rename(columns=mapping)
     new_manifest = _rename_manifest(bundle.manifest, mapping)
     new_description = _anonymized_description(

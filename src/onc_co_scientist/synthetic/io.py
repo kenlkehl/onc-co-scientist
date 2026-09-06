@@ -122,8 +122,8 @@ def write_bundle_pair(
     file mapping each original column to its anonymized name. Returns
     ``(named_dir, anonymized_dir)``.
 
-    Both bundles share the same generated rows, the same outcome columns, and
-    the same buried-finding ground truth — only feature column names differ.
+    Both bundles share the same generated values and buried-finding ground truth.
+    Predictor names differ; DepMap dependency outcome names are also masked.
     """
     out_path = Path(out_dir)
     named_dir = out_path / NAMED_SUBDIR
