@@ -28,6 +28,26 @@ outside the agent runtime so those factors can be manipulated independently.
 The default stages are hypothesis generation, analysis, critique, and
 synthesis. They can be replaced in the experiment YAML.
 
+## Treatment roles
+
+Set each task's `treatment_columns` to all treatment variables in that task's
+public naming scheme. For example, use `[treatment_sotorasib]` for a dataset
+with that single named treatment, or `[feature_123]` for its masked counterpart.
+Every stage prompt includes these roles, including persistent follow-ups,
+sequential agents, deliberative peers and chairs, and final reviewers.
+Other task types can leave the list empty.
+
+Both NSCLC grid preparers (`prepare_experiment.py` for Codex CLI and
+`prepare_vllm_experiment.py`) populate the field automatically from the dataset
+schema and its private rename mapping. The generated public description also
+lists these roles. All four NSCLC treatments are disclosed; effect identities,
+subgroup definitions, and the rename mapping stay private. Masked prompts use
+only opaque treatment column names.
+
+This applies to newly prepared experiments. Prepare into a new output directory
+to test the change; archived prompts and frozen configurations retain their
+original treatment-role disclosure.
+
 ## Quick smoke test
 
 The included example uses a deterministic stub, so it makes no model calls:

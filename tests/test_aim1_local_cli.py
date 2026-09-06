@@ -21,6 +21,25 @@ from onc_co_scientist.harness.structured_runner import StructuredRunner, finaliz
 REPO = Path(__file__).resolve().parents[1]
 
 
+def assert_treatment_roles(job):
+    ws = Path(job["workspace"])
+    metadata = json.loads((ws / "metadata.json").read_text())
+    brief = (ws / "agent_instructions.md").read_text()
+    source = REPO / "example_data_clinical_all_claude/ds001/nsclc"
+    treatments = json.loads((source / "named/manifest.json").read_text())["treatment_columns"]
+    mapping = json.loads((source / "anonymized/column_mapping.json").read_text())
+    expected = ([mapping[name] for name in treatments]
+                if job["variant"] == "anonymized" else treatments)
+    assert job["treatment_columns"] == metadata["treatment_columns"] == expected
+    assert metadata["treatment_role_version"] == "explicit-treatment-columns-v1"
+    assert "## Treatment variables" in brief
+    for column in expected:
+        assert f"- `{column}`" in brief
+    if job["variant"] == "anonymized":
+        assert not any(name in brief for name in treatments)
+        assert not any(name in json.dumps(metadata) for name in treatments)
+
+
 @pytest.fixture
 def plan(tmp_path):
     out = tmp_path / "setup"
@@ -38,6 +57,7 @@ def test_only_nsclc_and_paired_split(plan):
     )
     for job in plan["jobs"]:
         validate_job(plan, job)
+        assert_treatment_roles(job)
         assert not (Path(job["workspace"]) / "iterations").exists()
 
 
@@ -129,6 +149,7 @@ def test_loose_prompt_preserves_data_and_allows_early_finalization(plan, tmp_pat
         for name in ("dataset_description.md", "transcript_schema.json"):
             assert old["public_input_sha256"][name] == job["public_input_sha256"][name]
         validate_job(loose, job)
+        assert_treatment_roles(job)
         ws = Path(job["workspace"])
         brief = (ws / "agent_instructions.md").read_text()
         archived = (

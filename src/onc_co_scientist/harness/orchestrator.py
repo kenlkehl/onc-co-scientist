@@ -32,6 +32,7 @@ from .runtime import (
     artifact_output_instructions,
     create_runtime,
 )
+from .treatment_roles import render_treatment_roles
 
 
 def _utc_now() -> str:
@@ -575,6 +576,8 @@ class RunController:
             "",
             "TASK",
             self.plan.task.prompt,
+            *(["", render_treatment_roles(self.plan.task.treatment_columns)]
+              if self.plan.task.treatment_columns else []),
             "",
             (
                 f"ITERATION: {iteration_index} of "

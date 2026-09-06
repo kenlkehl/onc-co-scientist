@@ -301,6 +301,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "__BWRAP__": str(bwrap),
     }
     main = common._replace_tokens(template, replacements)
+    common._set_treatment_columns(main, source_paths, mapping)
     if args.main_experiment_id is not None:
         main["experiment_id"] = args.main_experiment_id
     _set_model_identity(

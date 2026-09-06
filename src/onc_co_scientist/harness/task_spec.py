@@ -17,6 +17,7 @@ from ..synthetic.io import (
     read_manifest,
 )
 from .transcript import Transcript
+from .treatment_roles import render_treatment_roles, visible_treatment_columns
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 AGENT_INSTRUCTIONS_TEMPLATE = "agent_instructions.md.j2"
@@ -150,6 +151,7 @@ def _render_instructions(
     dataset_relpath: str,
     description_relpath: str,
     python_env: str | None,
+    treatment_columns: list[str] | None = None,
 ) -> str:
     env = Environment(
         loader=FileSystemLoader(str(TEMPLATE_DIR)),
@@ -166,6 +168,7 @@ def _render_instructions(
         dataset_relpath=dataset_relpath,
         description_relpath=description_relpath,
         python_env=python_env,
+        treatment_roles=render_treatment_roles(treatment_columns or []),
     )
 
 
@@ -188,7 +191,7 @@ def build_task(
     """Build a ``TaskBundle`` that an external harness can execute against.
 
     The ground-truth manifest is deliberately *not* copied into ``out_dir`` —
-    agents see only the tabular data and the public description.
+    agents see the tabular data, public description, and treatment column roles.
 
     If ``python_env`` is provided, its absolute path is embedded in the agent
     brief so the agent runs code inside that uv-managed environment.
@@ -220,6 +223,9 @@ def build_task(
         dataset_relpath=TASK_DATASET_LINK,
         description_relpath=TASK_DESCRIPTION_LINK,
         python_env=python_env_str,
+        treatment_columns=visible_treatment_columns(
+            manifest.treatment_columns, manifest.columns
+        ),
     )
     instructions_path = task_dir / INSTRUCTIONS_FILENAME
     instructions_path.write_text(instructions, encoding="utf-8")

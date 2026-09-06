@@ -12,7 +12,7 @@ from onc_co_scientist.harness.task_spec import (
 )
 from onc_co_scientist.synthetic.cancer_types import CancerType
 from onc_co_scientist.synthetic.generator import GeneratorConfig, generate_dataset
-from onc_co_scientist.synthetic.io import write_bundle
+from onc_co_scientist.synthetic.io import read_manifest, write_bundle
 from onc_co_scientist.synthetic.multi import (
     generate_multi_dataset,
     write_multi_bundle_pair,
@@ -44,6 +44,9 @@ def test_build_task_writes_agent_bundle(tmp_path):
     assert "Maximum iterations (N):** 4" in instructions
     assert "systematic treatment-effect heterogeneity search" in instructions
     assert "final best-supported treatment-effect subgroup hypothesis" in instructions
+    assert "## Treatment variables" in instructions
+    for column in bundle.manifest.treatment_columns:
+        assert f"- `{column}`" in instructions
 
     # Agent-facing files must not leak the benchmark's evaluation intent.
     description_text = task.description_path.read_text().lower()
@@ -145,6 +148,13 @@ def test_build_tasks_mirrors_synth_tree(tmp_path):
             text = instr.read_text()
             assert f"ds_batch_{ct.value}" in text
             assert "Maximum iterations (N):** 2" in text
+            manifest = read_manifest(synth_root / ct.value / variant)
+            assert "## Treatment variables" in text
+            for column in manifest.treatment_columns:
+                assert f"- `{column}`" in text
+            if variant == "anonymized":
+                for column in bundles[ct].manifest.treatment_columns:
+                    assert column not in text
             # Ground-truth manifest must not leak into the agent bundle.
             assert not (task_dir / "manifest.json").exists()
             assert (task_dir / TASK_DATASET_LINK).exists()

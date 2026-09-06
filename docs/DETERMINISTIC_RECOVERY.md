@@ -16,6 +16,16 @@ Existing Aim 1 plans without a scorer version automatically select v1 when
 regenerated with `experiments/aim1_recovery/score.py`. Older runs and reports are
 preserved; a v2 rescore belongs in a new directory.
 
+New task bundles explicitly list all treatment variables using their visible
+column names. Aim 1 preparation includes these roles in `agent_instructions.md`,
+`metadata.json`, and each plan job, for both structured and legacy loose prompt
+styles. Named roles come from the manifest's `treatment_columns`; masked roles
+use the corresponding opaque names. This exposes variable roles, without
+selecting the treatment with a planted effect or identifying its modifiers.
+DepMap has no treatment columns and receives no treatment-role section.
+The disclosure is recorded as `explicit-treatment-columns-v1` in new Aim 1
+protocols and metadata. Existing runs retain their original inputs and scores.
+
 A finding specifies `outcome`, nullable `exposure`, `contrast`, signed `direction`
 (-1, 0, 1), and a conjunction of `subgroup` predicates. Predicates contain
 `column`, `operator`, and `value`. The schema admits equality, inequality,

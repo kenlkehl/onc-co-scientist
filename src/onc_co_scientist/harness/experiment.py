@@ -193,6 +193,11 @@ class TaskSpec(BaseModel):
         description="Explicit experimental condition; never inferred from a filename.",
     )
     prompt: str = Field(min_length=1)
+    treatment_columns: list[str] = Field(
+        default_factory=list,
+        description="All treatment variables in the public dataset's naming scheme; "
+        "shown to every workflow participant. Never include a private name mapping.",
+    )
     public_workspace: Path
     site_workspaces: dict[str, Path] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -266,6 +271,10 @@ class ExperimentSpec(BaseModel):
 
     def fingerprint(self) -> str:
         payload = self.model_dump(mode="json", exclude_none=True)
+        # Preserve fingerprints of frozen experiments predating public treatment roles.
+        for task in payload["tasks"]:
+            if not task["treatment_columns"]:
+                task.pop("treatment_columns")
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 

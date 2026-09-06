@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -97,6 +98,22 @@ def test_stub_matrix_runs_all_three_workflow_policies(tmp_path: Path) -> None:
     )
     assert len({item["session_id"] for item in persistent_artifacts}) == 1
     assert len({item["session_id"] for item in sequential_artifacts}) == 4
+
+
+def test_treatment_roles_change_fingerprint_without_invalidating_legacy_configs(tmp_path):
+    spec = _spec(tmp_path, [WorkflowSpec(id="persistent", mode="persistent")])
+    legacy = spec.model_dump(mode="json", exclude_none=True)
+    for task in legacy["tasks"]:
+        task.pop("treatment_columns")
+    expected = hashlib.sha256(
+        json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert spec.fingerprint() == expected
+    spec.tasks[0].treatment_columns = ["feature_123"]
+    assert spec.fingerprint() != expected
+    first = spec.fingerprint()
+    spec.tasks[0].treatment_columns = ["feature_124"]
+    assert spec.fingerprint() != first
 
 
 def test_run_plans_interleave_workflows_within_each_replicate(tmp_path: Path) -> None:
@@ -211,6 +228,31 @@ class _RecordingRuntime:
 
     def close(self) -> None:
         return
+
+
+@pytest.mark.parametrize("mode", ["persistent", "sequential", "deliberative"])
+@pytest.mark.parametrize("columns", [["treatment_example"], ["feature_123", "feature_007"]])
+def test_treatment_roles_reach_every_workflow_call(tmp_path, mode, columns):
+    workflow = WorkflowSpec(
+        id=mode, mode=mode, agents_per_stage=2 if mode == "deliberative" else 1
+    )
+    spec = _spec(tmp_path, [workflow])
+    spec.tasks[0].treatment_columns = columns
+    spec.iteration_policy = IterationPolicy(iterations=2)
+    runtime = _RecordingRuntime()
+    controller = RunController(
+        spec=spec, plan=build_run_plans(spec)[0], runtime=runtime,
+        run_dir=tmp_path / "run", fingerprint=spec.fingerprint(),
+    )
+    assert controller.execute()["status"] == "completed"
+    assert len(runtime.requests) == (24 if mode == "deliberative" else 8)
+    for request in runtime.requests:
+        assert "## Treatment variables" in request.prompt
+        for column in columns:
+            assert f"- `{column}`" in request.prompt
+        assert "use the treatment being tested as the exposure" in request.prompt
+        if columns[0].startswith("feature_"):
+            assert "treatment_example" not in request.prompt
 
 
 def test_copy_strategy_isolates_workspace_and_scratch_by_session(tmp_path: Path) -> None:

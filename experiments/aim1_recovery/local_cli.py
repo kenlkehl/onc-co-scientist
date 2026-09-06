@@ -48,7 +48,8 @@ def prepare_local(
         isolation="Separate directories and instructions; CLI workspace-write sandbox; "
         "read access is not restricted to the task directory",
         comparability="DS001 NSCLC, same source cohort, split seed and structured v2 research "
-        "rules as Sol Work. CLI runtime/configuration differ; token budgets are not matched.",
+        "rules as Sol Work, with explicit public treatment roles added. "
+        "CLI runtime/configuration differ; token budgets are not matched.",
         preflight_design="One named and one masked setup session in a separate experiment; "
         "excluded from the formal 20-per-condition batch",
     )
@@ -73,6 +74,9 @@ def prepare_local(
                 "experiments/aim1_recovery/score.py",
                 "src/onc_co_scientist/harness/structured_runner.py",
                 "src/onc_co_scientist/harness/research_budget.py",
+                "src/onc_co_scientist/harness/treatment_roles.py",
+                "src/onc_co_scientist/harness/task_spec.py",
+                "src/onc_co_scientist/harness/templates/agent_instructions.md.j2",
                 "src/onc_co_scientist/scoring/deterministic.py",
                 "src/onc_co_scientist/scoring/structured_batch.py",
             )

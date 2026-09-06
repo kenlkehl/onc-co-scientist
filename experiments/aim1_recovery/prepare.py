@@ -19,6 +19,10 @@ import pandas as pd
 
 from onc_co_scientist.harness.task_spec import _render_instructions
 from onc_co_scientist.harness.transcript import Transcript
+from onc_co_scientist.harness.treatment_roles import (
+    TREATMENT_ROLE_VERSION,
+    visible_treatment_columns,
+)
 
 
 def digest(path: Path) -> str:
@@ -99,6 +103,10 @@ def prepare(
         manifest = json.loads((ev / "manifest.json").read_text())
         kind = "crispr_depmap" if family == "depmap" else "clinical_cohort"
         for variant, frame in (("named", named), ("anonymized", masked)):
+            treatment_columns = visible_treatment_columns(
+                manifest["treatment_columns"], list(frame.columns),
+                mapping if variant == "anonymized" else None,
+            )
             discfile = ev / f"discovery_{variant}.parquet"
             frame.iloc[discovery].to_parquet(discfile, index=False)
             for repeat in range(1, repeats + 1):
@@ -111,6 +119,7 @@ def prepare(
                         "max_iterations": cap,
                         "dataset_id": manifest["dataset_id"],
                         "dataset_kind": kind,
+                        "treatment_columns": treatment_columns,
                         "discovery_source": str(discfile.resolve()),
                         "description_source": str(
                             (source / variant / "public/dataset_description.md").resolve()
@@ -152,6 +161,8 @@ def prepare(
             "require_sequential_outputs": True,
             "job_id": job["job_id"],
             "python": str(python.absolute()),
+            "treatment_columns": job["treatment_columns"],
+            "treatment_role_version": TREATMENT_ROLE_VERSION,
         }
         write_json(ws / "metadata.json", metadata)
         instructions = _render_instructions(
@@ -162,6 +173,7 @@ def prepare(
             "dataset.parquet",
             "dataset_description.md",
             str(python.absolute().parent.parent),
+            treatment_columns=job["treatment_columns"],
         )
         instructions = instructions.replace(
             f"Protocol (up to {job['max_iterations']} iterations)",
@@ -277,6 +289,8 @@ def prepare(
     protocol = {
         "schema_version": "aim1-structured-v2",
         "scorer_version": "structured-recovery-v2",
+        "treatment_role_version": TREATMENT_ROLE_VERSION,
+        "treatment_role_disclosure": "All treatment columns, using only public column names",
         "split_seed": seed,
         "discovery_fraction": 0.8,
         "model_id": model,

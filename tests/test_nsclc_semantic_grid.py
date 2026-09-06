@@ -69,6 +69,8 @@ def test_pinned_nsclc_parity_and_public_gold_isolation(tmp_path: Path) -> None:
     named_text = (workspaces["named"] / "dataset_description.md").read_text(
         encoding="utf-8"
     )
+    assert "## Treatment variables" in named_text
+    assert "## treatment variables" in masked_text
     restored_masked_text = (
         workspaces["masked"] / "dataset_description.md"
     ).read_text(encoding="utf-8")
@@ -76,6 +78,22 @@ def test_pinned_nsclc_parity_and_public_gold_isolation(tmp_path: Path) -> None:
         restored_masked_text = restored_masked_text.replace(masked, named)
     assert restored_masked_text == named_text
     assert EXPECTED_SHAPE == (50_000, 35)
+
+
+@pytest.mark.parametrize("template_path", sorted(EXPERIMENT.glob("*.template.yaml")))
+def test_grid_preparation_injects_public_treatment_roles(template_path):
+    paths = _source_paths(EXPERIMENT.parents[1])
+    mapping = json.loads(paths["column_mapping"].read_text())
+    config = yaml.safe_load(template_path.read_text())
+    prepare_module._set_treatment_columns(config, paths, mapping)
+    expected_named = json.loads(paths["named_manifest"].read_text())["treatment_columns"]
+    for task in config["tasks"]:
+        if task["semantic_condition"] == "named":
+            assert task["treatment_columns"] == expected_named
+        else:
+            assert task["treatment_columns"] == [mapping[name] for name in expected_named]
+            assert not any(name in json.dumps(task["treatment_columns"]) for name in expected_named)
+        assert task["metadata"]["treatment_role_version"] == "explicit-treatment-columns-v1"
 
 
 def test_tracked_grid_template_locks_calls_timeouts_and_parallelism() -> None:

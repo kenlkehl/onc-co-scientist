@@ -1,4 +1,4 @@
-"""Archived Claude task brief with only the current scoring/output contract added."""
+"""Archived Claude task brief with public treatment roles and the output contract."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from experiments.aim1_recovery.prepare import digest, write_json
+from onc_co_scientist.harness.treatment_roles import render_treatment_roles
 
 STYLE = "claude-legacy-loose-v1"
 HARNESS = "codex-cli-claude-legacy-loose-v1"
@@ -23,6 +24,7 @@ def apply_loose_prompt(repo: Path, out: Path, plan: dict, python: Path) -> None:
         source = repo / relative
         sources[relative] = digest(source)
         brief = source.read_text().replace("**Patients:** 50000", "**Patients:** 40000")
+        brief += "\n" + render_treatment_roles(job["treatment_columns"])
         brief += (
             "\n## Runtime and structured recording\n\n"
             f"Use `{python.absolute()}` for Python. Read metadata.json for the exact "
@@ -76,6 +78,7 @@ def apply_loose_prompt(repo: Path, out: Path, plan: dict, python: Path) -> None:
             "Distinct script and sequential output file for every iteration",
         ],
         retained_contract=[
+            "Explicit treatment roles in the visible column naming scheme",
             "Archived clinical task brief and systematic heterogeneity-search instruction",
             "Structured findings and contemporaneous immutable iteration receipts",
             "Code/results retention and final narrative",
@@ -86,7 +89,8 @@ def apply_loose_prompt(repo: Path, out: Path, plan: dict, python: Path) -> None:
         budget_limitations="Same 25-iteration ceiling; early stopping allowed. "
         "Neither actual iterations nor tokens/compute are matched.",
         comparability="Workflow comparison with the prior structured CLI batch. "
-        "Legacy brief plus current structured recording, not an exact Claude runtime replication.",
+        "Legacy brief plus explicit public treatment roles and current structured recording, "
+        "not an exact Claude runtime replication.",
     )
 
 

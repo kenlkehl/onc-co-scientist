@@ -19,6 +19,12 @@ from typing import Any
 import pandas as pd
 import yaml
 
+from onc_co_scientist.harness.treatment_roles import (
+    TREATMENT_ROLE_VERSION,
+    render_treatment_roles,
+    visible_treatment_columns,
+)
+
 EXPECTED_HASHES = {
     "named_dataset": "c93065845b99676904f8ec902b0c1c24fb0ab98579e084c706bcdf804d025fbb",
     "masked_dataset": "a84474a29fd5efda1fdf109163fdbff3b374f676434ccc24fc569ac42e67ba61",
@@ -27,13 +33,6 @@ EXPECTED_HASHES = {
     "column_mapping": "6d291a3d653803b12ad150654635201b079c6dd37e09fd7037fd0bcbf08d9cd7",
 }
 EXPECTED_SHAPE = (50_000, 35)
-NAMED_CANDIDATES = [
-    "treatment_pembrolizumab",
-    "treatment_sotorasib",
-    "treatment_olaparib",
-    "treatment_osimertinib",
-]
-MASKED_CANDIDATES = ["feature_012", "feature_018", "feature_020", "feature_027"]
 PRIVATE_FILENAMES = {"manifest.json", "column_mapping.json"}
 MASKED_FORBIDDEN_TERMS = (
     "pembrolizumab",
@@ -94,19 +93,43 @@ def _description(candidates: list[str], modifiers: list[str]) -> str:
         "",
         "- `pfs_months`",
         "",
-        "## Candidate treatment/exposure indicators",
-        "",
-        *[f"- `{name}`" for name in candidates],
+        render_treatment_roles(candidates),
         "",
         "## Possible modifiers/covariates",
         "",
         *[f"- `{name}`" for name in modifiers],
         "",
-        "The four candidate indicators are anonymous experimental exposures. Search all four "
+        "Search all treatment variables "
         "systematically; no target exposure, modifier set, or number of signals is disclosed.",
         "",
     ]
     return "\n".join(lines)
+
+
+def _public_treatment_columns(
+    paths: dict[str, Path], mapping: dict[str, str]
+) -> dict[str, list[str]]:
+    """Disclose roles from schema metadata, without inspecting associations."""
+    named = json.loads(paths["named_manifest"].read_text(encoding="utf-8"))
+    masked = json.loads(paths["masked_manifest"].read_text(encoding="utf-8"))
+    roles = {
+        "named": visible_treatment_columns(named["treatment_columns"], named["columns"]),
+        "masked": visible_treatment_columns(
+            named["treatment_columns"], masked["columns"], mapping
+        ),
+    }
+    if set(roles["masked"]) != set(masked["treatment_columns"]):
+        raise ValueError("Named and masked treatment roles do not match")
+    return roles
+
+
+def _set_treatment_columns(
+    config: dict[str, Any], paths: dict[str, Path], mapping: dict[str, str]
+) -> None:
+    roles = _public_treatment_columns(paths, mapping)
+    for task in config["tasks"]:
+        task["treatment_columns"] = roles[task["semantic_condition"]]
+        task.setdefault("metadata", {})["treatment_role_version"] = TREATMENT_ROLE_VERSION
 
 
 def _prepare_public_workspaces(
@@ -131,20 +154,23 @@ def _prepare_public_workspaces(
         check_names=True,
     )
 
+    roles = _public_treatment_columns(paths, mapping)
+    visible_treatment_columns(roles["named"], list(named.columns))
+    visible_treatment_columns(roles["masked"], list(masked.columns))
     named_modifiers = [
         column
         for column in named.columns
-        if column not in {"patient_id", "pfs_months", *NAMED_CANDIDATES}
+        if column not in {"patient_id", "pfs_months", *roles["named"]}
     ]
     masked_modifiers = [
         column
         for column in masked.columns
-        if column not in {"patient_id", "pfs_months", *MASKED_CANDIDATES}
+        if column not in {"patient_id", "pfs_months", *roles["masked"]}
     ]
     workspaces = {"named": public_root / "named", "masked": public_root / "masked"}
     descriptions = {
-        "named": _description(NAMED_CANDIDATES, named_modifiers),
-        "masked": _description(MASKED_CANDIDATES, masked_modifiers),
+        "named": _description(roles["named"], named_modifiers),
+        "masked": _description(roles["masked"], masked_modifiers),
     }
     source_datasets = {"named": paths["named_dataset"], "masked": paths["masked_dataset"]}
     for condition, workspace in workspaces.items():
@@ -441,6 +467,7 @@ def prepare(args: argparse.Namespace) -> dict[str, Any]:
         "__CODEX_BINARY__": str(codex),
     }
     main = _replace_tokens(template, replacements)
+    _set_treatment_columns(main, source_paths, mapping)
     unresolved = re.findall(r"__[A-Z0-9_]+__", json.dumps(main))
     if unresolved:
         raise ValueError(f"Unresolved template tokens: {sorted(set(unresolved))}")
