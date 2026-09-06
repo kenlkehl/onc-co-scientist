@@ -13,6 +13,7 @@ from .score import sha
 def validate_inputs(plan_path: Path) -> dict:
     plan = json.loads(plan_path.read_text())
     protocol = plan["protocol"]
+    loose = protocol.get("prompt_style") == "claude-legacy-loose-v1"
     counts = Counter()
     for job in plan["jobs"]:
         ws = Path(job["workspace"])
@@ -30,20 +31,30 @@ def validate_inputs(plan_path: Path) -> dict:
                 raise ValueError(f"Model setting mismatch: {job['job_id']}/{key}")
         if metadata["service_tier"] != protocol["service_tier_requested"]:
             raise ValueError("Tier metadata differs from protocol")
-        if not metadata["fixed_research_budget"]:
-            raise ValueError("Fixed research budget is missing")
-        if metadata["max_iterations"] != protocol["fixed_research_budget"][job["family"]]:
+        if metadata["fixed_research_budget"] is not (not loose):
+            raise ValueError("Fixed research budget setting differs from prompt style")
+        budget = protocol["iteration_cap" if loose else "fixed_research_budget"]
+        if metadata["max_iterations"] != budget[job["family"]]:
             raise ValueError("Research budget mismatch")
         if (ws / "manifest.json").exists() or (ws / "evaluation.parquet").exists():
             raise ValueError("Evaluator files are present in a research workspace")
         instructions = (ws / "agent_instructions.md").read_text()
-        if (
+        if not loose and (
             "Stop when you have thoroughly" in instructions
             or "You may finish before" in instructions
         ):
             raise ValueError("Conflicting early-stop instructions remain")
-        if "research_step" not in instructions or "exactly" not in instructions:
+        if not loose and ("research_step" not in instructions or "exactly" not in instructions):
             raise ValueError("Missing fixed-budget submission instructions")
+        if loose:
+            if metadata.get("harness_id") != protocol["harness_id"]:
+                raise ValueError("Loose harness metadata mismatch")
+            if metadata.get("prompt_style") != protocol["prompt_style"]:
+                raise ValueError("Loose prompt metadata mismatch")
+            if "Stop when you have thoroughly" not in instructions:
+                raise ValueError("Missing legacy stopping rule")
+            if "Fixed exploration budget" in instructions or "research_step" in instructions:
+                raise ValueError("Structured workflow leaked into loose prompt")
         if (ws / "transcript.json").exists() or (ws / "iterations").exists():
             raise ValueError("Formal workspace already contains research")
         if not Path(metadata["python"]).is_file():

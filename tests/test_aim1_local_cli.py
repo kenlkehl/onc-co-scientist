@@ -16,6 +16,7 @@ from experiments.aim1_recovery.local_cli import (
 )
 from experiments.aim1_recovery.prepare import prepare
 from experiments.aim1_recovery.score import failed_run_score
+from onc_co_scientist.harness.structured_runner import StructuredRunner, finalize_workspace
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -112,3 +113,44 @@ def test_terminal_cli_failure_retains_harness_and_denominator(plan):
     result = failed_run_score(job, plan["protocol"], failure)
     assert result["harness_id"] == "codex-cli-structured-v2"
     assert result["primary_recovered"] is False
+
+
+def test_loose_prompt_preserves_data_and_allows_early_finalization(plan, tmp_path):
+    from experiments.aim1_recovery.loose_prompt import HARNESS, STYLE
+
+    out = tmp_path / "loose"
+    prepare_local(REPO, out, Path(sys.executable), 1, STYLE)
+    loose = json.loads((out / "plan.json").read_text())
+    assert loose["sources"] == plan["sources"]
+    assert loose["protocol"]["scorer_version"] == plan["protocol"]["scorer_version"]
+    for old, job in zip(plan["jobs"], loose["jobs"], strict=True):
+        assert old["variant"] == job["variant"]
+        assert old["data_sha256"] == job["data_sha256"]
+        for name in ("dataset_description.md", "transcript_schema.json"):
+            assert old["public_input_sha256"][name] == job["public_input_sha256"][name]
+        validate_job(loose, job)
+        ws = Path(job["workspace"])
+        brief = (ws / "agent_instructions.md").read_text()
+        archived = (
+            REPO / "example_data_clinical_all_claude/ds001/tasks/nsclc"
+            / job["variant"] / "agent_instructions.md"
+        ).read_text().replace("**Patients:** 50000", "**Patients:** 40000")
+        assert brief.startswith(archived)
+        assert "research_step" not in brief
+        assert "Fixed exploration budget" not in brief
+        assert "finish the remaining budget" not in cli_command("codex", job, "thread")[-1]
+        example = json.loads((ws / "transcript_example.json").read_text())
+        record = example["iterations"][0]
+        runner = StructuredRunner(ws, base_url="http://unused", model=MODEL)
+        submitted = []
+        result = runner._submit(record, submitted, 25)
+        assert len(submitted) == 1, result
+        transcript = finalize_workspace(ws)
+        assert len(transcript.iterations) == 1
+        assert transcript.harness_id == HARNESS
+        assert transcript.max_iterations == 25
+        # Early stopping does not disable ordered, immutable record receipts.
+        path = ws / "iterations/001.json"
+        path.write_text(path.read_text() + "\n")
+        with pytest.raises(ValueError, match="integrity"):
+            finalize_workspace(ws)

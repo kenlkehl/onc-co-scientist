@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 
+from experiments.aim1_recovery.loose_prompt import STYLE, apply_loose_prompt, launch_prompt
 from experiments.aim1_recovery.preflight import validate_inputs
 from experiments.aim1_recovery.prepare import digest, prepare, write_json
 from experiments.aim1_recovery.run_batch import prompt_for
@@ -28,7 +29,11 @@ EFFORT = "medium"
 BACKEND = "codex-cli"
 
 
-def prepare_local(repo: Path, out: Path, python: Path, repeats: int) -> dict:
+def prepare_local(
+    repo: Path, out: Path, python: Path, repeats: int, prompt_style: str = "structured-v2"
+) -> dict:
+    if prompt_style not in {"structured-v2", STYLE}:
+        raise ValueError("Unknown prompt style")
     if out.exists():
         raise ValueError("Use a new output directory; existing experiments are preserved")
     if repeats < 1:
@@ -47,6 +52,8 @@ def prepare_local(repo: Path, out: Path, python: Path, repeats: int) -> dict:
         preflight_design="One named and one masked setup session in a separate experiment; "
         "excluded from the formal 20-per-condition batch",
     )
+    if prompt_style == STYLE:
+        apply_loose_prompt(repo, out, plan, python)
     write_json(out / "plan.json", plan)
     write_json(out / "protocol.json", plan["protocol"])
     write_json(out / "terminal_failures.json", {})
@@ -59,6 +66,9 @@ def prepare_local(repo: Path, out: Path, python: Path, repeats: int) -> dict:
         "files_sha256": {
             name: digest(repo / name) for name in (
                 "experiments/aim1_recovery/local_cli.py",
+                "experiments/aim1_recovery/loose_prompt.py",
+                "experiments/aim1_recovery/preflight.py",
+                "experiments/aim1_recovery/run_batch.py",
                 "experiments/aim1_recovery/prepare.py",
                 "experiments/aim1_recovery/score.py",
                 "src/onc_co_scientist/harness/structured_runner.py",
@@ -79,6 +89,11 @@ def validate_job(plan: dict, job: dict) -> None:
         if protocol.get(key) != expected:
             raise ValueError(f"Frozen {key} does not match this launcher")
     ws = Path(job["workspace"])
+    if job.get("prompt_style", "structured-v2") != protocol.get("prompt_style", "structured-v2"):
+        raise ValueError("Job prompt style differs from frozen protocol")
+    metadata = json.loads((ws / "metadata.json").read_text())
+    if metadata.get("harness_id") != protocol.get("harness_id", f"{BACKEND}-structured-v2"):
+        raise ValueError("Job harness differs from frozen protocol")
     for name, expected in {
         "dataset.parquet": job["data_sha256"],
         "agent_instructions.md": job["instructions_sha256"],
@@ -112,11 +127,12 @@ def cli_command(codex: str, job: dict, thread: str | None = None) -> list[str]:
     if thread:
         command += ["resume", "--json", thread,
                     "Continue this same research session from its saved records. "
-                    "Follow the original task instructions and finish the remaining budget. "
+                    "Follow the original task instructions, including its stopping rule. "
                     "Preserve accepted iterations; do not restart, backfill, or change inputs. "
                     "Return job ID, iteration count, finalization status only."]
     else:
-        command += ["--skip-git-repo-check", "--json", prompt_for(job)]
+        prompt = launch_prompt(job) if job.get("prompt_style") == STYLE else prompt_for(job)
+        command += ["--skip-git-repo-check", "--json", prompt]
     return command
 
 
@@ -126,7 +142,9 @@ def launch(plan: dict, job: dict, codex: str, resume: bool, timeout: int) -> dic
     logdir = ws / "cli_logs"
     if (ws / "transcript.json").exists():
         transcript = finalize_workspace(ws, write_output=False)
-        if transcript.model_id != MODEL or transcript.harness_id != f"{BACKEND}-structured-v2":
+        if transcript.model_id != MODEL or transcript.harness_id != plan["protocol"].get(
+            "harness_id", f"{BACKEND}-structured-v2"
+        ):
             raise ValueError("Completed transcript model/harness differs from frozen plan")
         if not (ws / "analysis_summary.txt").is_file():
             raise ValueError("Completed transcript is missing analysis_summary.txt")
@@ -180,9 +198,12 @@ def launch(plan: dict, job: dict, codex: str, resume: bool, timeout: int) -> dic
                 raise ValueError(f"CLI exited {code}; inspect saved stderr and events")
             validate_job(plan, job)
             transcript = finalize_workspace(ws, write_output=False)
-            if transcript.model_id != MODEL or transcript.harness_id != f"{BACKEND}-structured-v2":
+            if transcript.model_id != MODEL or transcript.harness_id != plan["protocol"].get(
+                "harness_id", f"{BACKEND}-structured-v2"
+            ):
                 raise ValueError("Final transcript model/harness differs from plan")
-            if not (ws / "transcript.json").is_file() or not (ws / "analysis_summary.txt").is_file():
+            required_outputs = ("transcript.json", "analysis_summary.txt")
+            if not all((ws / name).is_file() for name in required_outputs):
                 raise ValueError("CLI did not save the final transcript and summary")
             record.update(status="completed", iterations=len(transcript.iterations))
         except Exception as exc:
@@ -200,6 +221,7 @@ def main() -> None:
     prep.add_argument("--out", type=Path, required=True)
     prep.add_argument("--python", type=Path, default=Path(sys.executable))
     prep.add_argument("--repeats", type=int, default=20)
+    prep.add_argument("--prompt-style", choices=["structured-v2", STYLE], default="structured-v2")
     run = sub.add_parser("run")
     run.add_argument("--plan", type=Path, required=True)
     run.add_argument("--codex", default="codex")
@@ -213,7 +235,7 @@ def main() -> None:
         repo = Path(__file__).resolve().parents[2]
         # absolute(), not resolve(): preserve the virtualenv interpreter path.
         print(json.dumps(prepare_local(repo, args.out.resolve(), args.python.absolute(),
-                                       args.repeats)))
+                                       args.repeats, args.prompt_style)))
         return
     if args.jobs < 1 or args.timeout_seconds < 1:
         parser.error("Concurrency and timeout must be positive")

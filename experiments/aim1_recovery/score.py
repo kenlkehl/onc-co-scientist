@@ -53,7 +53,7 @@ def failed_run_score(job: dict, protocol: dict, failure: dict) -> dict:
         "primary_scoring_backend": "deterministic",
         "dataset_id": job["dataset_id"],
         "model_id": protocol["model_id"],
-        "harness_id": f"{protocol['backend']}-structured-v2",
+        "harness_id": protocol.get("harness_id", f"{protocol['backend']}-structured-v2"),
         "evidence_design": "terminal failure; no claims evaluated",
         "max_iterations": job["max_iterations"],
         "submitted_iterations": len(list((Path(job["workspace"]) / "iterations").glob("*.json"))),
@@ -345,12 +345,22 @@ def generate(plan_path: Path, out: Path, allow_incomplete: bool = False) -> dict
             "",
             "Protocol and limitations",
             "",
-            "All research runs must complete 25 clinical or 10 DepMap iterations, including "
-            "screening, multivariable exploration, refinement, and robustness. Records retain "
-            "script/output hashes; these checks do not establish equal tokens/compute or certify "
-            "scientific originality. Neutral examples are identical across naming conditions. "
-            "Research sessions receive no recovery feedback. This is a revised protocol on fixed "
-            "archived cohorts, not an isolated test of model ability or scoring alone.",
+            (
+                "Research follows the archived Claude task brief with a 25-iteration ceiling "
+                "and agent-selected early stopping. No phase schedule, four-action quota, or "
+                "per-iteration script/output hashes are required. Structured findings and "
+                "ordered iteration JSON receipts are retained; these do not prove execution "
+                "timing or scientific originality. Actual iterations and tokens/compute are "
+                "not matched. Research sessions receive no recovery feedback."
+                if plan["protocol"].get("prompt_style") == "claude-legacy-loose-v1"
+                else "All research runs must complete 25 clinical or 10 DepMap iterations, "
+                "including screening, multivariable exploration, refinement, and robustness. "
+                "Records retain script/output hashes; these checks do not establish equal "
+                "tokens/compute or certify scientific originality. Neutral examples are "
+                "identical across naming conditions. Research sessions receive no recovery "
+                "feedback. This is a revised protocol on fixed archived cohorts, not an "
+                "isolated test of model ability or scoring alone."
+            ),
             "",
             f"Requested model: {plan['protocol'].get('model_id')}; "
             f"reasoning: {plan['protocol'].get('reasoning_effort')}; "
