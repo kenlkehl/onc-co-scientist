@@ -53,9 +53,7 @@ def failed_run_score(job: dict, protocol: dict, failure: dict) -> dict:
         "primary_scoring_backend": "deterministic",
         "dataset_id": job["dataset_id"],
         "model_id": protocol["model_id"],
-        "harness_id": "work-structured-v2"
-        if protocol["backend"] == "work"
-        else "endpoint-structured-v2",
+        "harness_id": f"{protocol['backend']}-structured-v2",
         "evidence_design": "terminal failure; no claims evaluated",
         "max_iterations": job["max_iterations"],
         "submitted_iterations": len(list((Path(job["workspace"]) / "iterations").glob("*.json"))),

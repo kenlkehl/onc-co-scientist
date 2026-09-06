@@ -1,5 +1,8 @@
 # onc-co-scientist
 
+**DS001 local CLI replication:** [Codex handoff and launch instructions](docs/DS001_CODEX_CLI_HANDOFF.md)
+for repeating the NSCLC Sol 5.6 medium experiment on your own machine.
+
 Initial pipeline for the **Oncology Co-Scientist Benchmark** (Aims 1.1 and 1.2 of the grant *"Do Large Language Models Entrench Biomedical Scientific Paradigms? A Study in Cancer Research"*).
 
 The benchmark asks: when an agentic harness analyzes a synthetic oncology dataset that contains a deliberately buried multi-feature association, how often does it surface novel hypotheses, and at which iteration does it uncover the buried finding?

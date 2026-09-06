@@ -42,6 +42,7 @@ def prepare(
     backend: str = "work",
     reasoning_effort: str | None = "medium",
     service_tier: str | None = "standard",
+    tasks: tuple[str, ...] | None = None,
 ) -> dict:
     if (out / "plan.json").exists():
         raise ValueError(
@@ -57,6 +58,11 @@ def prepare(
         )
         for name in ("aml", "breast", "crc", "nsclc", "prostate")
     ] + [("depmap", "depmap", repo / "example_data_depmap_all_codex/depmap", depmap_repeats, 10)]
+    if tasks is not None:
+        unknown = set(tasks) - {source[1] for source in sources}
+        if not tasks or unknown:
+            raise ValueError(f"Invalid task selection: {tasks}")
+        sources = [source for source in sources if source[1] in tasks]
     out.mkdir(parents=True, exist_ok=True)
     cache = out / "private"
     jobs = []
