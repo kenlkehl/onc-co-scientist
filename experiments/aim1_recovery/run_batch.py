@@ -19,6 +19,9 @@ def normalized_tier(value: str | None) -> str | None:
 def validate_launch(plan: dict, args) -> None:
     """Freeze scientific model settings; a different endpoint URL may use the same model."""
     protocol = plan["protocol"]
+    for field, expected in protocol.get("endpoint_runtime", {}).items():
+        if getattr(args, field) != expected:
+            raise ValueError(f"{field} differs from frozen endpoint runtime")
     if protocol.get("schema_version") != "aim1-structured-v2":
         return
     for field, actual in (
@@ -75,6 +78,8 @@ def run_one(job: dict, args) -> dict:
         max_generated_tokens=args.max_generated_tokens,
         max_tokens_per_call=args.max_tokens_per_call,
         python_timeout=args.python_timeout,
+        timeout=getattr(args, "request_timeout", 120.0),
+        harness_id=json.loads((workspace / "metadata.json").read_text())["harness_id"],
     )
     try:
         transcript = runner.run()
@@ -111,6 +116,7 @@ def main() -> None:
     p.add_argument("--max-generated-tokens", type=int, default=200000)
     p.add_argument("--max-tokens-per-call", type=int, default=4096)
     p.add_argument("--python-timeout", type=float, default=30)
+    p.add_argument("--request-timeout", type=float, default=120)
     args = p.parse_args()
     plan = json.loads(args.plan.read_text())
     protocol = plan["protocol"]
