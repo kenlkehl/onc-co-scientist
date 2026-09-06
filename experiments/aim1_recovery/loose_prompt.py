@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from experiments.aim1_recovery.prepare import digest, write_json
+from onc_co_scientist.harness.python_sandbox import ISOLATION_INSTRUCTIONS, ISOLATION_VERSION
 from onc_co_scientist.harness.treatment_roles import render_treatment_roles
 
 STYLE = "claude-legacy-loose-v1"
@@ -17,6 +18,7 @@ def apply_loose_prompt(repo: Path, out: Path, plan: dict, python: Path) -> None:
     backend = plan["protocol"]["backend"]
     harness = f"{backend}-claude-legacy-loose-v1"
     if backend == "endpoint":
+        python_instructions = "Use the execute_python tool for Python. "
         recording = (
             "Submit each iteration with the submit_iteration tool, passing its IterationRecord "
             "as the iteration argument. Use execute_python for analysis and file operations; "
@@ -24,8 +26,10 @@ def apply_loose_prompt(repo: Path, out: Path, plan: dict, python: Path) -> None:
             "After writing analysis_summary.txt, finish with a final message. The runner "
             "assembles transcript.json from your accepted submissions. Only record-validation "
             "feedback is available; there is no scientific scoring feedback during research.\n\n"
+            + ISOLATION_INSTRUCTIONS + "\n\n"
         )
     else:
+        python_instructions = f"Use `{python.absolute()}` for Python. "
         recording = (
             f"Submit: `{python.absolute()} -m onc_co_scientist.harness.structured_runner "
             "submit --workspace . --record iteration_record.json`\n\n"
@@ -47,7 +51,7 @@ def apply_loose_prompt(repo: Path, out: Path, plan: dict, python: Path) -> None:
         brief += "\n" + render_treatment_roles(job["treatment_columns"])
         brief += (
             "\n## Runtime and structured recording\n\n"
-            f"Use `{python.absolute()}` for Python. Read metadata.json for the exact "
+            + python_instructions + "Read metadata.json for the exact "
             "dataset_id, model_id, harness_id, and max_iterations. pandas, scipy, "
             "statsmodels, scikit-learn and pyarrow are available.\n\n"
             "Every proposed hypothesis must also include a non-null structured finding "
@@ -70,6 +74,10 @@ def apply_loose_prompt(repo: Path, out: Path, plan: dict, python: Path) -> None:
             harness_id=harness, prompt_style=STYLE, fixed_research_budget=False,
             require_sequential_outputs=False,
         )
+        if backend == "endpoint":
+            metadata.update(
+                filesystem_isolation=ISOLATION_VERSION, execution_workspace="/workspace"
+            )
         write_json(ws / "metadata.json", metadata)
         example = json.loads((ws / "transcript_example.json").read_text())
         example["harness_id"] = harness

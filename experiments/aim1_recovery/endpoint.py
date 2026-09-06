@@ -12,6 +12,7 @@ from pathlib import Path
 from experiments.aim1_recovery.loose_prompt import apply_loose_prompt
 from experiments.aim1_recovery.preflight import validate_inputs
 from experiments.aim1_recovery.prepare import digest, prepare, write_json
+from onc_co_scientist.harness.python_sandbox import ISOLATION_VERSION
 
 RUNTIME = {
     "max_turns": 200,
@@ -40,8 +41,11 @@ def prepare_endpoint(
         endpoint_url=base_url.rstrip("/"), endpoint_runtime=RUNTIME,
         service_tier_evidence="Local vLLM endpoint; no hosted service tier requested",
         model_sampling="Server defaults; no temperature, reasoning-effort, or seed override",
-        isolation="Separate task workspaces; Python environment strips credentials; "
-        "workspace-only instructions, not an OS read boundary",
+        isolation=ISOLATION_VERSION,
+        isolation_details="Mandatory bubblewrap user/mount/PID/network namespaces; "
+        "read-only public inputs and runtime libraries; only this job's analysis directory "
+        "is writable; controller records, other jobs, repository source and private data "
+        "are not mounted. No unsandboxed fallback.",
         comparability="DS001 NSCLC with the same 40000/10000 split, 25-iteration ceiling, "
         "legacy loose brief and JSON findings. Explicit treatment roles added. "
         "Model and runtime differ from Sol/Codex CLI; compute is not matched.",
@@ -57,6 +61,9 @@ def prepare_endpoint(
         "experiments/aim1_recovery/endpoint.py", "experiments/aim1_recovery/prepare.py",
         "experiments/aim1_recovery/loose_prompt.py", "experiments/aim1_recovery/run_batch.py",
         "src/onc_co_scientist/harness/structured_runner.py",
+        "src/onc_co_scientist/harness/python_sandbox.py",
+        "src/onc_co_scientist/harness/research_budget.py",
+        "src/onc_co_scientist/harness/runtime.py",
         "src/onc_co_scientist/harness/structured.py",
         "src/onc_co_scientist/harness/treatment_roles.py",
         "src/onc_co_scientist/harness/task_spec.py",

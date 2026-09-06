@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.parse
@@ -15,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .python_sandbox import ISOLATION_INSTRUCTIONS, PythonSandbox, SandboxUnavailable
 from .research_budget import validate_completion, validate_step
 from .transcript import IterationRecord, Transcript
 
@@ -101,6 +101,12 @@ class StructuredRunner:
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.log_path = self.workspace / "runner_transcript.jsonl"
         self._tokens_used = 0
+        self._python_sandbox: PythonSandbox | None = None
+
+    def _sandbox(self) -> PythonSandbox:
+        if self._python_sandbox is None:
+            self._python_sandbox = PythonSandbox(self.workspace)
+        return self._python_sandbox
 
     def _request(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -176,24 +182,11 @@ class StructuredRunner:
 
     def _python(self, code: str) -> str:
         try:
-            from .runtime import run_subprocess_in_group
-
-            env = {
-                k: v
-                for k, v in os.environ.items()
-                if k
-                in {"PATH", "LANG", "LC_ALL", "TMPDIR", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS"}
-            }
             scripts = self.workspace / "executed_code"
             scripts.mkdir(exist_ok=True)
             code_file = scripts / f"{time.time_ns()}.py"
             code_file.write_text(code, encoding="utf-8")
-            p = run_subprocess_in_group(
-                [sys.executable, str(code_file)],
-                cwd=self.workspace,
-                env=env,
-                timeout=self.python_timeout,
-            )
+            p = self._sandbox().run(code_file, self.python_timeout)
             out = (p.stdout + ("\n" + p.stderr if p.stderr else "")).strip()
             return (
                 f"exit_code={p.returncode}\n"
@@ -204,6 +197,8 @@ class StructuredRunner:
             return f"Python timed out after {self.python_timeout:g}s: {(exc.stdout or '')!s}"[
                 :MAX_OUTPUT
             ]
+        except SandboxUnavailable:
+            raise  # A broken sandbox is a runner failure, never an unsandboxed fallback.
         except Exception as exc:
             return f"Python execution error: {exc}"
 
@@ -272,12 +267,13 @@ class StructuredRunner:
         max_iterations = int(metadata["max_iterations"])
         if (self.workspace / "iterations").exists() or self.log_path.exists():
             raise RuntimeError("workspace already contains runner state; use submit/finalize")
+        self._sandbox().verify()  # Fail before making any research model request.
         system = (
             "You are a scientific analysis agent. Follow the task instructions below. "
             "Use only files in the task workspace; do not seek answer keys. Call "
             "execute_python for analysis and "
             "call submit_iteration with a complete validated record for every actual "
-            "iteration before finishing.\n\n" + instructions
+            "iteration before finishing.\n\n" + instructions + "\n\n" + ISOLATION_INSTRUCTIONS
         )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system},
@@ -360,6 +356,7 @@ class StructuredRunner:
         iterations = [IterationRecord.model_validate(x) for x in submitted]
         iterations.sort(key=lambda x: x.index)
         validate_completion(metadata, iterations)
+        self._sandbox().collect_summary()
         transcript = Transcript(
             dataset_id=str(metadata["dataset_id"]),
             model_id=self.model,

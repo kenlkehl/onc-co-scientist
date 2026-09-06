@@ -11,15 +11,24 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from .python_sandbox import analysis_root
 from .transcript import IterationRecord
 
 ACTIONS = {"screen", "multivariable", "refine", "robustness"}
+
+
+def _artifact_path(root: Path, value: str) -> Path:
+    path = (root / value).resolve()
+    if not path.is_relative_to(root.resolve()) or not path.is_file() or not path.stat().st_size:
+        raise ValueError("research artifact must be a nonempty file inside the workspace")
+    return path
 
 
 def validate_step(
     root: Path, record: IterationRecord, prior: list[dict], *, sequential_outputs: bool = False
 ) -> dict[str, str]:
     step = record.model_extra.get("research_step", {})
+    artifacts = analysis_root(root)
     if not isinstance(step, dict) or step.get("action") not in ACTIONS:
         raise ValueError("research_step.action must be screen, multivariable, refine or robustness")
     if not isinstance(step.get("rationale"), str) or not step["rationale"].strip():
@@ -31,9 +40,7 @@ def validate_step(
         value = step.get(key)
         if not isinstance(value, str) or not value or Path(value).is_absolute():
             raise ValueError(f"research_step.{key} must be a workspace-relative file path")
-        path = (root / value).resolve()
-        if not path.is_relative_to(root.resolve()) or not path.is_file() or not path.stat().st_size:
-            raise ValueError(f"research_step.{key} must be a nonempty file inside the workspace")
+        path = _artifact_path(artifacts, value)
         hashes[value] = hashlib.sha256(path.read_bytes()).hexdigest()
     if step["script_path"] == step["output_path"]:
         raise ValueError("script and output must be different files")
@@ -43,14 +50,16 @@ def validate_step(
         old = previous.get("research_step", {}).get("script_path")
         if (
             old
-            and hashlib.sha256((root / old).read_bytes()).hexdigest() == hashes[step["script_path"]]
+            and hashlib.sha256(_artifact_path(artifacts, old).read_bytes()).hexdigest()
+            == hashes[step["script_path"]]
         ):
             raise ValueError("exact script reuse does not count as a new research iteration")
         if sequential_outputs:
             old_output = previous.get("research_step", {}).get("output_path")
             if (
                 old_output
-                and (root / old_output).resolve() == (root / step["output_path"]).resolve()
+                and _artifact_path(artifacts, old_output)
+                == _artifact_path(artifacts, step["output_path"])
             ):
                 raise ValueError("each iteration requires a separate saved output file")
     if sequential_outputs and record.index > 1:
@@ -61,7 +70,7 @@ def validate_step(
         if previous_event is None:
             raise ValueError("previous submission receipt is missing")
         previous_time = datetime.fromisoformat(previous_event["utc"]).timestamp()
-        if (root / step["output_path"]).stat().st_mtime < previous_time - 0.01:
+        if _artifact_path(artifacts, step["output_path"]).stat().st_mtime < previous_time - 0.01:
             raise ValueError(
                 "analysis output predates the previous submission; execute this iteration's "
                 "analysis after submitting the preceding iteration and save its own output"
