@@ -40,7 +40,7 @@ Raw prompts, responses, translations, timing, usage, `interruption.json`, and `i
 
 ## Full-run restart
 
-The same 100-run design is retained: 10 repeats × 2 paired clinical versions × 5 models, 25 rounds per run. Both vLLM models retain their settings; Luna, Sol, and Astra use medium reasoning and explicit `service_tier="priority"`. This setting requests Fast/Priority processing, as documented in the [official Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference#service_tier). Gemini/Vertex and Anthropic/Vertex were checked through the real registry/common workflow with mocked transports; no claim of live cloud-provider testing is made.
+The [fresh batch and live progress](../full_clinical_ledger_20260907/README.md) use the same 100-run design: 10 repeats × 2 paired clinical versions × 5 models, 25 rounds per run. Both vLLM models retain their settings; Luna, Sol, and Astra use medium reasoning and explicit `service_tier="priority"`. This setting requests Fast/Priority processing, as documented in the [official Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference#service_tier). Gemini/Vertex and Anthropic/Vertex were checked through the real registry/common workflow with mocked transports; no claim of live cloud-provider testing is made.
 
 The stopped full experiments and interrupted smoke checks are separate from the new runs. Raw datasets and run state remain local and excluded from Git.
 
@@ -52,3 +52,5 @@ These are the first successful Gemma clinical-expected responses from the new li
 - [Synthesis prompt](example_synthesize_prompt.txt) and [response](example_synthesize_response.txt).
 
 The first exploration prompt is 13,387 characters. Its initial synthesis prompt is 23,146 characters; the synthesis response is 1,783 characters. These are observed sizes, not a controlled before/after comparison: the model's proposed claims and reasoning can differ between runs.
+
+The three Codex models each returned the requested JSON in a tiny live Priority/medium preflight. The requested tier is also recorded in each batch call’s command and metrics; the CLI does not expose a served-tier receipt, so no latency guarantee is inferred.

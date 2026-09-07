@@ -10,7 +10,7 @@
 | Sol (`gpt-5.6-sol`) | Medium / Priority | 20 | 5 |
 | Astra (`gpt-6-astra`) | Medium / Priority | 20 | 5 |
 
-Launch is prepared; this document does not yet claim processes are running. Live status files will be populated on dispatch:
+Dispatched September 7, 2026 at 22:48 UTC from code commit `d14dfa55d5f22106686cd285bc7319aab422cab0`. The two drivers were confirmed to load their frozen workflow source. [Launch record](launch.json). Live status refreshes every 30 seconds:
 
 - [vLLM progress](/data1/ken/onc-co-scientist/data/expected_surprising_ledger/full_runs/20260907T224450Z_vllm/STATUS.md)
 - [Codex progress](/data1/ken/onc-co-scientist/data/expected_surprising_ledger/full_runs/20260907T224450Z_codex/STATUS.md)
