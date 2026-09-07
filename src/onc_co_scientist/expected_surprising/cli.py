@@ -144,6 +144,7 @@ def run_command(
     run_id: str,
     version: str = "expected",
     iterations: int | None = None,
+    replicate_id: str | None = None,
 ):
     """Run the reference stage harness with deterministic analysis and scoring."""
     from .rollout import run
@@ -151,6 +152,9 @@ def run_command(
     spec = PairSpec.model_validate_json(pair.read_text())
     assignment = json.loads((pair.parent / "assignment.json").read_text())
     settings = yaml.safe_load(config.read_text())
+    task = json.loads((public_root / assignment[version]["task_id"] / "task.json").read_text())
+    if "versions" in settings and settings["versions"] != task.get("versions"):
+        raise ValueError("Configuration versions do not match the packaged workflow")
     provider = get_provider(settings["provider"])
     report = run(
         spec,
@@ -162,6 +166,8 @@ def run_command(
         iterations=iterations,
         max_tokens_per_call=settings.get("max_tokens_per_call", 125000),
         max_retries_per_stage=settings.get("max_retries_per_stage", 2),
+        policy=settings.get("validation_policy"),
+        replicate_id=replicate_id,
     )
     typer.echo(
         json.dumps(
@@ -197,6 +203,15 @@ def materialize_command(specs: Path, out: Path, historical_replay: bool = False)
                 json.dumps(StageRecord.model_json_schema(), indent=2)
             )
         typer.echo(spec.pair_id)
+
+
+@app.command("repackage")
+def repackage_command(source: Path, out: Path):
+    """Copy frozen v2 dataset bytes into new workflow packages, retaining private provenance."""
+    from .packaging import repackage
+
+    manifest = repackage(source, out)
+    typer.echo(f"{len(manifest['tasks'])} task packages; all source dataset hashes verified")
 
 
 if __name__ == "__main__":

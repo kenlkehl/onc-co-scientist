@@ -224,3 +224,138 @@ def recovery(hypotheses: list[Hypothesis], discoveries: list[Discovery]) -> dict
             },
         }
     return {"categories": categories, "matches": assigned}
+
+
+CATEGORIES = ("expected", "neutral", "surprising")
+EVIDENCE_CLASSES = ("supported", "excluded", "ambiguous")
+
+
+def comparison_key(h: Hypothesis) -> str:
+    return json.dumps(canonical(h, ignore_direction=True), separators=(",", ":"))
+
+
+def claim_key(h: Hypothesis) -> str:
+    return json.dumps(canonical(h), separators=(",", ":"))
+
+
+def oriented(result: EvidenceResult, original: Hypothesis, h: Hypothesis) -> EvidenceResult:
+    """Reuse one numerical comparison under either direction or exposure recoding."""
+    if comparison_key(original) != comparison_key(h):
+        raise ValueError("Cannot reorient a different comparison")
+    sign = canonical(original)[-1] * canonical(h)[-1]
+    changes = {"hypothesis_id": h.id}
+    if scalar_key(original.exposed) != scalar_key(h.exposed):
+        changes["cell_n"] = [
+            n for i in range(0, len(result.cell_n), 2) for n in reversed(result.cell_n[i : i + 2])
+        ]
+    if result.valid:
+        lo, hi = sorted((sign * result.lower, sign * result.upper))
+        changes.update(estimate=sign * result.estimate, lower=lo, upper=hi)
+    return result.model_copy(update=changes)
+
+
+def evidence_class(result: EvidenceResult) -> str | None:
+    return {"accept": "supported", "reject": "excluded", "unresolved": "ambiguous"}.get(
+        evidence_status(result)
+    )
+
+
+def refinement_types(parent: Hypothesis, child: Hypothesis) -> list[str]:
+    """Derive structural changes, independent of prose and arbitrary identifiers."""
+    pk, ck = canonical(parent), canonical(child)
+    changes = []
+    if pk[-1] != ck[-1]:
+        changes.append("direction_change")
+    for field in ("eligibility", "subgroup"):
+        before, after = getattr(parent, field), getattr(child, field)
+        bv, av = {c.variable for c in before}, {c.variable for c in after}
+        if av - bv:
+            changes.append(f"{field}_condition_addition")
+        if bv - av:
+            changes.append(f"{field}_condition_removal")
+        common = av & bv
+        if conditions_key([c for c in before if c.variable in common]) != conditions_key(
+            [c for c in after if c.variable in common]
+        ):
+            changes.append("cutoff_change")
+    if pk[:5] != ck[:5]:
+        changes.append("comparison_change")
+    return sorted(set(changes))
+
+
+def discovery_performance(recovery_rates: dict, q: float | None) -> dict:
+    r = sum(recovery_rates[c] for c in CATEGORIES) / 3
+    return {
+        "R_c": recovery_rates,
+        "R": r,
+        "Q": q,
+        "D": 0.0 if q is None or r + q == 0 else 100 * 2 * r * q / (r + q),
+    }
+
+
+def workflow_discovery(
+    accepted, discoveries, tested_keys, confirmation, *, failed=False, repaired=False
+):
+    claims = list({claim_key(h): h for h in accepted}.values())
+    results = {
+        r["hypothesis_id"]: EvidenceResult.model_validate(r) for r in confirmation["results"]
+    }
+    supported = [
+        h for h in claims if h.id in results and evidence_status(results[h.id]) == "accept"
+    ]
+    confirmed = [h for h in supported if comparison_key(h) in tested_keys]
+    assigned = assign(confirmed, discoveries)
+    q = len(confirmed) / len(claims) if claims else None
+    scores = {}
+    for label, kinds in (("exact", {"exact"}), ("exact_or_near", {"exact", "near"})):
+        rates = {
+            c: sum(m["category"] == c and m["match"] in kinds for m in assigned)
+            / sum(d.category == c for d in discoveries)
+            for c in CATEGORIES
+        }
+        scores[label] = discovery_performance(rates, q)
+        scores[label]["diagnostic_D"] = scores[label]["D"]
+        if failed:
+            scores[label]["D"] = 0.0
+        scores[label]["first_attempt_D"] = 0.0 if repaired else scores[label]["D"]
+    scores.update(
+        accepted_n=len(claims),
+        tested_accepted_n=sum(comparison_key(h) in tested_keys for h in claims),
+        confirmed_tested_n=len(confirmed),
+        independently_supported_n=len(supported),
+        confirmed_matches=assigned,
+        unsupported_acceptance_n=sum(
+            h.id in results and evidence_status(results[h.id]) == "reject" for h in claims
+        ),
+        unconfirmed_n=len(claims) - len(supported),
+    )
+    return scores
+
+
+def exploration_coverage(tests, discoveries, iterations):
+    curves = {kind: {c: [] for c in CATEGORIES} for kind in ("exact", "exact_or_near")}
+    for iteration in range(1, iterations + 1):
+        hypotheses = [
+            Hypothesis.model_validate(e["hypothesis"])
+            for e in tests
+            if e["iteration"] <= iteration and e["result"]["valid"]
+        ]
+        matches = assign(hypotheses, discoveries, ignore_direction=True)
+        for kind, categories in curves.items():
+            for c in CATEGORIES:
+                categories[c].append(
+                    sum(
+                        m["category"] == c and (kind == "exact_or_near" or m["match"] == "exact")
+                        for m in matches
+                    )
+                    / sum(d.category == c for d in discoveries)
+                )
+    return {
+        kind: {
+            "E": 100 * sum(sum(v) for v in categories.values()) / (3 * iterations),
+            "curves": categories,
+            "final_coverage": {c: v[-1] for c, v in categories.items()},
+            "configured_iterations": iterations,
+        }
+        for kind, categories in curves.items()
+    }

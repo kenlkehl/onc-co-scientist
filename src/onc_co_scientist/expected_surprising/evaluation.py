@@ -326,3 +326,179 @@ def calibrate(spec: PairSpec, *, replicates: int = 1000, reference_n: int = 100_
         "status": "development",
         "expert_review_complete": False,
     }
+
+
+class WorkflowValidationService(ValidationService):
+    """Canonical cache and delayed selection; all mutable state is transaction-ready.
+
+    Selection consumes only already exposed exploratory records. Sampling is a
+    separate operation, so selection cannot inspect unseen validation values.
+    """
+
+    def __init__(self, spec, version, replicate_id, policy):
+        from .schemas import ValidationPolicy
+
+        super().__init__(spec, version, replicate_id)
+        self.policy = ValidationPolicy.model_validate(policy)
+        self.replicate_id = replicate_id
+        self.state = {
+            "cache": {},
+            "opportunities": [],
+            "requests": [],
+            "voluntary_keys": set(),
+            "voluntary_iterations": set(),
+        }
+        # Share final-confirmation random streams across versions of a pair.
+        self.seed = self.derive_seed("final-confirmation", "")
+
+    def derive_seed(self, namespace, key):
+        payload = f"es-workflow-v1:{self.spec.pair_id}:{self.replicate_id}:{namespace}:{key}"
+        return int.from_bytes(hashlib.sha256(payload.encode()).digest()[:4], "little")
+
+    def select(self, iteration, tests):
+        from .schemas import EvidenceResult, Hypothesis, ValidationOpportunity
+        from .scoring import evidence_class
+
+        release = iteration + 1
+        if release not in self.policy.release_iterations:
+            return None
+        slot = self.policy.release_iterations.index(release)
+        if any(o["slot"] == slot for o in self.state["opportunities"]):
+            return None
+        selected = {o["comparison_key"] for o in self.state["opportunities"]}
+        pool = []
+        for key, event in sorted(tests.items()):
+            if key in self.state["cache"] or key in selected or not event["result"]["valid"]:
+                continue
+            result = EvidenceResult.model_validate(event["result"])
+            pool.append(
+                {
+                    "comparison_key": key,
+                    "hypothesis_id": event["hypothesis"]["id"],
+                    "stratum": evidence_class(result),
+                    "result_id": result.id,
+                    "result": result.model_dump(),
+                    "hypothesis": event["hypothesis"],
+                }
+            )
+        desired = self.policy.selection_strata[slot % len(self.policy.selection_strata)]
+        candidates = [p for p in pool if p["stratum"] == desired]
+        reason = "desired_stratum" if candidates else "seeded_fallback"
+        candidates = candidates or pool
+        ordered = sorted(
+            candidates,
+            key=lambda p: self.derive_seed(
+                f"selection-{self.policy.selection_seed}-{slot}", p["comparison_key"]
+            ),
+        )
+        chosen = ordered[0] if ordered else None
+        opportunity = ValidationOpportunity(
+            slot=slot,
+            selected_iteration=iteration,
+            release_iteration=release,
+            desired_stratum=desired,
+            eligible_pool=pool,
+            comparison_key=chosen["comparison_key"] if chosen else None,
+            hypothesis_id=chosen["hypothesis_id"] if chosen else None,
+            selected_stratum=chosen["stratum"] if chosen else None,
+            reason=reason if chosen else "empty_pool",
+        ).model_dump()
+        if chosen:
+            opportunity["hypothesis"] = Hypothesis.model_validate(chosen["hypothesis"]).model_dump()
+        self.state["opportunities"].append(opportunity)
+        return opportunity
+
+    def deliver(self, h, iteration, route, *, triggering_result_ids=(), prior=None, sequence=0):
+        from .scoring import comparison_key, oriented
+
+        key = comparison_key(h)
+        cache = self.state["cache"]
+        if route == "voluntary":
+            new_slot = key not in cache and key not in self.state["voluntary_keys"]
+            if new_slot and (
+                iteration in self.state["voluntary_iterations"]
+                or len(self.state["voluntary_keys"]) >= self.policy.voluntary_limit
+            ):
+                raise ValueError("Voluntary validation budget exhausted")
+            if new_slot:
+                self.state["voluntary_keys"].add(key)
+                self.state["voluntary_iterations"].add(iteration)
+            self.state["requests"].append(
+                {
+                    "hypothesis_id": h.id,
+                    "comparison_key": key,
+                    "iteration": iteration,
+                    "stage": "appraise",
+                    "sequence": sequence,
+                    "new_slot": new_slot,
+                    "triggering_result_ids": list(triggering_result_ids),
+                    "prior": prior,
+                    "cached": key in cache,
+                    "available_slots_before": self.policy.voluntary_limit
+                    - len(self.state["voluntary_keys"])
+                    + int(new_slot),
+                }
+            )
+        elif route != "automatic":
+            raise ValueError("Unknown validation delivery route")
+        fresh = key not in cache
+        if fresh:
+            if route == "automatic" and not any(
+                o["comparison_key"] == key and o["release_iteration"] == iteration
+                for o in self.state["opportunities"]
+            ):
+                raise ValueError("Automatic validation requires a due frozen opportunity")
+            if len(cache) >= self.policy.max_comparisons:
+                raise ValueError("Distinct validation comparison bound exceeded")
+            seed = self.derive_seed("independent-validation", key)
+            outcome = next(o for o in self.spec.outcomes if o.name == h.outcome)
+            result = estimate(
+                sample(self.spec, self.version, seed=seed),
+                h,
+                delta=outcome.delta,
+                alpha=0.05 / self.policy.max_comparisons,
+                result_id="validation-" + hashlib.sha256(key.encode()).hexdigest()[:16],
+            )
+            cache[key] = {
+                "hypothesis": h.model_copy(deep=True),
+                "result": result,
+                "iteration": iteration,
+                "route": route,
+                "seed": seed,
+                "sequence": sequence,
+            }
+            for o in self.state["opportunities"]:
+                if o["comparison_key"] == key:
+                    o["obtained"] = route
+        saved = cache[key]
+        return oriented(saved["result"], saved["hypothesis"], h), fresh
+
+    def due(self, iteration):
+        return [
+            o
+            for o in self.state["opportunities"]
+            if o["release_iteration"] == iteration
+            and o["comparison_key"] is not None
+            and o["obtained"] is None
+        ]
+
+    def export(self):
+        return {
+            "policy": self.policy.model_dump(),
+            "max_comparisons": self.policy.max_comparisons,
+            "alpha": 0.05 / self.policy.max_comparisons,
+            "replicate_id": self.replicate_id,
+            "opportunities": self.state["opportunities"],
+            "requests": self.state["requests"],
+            "voluntary_slots_used": len(self.state["voluntary_keys"]),
+            "scheduled_slots": len(self.policy.release_iterations),
+            "distinct_comparisons": len(self.state["cache"]),
+            "cache": {
+                key: {
+                    **value,
+                    "hypothesis": value["hypothesis"].model_dump(),
+                    "result": value["result"].model_dump(),
+                }
+                for key, value in self.state["cache"].items()
+            },
+        }

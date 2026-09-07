@@ -7,6 +7,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+FULL_RUN_ITERATIONS = 25
+
+
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
@@ -313,3 +316,145 @@ class StageRecord(StrictModel):
     validation_request_id: str | None = None
     accepted_ids: list[str] = Field(default_factory=list)
     narrative: str = ""
+
+
+# The original StageRecord remains the historical public reader.
+Status = Literal["accept", "reject", "unresolved"]
+WorkflowStage = Literal["explore", "analyze", "appraise", "synthesize"]
+EvidenceClass = Literal["supported", "excluded", "ambiguous"]
+
+
+class WorkflowVersions(StrictModel):
+    workflow: Literal["appraisal-3.1.0", "appraisal-3.2.0"] = "appraisal-3.2.0"
+    prompt: Literal["exploration-3.1.0", "ledger-1.0.0"] = "ledger-1.0.0"
+    schema_version: Literal["stage-3.0.0", "stage-forms-1.0.0"] = "stage-forms-1.0.0"
+    validation_policy: Literal["delayed-3.0.0"] = "delayed-3.0.0"
+    scoring: Literal["profile-3.0.0"] = "profile-3.0.0"
+    numerical_dgp: Literal[2] = 2
+
+    @model_validator(mode="after")
+    def consistent_interface(self):
+        expected = (
+            ("exploration-3.1.0", "stage-3.0.0")
+            if self.workflow == "appraisal-3.1.0"
+            else ("ledger-1.0.0", "stage-forms-1.0.0")
+        )
+        if (self.prompt, self.schema_version) != expected:
+            raise ValueError("Workflow, prompt and response form versions must agree")
+        return self
+
+
+class ValidationPolicy(StrictModel):
+    version: Literal["delayed-3.0.0"] = "delayed-3.0.0"
+    release_iterations: list[int]
+    response_window: Literal[2] = 2
+    voluntary_limit: Literal[10] = 10
+    analyses_per_iteration: Literal[12] = 12
+    selection_strata: tuple[EvidenceClass, ...] = ("supported", "excluded", "ambiguous")
+    selection_seed: int = Field(default=0, ge=0)
+    seed_derivation: Literal["sha256-pair-replicate-comparison-namespace-v1"] = (
+        "sha256-pair-replicate-comparison-namespace-v1"
+    )
+
+    @model_validator(mode="after")
+    def valid_schedule(self):
+        if self.release_iterations != sorted(set(self.release_iterations)) or any(
+            i < 2 for i in self.release_iterations
+        ):
+            raise ValueError("Release iterations must be increasing, unique, and at least two")
+        if self.selection_strata != ("supported", "excluded", "ambiguous"):
+            raise ValueError("Changing selection strata requires a new policy version")
+        return self
+
+    @property
+    def max_comparisons(self):
+        return self.voluntary_limit + len(self.release_iterations)
+
+    def for_budget(self, budget: int):
+        if any(i + self.response_window > budget for i in self.release_iterations):
+            raise ValueError("Scheduled releases must leave the complete response window")
+        return self
+
+    @classmethod
+    def default(cls, profile: str, iterations: int):
+        schedule = (
+            [2, 4]
+            if iterations == 6
+            else ([3, 6, 8] if profile.endswith("depmap") else [5, 12, 20])
+        )
+        return cls(release_iterations=schedule).for_budget(iterations)
+
+
+class Assessment(StrictModel):
+    hypothesis_id: str
+    result_ids: list[str]
+    status: Status
+    investigation: Literal["active", "deferred", "closed"]
+
+
+class AssessmentRecord(Assessment):
+    iteration: int
+    stage: WorkflowStage
+    sequence: int
+
+
+class ValidationRequest(StrictModel):
+    hypothesis_id: str
+    triggering_result_ids: list[str] = Field(min_length=1)
+
+
+class ValidationOpportunity(StrictModel):
+    slot: int
+    selected_iteration: int
+    release_iteration: int
+    desired_stratum: EvidenceClass
+    eligible_pool: list[dict]
+    comparison_key: str | None
+    hypothesis_id: str | None
+    selected_stratum: EvidenceClass | None
+    reason: Literal["desired_stratum", "seeded_fallback", "empty_pool"]
+    obtained: Literal["voluntary", "automatic"] | None = None
+
+
+class ResponseCheckpoint(StrictModel):
+    result_id: str
+    hypothesis_id: str
+    released_iteration: int
+    due_iteration: int
+    immediate: AssessmentRecord | None = None
+    delayed: AssessmentRecord | None = None
+
+
+class InitialExpectation(StrictModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    hypothesis_id: str
+    anticipated_direction: Literal[-1, 0, 1]
+    assessment: Status
+    iteration: int
+    stage: WorkflowStage
+    sequence: int
+    direct_result_ids: tuple[str, ...]
+    related_result_ids: tuple[str, ...]
+    pre_evidence: bool
+
+
+class WorkflowStageRecord(StrictModel):
+    iteration: int = Field(ge=1)
+    stage: WorkflowStage
+    hypotheses: list[Hypothesis] = Field(default_factory=list)
+    anticipated_directions: dict[str, Literal[-1, 0, 1]] = Field(default_factory=dict)
+    assessments: dict[str, Status] = Field(default_factory=dict)
+    parent_ids: dict[str, str] = Field(default_factory=dict)
+    motivating_result_ids: dict[str, list[str]] = Field(default_factory=dict)
+    executed_ids: list[str] = Field(default_factory=list)
+    assessment_records: list[Assessment] = Field(default_factory=list)
+    decisions: list[Decision] = Field(default_factory=list)
+    validation_request: ValidationRequest | None = None
+    accepted_ids: list[str] = Field(default_factory=list)
+    narrative: str = ""
+
+
+class ScoreComponent(StrictModel):
+    numerator: int = Field(ge=0)
+    denominator: int = Field(ge=0)
+    accuracy: float | None = Field(default=None, ge=0, le=1)

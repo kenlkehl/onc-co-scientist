@@ -1,5 +1,7 @@
 # Aim 1 expected / surprising implementation
 
+**Current prompting:** the later [3.2 interface refactor](EXPECTED_SURPRISING_PROMPTING.md) replaces agent-side bookkeeping with stage-specific forms and a controller-maintained ledger. Its [verification record](../benchmarks/expected_surprising/workflow_v3_2/README.md) supersedes older prompt descriptions below.
+
 Work is on branch `expected-or-surprising`.
 
 For an introduction with actual paired rows, equations, tool permissions, endpoints, and worked scoring examples, see [How the expected/surprising task works](EXPECTED_SURPRISING_GUIDE.md).

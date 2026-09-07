@@ -67,7 +67,28 @@ def run(
     iterations: int | None = None,
     max_tokens_per_call: int = 125000,
     max_retries_per_stage: int = 2,
+    policy=None,
+    replicate_id: str | None = None,
 ) -> dict:
+    task_metadata = json.loads((public / "task.json").read_text())
+    if "versions" in task_metadata:
+        from .workflow import run_workflow
+
+        return run_workflow(
+            spec,
+            version,
+            public,
+            out,
+            provider,
+            run_id=run_id,
+            iterations=iterations,
+            max_tokens_per_call=max_tokens_per_call,
+            max_retries_per_stage=max_retries_per_stage,
+            policy=policy,
+            replicate_id=replicate_id,
+        )
+    if policy is not None or replicate_id is not None:
+        raise ValueError("New workflow options require a versioned task package")
     require_current_pair(spec)
     if max_retries_per_stage < 0 or max_tokens_per_call < 1:
         raise ValueError("Nonnegative retries and a positive completion allowance are required")

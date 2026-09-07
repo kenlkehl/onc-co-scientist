@@ -12,10 +12,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import yaml
+from report_smoke import write_report
 
 from onc_co_scientist.expected_surprising.research import now
 from onc_co_scientist.expected_surprising.rollout import run
-from onc_co_scientist.expected_surprising.schemas import PairSpec
+from onc_co_scientist.expected_surprising.schemas import (
+    PairSpec,
+    ValidationPolicy,
+    WorkflowVersions,
+)
+from onc_co_scientist.expected_surprising.summary import paired_summary
 from onc_co_scientist.providers.registry import get_provider
 
 
@@ -40,13 +46,16 @@ class MeteredProvider:
         }
         try:
             response = self.provider.chat(messages, **kwargs)
-            choice = response.raw.choices[0]
-            record.update(
-                finish_reason=choice.finish_reason,
-                response_chars=len(response.text),
-                reasoning_chars=len(getattr(choice.message, "reasoning_content", None) or ""),
-                usage=response.raw.usage.model_dump() if response.raw.usage else None,
-            )
+            if isinstance(response.raw, dict) and "metrics" in response.raw:
+                record.update(response.raw["metrics"])
+            else:
+                choice = response.raw.choices[0]
+                record.update(
+                    finish_reason=choice.finish_reason,
+                    response_chars=len(response.text),
+                    reasoning_chars=len(getattr(choice.message, "reasoning_content", None) or ""),
+                    usage=response.raw.usage.model_dump() if response.raw.usage else None,
+                )
             return response
         except Exception as exc:
             record["error"] = f"{type(exc).__name__}: {exc}"
@@ -84,7 +93,14 @@ def summarize(report, out, iterations):
         "hypotheses_tested": last.get("cumulative_tested", 0),
         "valid_discovery_sample_analyses": sum(r["valid"] for r in analyses),
         "invalid_discovery_sample_analyses": sum(not r["valid"] for r in analyses),
-        "validation_requests": len(validation),
+        "validation_requests": len(report["validation"]["requests"]),
+        "validation_deliveries": len(validation),
+        "validation": report["validation"],
+        "versions": report["versions"],
+        "scores": report["scores"],
+        "response_components": report["responsiveness"]["components"],
+        "response_exclusions": report["responsiveness"]["exclusions"],
+        "dataset_sha256": report["dataset_sha256"],
         "valid_validation_results": report["responsiveness"]["valid_n"],
         "responsiveness_accuracy": report["responsiveness"]["accuracy"],
         "post_evidence_windows": len(report["post_evidence_exploration"]),
@@ -102,10 +118,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--model", required=True)
-    parser.add_argument("--data", type=Path, default=Path("data/expected_surprising_v2"))
+    parser.add_argument(
+        "--data", type=Path, default=Path("data/expected_surprising_agent_judgment")
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--profiles", nargs="+", default=["nsclc_clinical", "nsclc_depmap"])
-    parser.add_argument("--iterations", type=int, default=3)
+    parser.add_argument("--iterations", type=int, default=6)
+    parser.add_argument("--replicate-id", default="smoke-replicate-0")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--max-tokens", type=int, default=125000)
     parser.add_argument("--max-retries-per-stage", type=int, default=2)
@@ -119,7 +138,16 @@ def main():
         server = json.load(response)
     if args.model not in {m["id"] for m in server["data"]}:
         raise ValueError("Requested model is not served by this endpoint")
+    policies = {
+        profile: ValidationPolicy.default(profile, args.iterations).model_dump()
+        for profile in args.profiles
+    }
     config = {
+        "versions": WorkflowVersions.model_validate(
+            json.loads((args.data / "package_manifest.json").read_text())["versions"]
+        ).model_dump(),
+        "validation_policies": policies,
+        "replicate_id": args.replicate_id,
         "provider": {
             "kind": "vllm_openai",
             "model_id": args.model,
@@ -143,10 +171,16 @@ def main():
             str(path): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(Path("src/onc_co_scientist/expected_surprising").glob("*.py"))
         },
+        "reporter_sha256": hashlib.sha256(
+            Path(__file__).with_name("report_smoke.py").read_bytes()
+        ).hexdigest(),
         "dependencies": {
             n: importlib.metadata.version(n)
             for n in ["openai", "numpy", "pandas", "scipy", "pydantic"]
         },
+        "package_manifest_sha256": hashlib.sha256(
+            (args.data / "package_manifest.json").read_bytes()
+        ).hexdigest(),
         "tasks": [],
     }
     jobs = []
@@ -160,6 +194,10 @@ def main():
         for version in ("expected", "surprising"):
             run_id = f"{profile}-{version}"
             public = args.data / "public" / assignment[version]["task_id"]
+            task = json.loads((public / "task.json").read_text())
+            WorkflowVersions.model_validate(task["versions"])
+            if task["versions"] != config["versions"]:
+                raise ValueError("Task and manifest workflow versions differ")
             digest = hashlib.sha256((public / "dataset.parquet").read_bytes()).hexdigest()
             if digest != assignment[version]["sha256"]:
                 raise ValueError("Public dataset differs from its recorded hash")
@@ -189,6 +227,8 @@ def main():
             iterations=args.iterations,
             max_tokens_per_call=args.max_tokens,
             max_retries_per_stage=args.max_retries_per_stage,
+            policy=policies[spec.profile],
+            replicate_id=args.replicate_id,
         )
         return summarize(report, out, args.iterations)
 
@@ -209,8 +249,20 @@ def main():
             completed.sort(key=lambda r: r["run_id"])
             (args.out / "summary.json").write_text(json.dumps(completed, indent=2))
             print("RUN COMPLETE: " + json.dumps(result), flush=True)
+    reports = [
+        json.loads((args.out / "runs" / job[-1] / "report.json").read_text())
+        for job in jobs
+        if (args.out / "runs" / job[-1] / "report.json").exists()
+    ]
+    paired = (
+        paired_summary(reports)
+        if len(reports) == len(jobs)
+        else {"unavailable": "One or more assigned runs failed before writing a report"}
+    )
+    (args.out / "paired_summary.json").write_text(json.dumps(paired, indent=2))
     manifest["completed_at"] = now()
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    write_report(args.out, args.out / "SMOKE_REPORT.md")
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ import pandas as pd
 from ..synthetic.cancer_types import get_profile
 from ..synthetic.generator import GeneratorConfig, _append_distractor_covariates
 from .review_policy import reject_nested_comparison, require_current_candidate, require_current_pair
-from .schemas import Condition, Discovery, Outcome, PairSpec, ReviewedCandidate
+from .schemas import FULL_RUN_ITERATIONS, Condition, Discovery, Outcome, PairSpec, ReviewedCandidate
 
 
 def base_frame(profile: str, n: int, seed: int, *, version: int = 1) -> pd.DataFrame:
@@ -283,7 +283,9 @@ def write_pair(spec: PairSpec, root: Path, *, historical_replay: bool = False) -
             "task_id": task_id,
             "profile": spec.profile,
             "n": spec.n,
-            "iterations": 10 if spec.profile.endswith("depmap") else 25,
+            "iterations": (
+                10 if historical_replay and spec.profile.endswith("depmap") else FULL_RUN_ITERATIONS
+            ),
             "validation_limit": 10,
             "outcomes": [o.model_dump(exclude={"intercept", "sigma"}) for o in spec.outcomes],
         }

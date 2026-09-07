@@ -8,7 +8,9 @@ The central comparison uses **a pair of datasets**. They contain the same synthe
 
 This guide describes the implementation on the `expected-or-surprising` branch as of September 7, 2026, using the **v2 development release**. It contains the evaluator's discovery definitions and pair assignments. The evaluated agent receives only its assigned task and the analysis history described below. Expert adjudication of the literature classifications and formal task locking remain pending.
 
-The [proposed workflow and scoring refactor](EXPECTED_SURPRISING_REFACTOR_PLAN.md) describes changes to agent-controlled appraisal, validation delivery, and exploration and responsiveness measures. Those changes have not yet been implemented; this guide describes the current workflow.
+The [workflow and scoring refactor](EXPECTED_SURPRISING_REFACTOR_PLAN.md) is implemented as `appraisal-3.2.0`, with numerical DGP **v2 unchanged**. New packages copy all 20 original Parquet files byte for byte. The [historical guide](EXPECTED_SURPRISING_GUIDE_LEGACY.md) describes the earlier voluntary-only protocol; historical packages continue to select that implementation. The separate named/masked workflow is unchanged.
+
+The provider-independent controller uses the repository's `LLMProvider` interface. No server address or model is built into its workflow, validation, or scoring logic. The configured vLLM endpoint is used for live smoke testing.
 
 Contents: [discoveries and pairs](#discoveries-and-pairs) · [example rows](#actual-rows-from-the-two-types-of-dataset) · [generation](#how-the-datasets-are-generated) · [agent loop and tools](#what-the-agent-sees-and-does) · [LLM endpoints](#which-llm-endpoints-can-be-used) · [scoring](#how-the-agent-is-scored) · [running and inspecting an evaluation](#running-and-inspecting-an-evaluation)
 
@@ -73,7 +75,7 @@ Patient `P00001` is row 1, counting from zero. This patient's NLR is above the f
 
 Only the outcome changes. The contribution from NLR ≥3 changes from −0.45 to +0.45 log months, increasing this patient's outcome by 0.90. The patient's other contributions and residual are identical. Patients with NLR <3 have no change from this reversal. PFS in months can be obtained by exponentiating `log_pfs_months`; there is no censoring in this release.
 
-The public task IDs are `87b1f8e82cf42d71` and `dbce1befa80e2c19`, respectively.
+The new public task IDs are `37727c18694934f1` and `a0ef63f9837967a1`, respectively. Their source task IDs were `87b1f8e82cf42d71` and `dbce1befa80e2c19`. Always resolve tasks through the private `assignment.json`.
 
 ### One synthetic NSCLC cell line
 
@@ -95,7 +97,7 @@ Cell line `CL_00021` is row 21. It has TP53 loss and meets both conditions defin
 
 The TP53-loss contribution to the USP7 score changes from +0.8 to −0.8 within this subgroup, a decrease of 1.6. Other dependency outcomes stay the same. Cell lines outside the subgroup, or without TP53 loss, have unchanged USP7 scores.
 
-The public task IDs are `b7b3e4fdcae53c2d` and `15a0a70fbdbaa8a6`. These are fully simulated cell lines and scores generated in a DepMap-style format.
+The new public task IDs are `886c337297f1ac5d` and `d3b78f6e692740a2`; their source IDs were `b7b3e4fdcae53c2d` and `15a0a70fbdbaa8a6`. These are fully simulated cell lines and scores generated in a DepMap-style format.
 
 ## How the datasets are generated
 
@@ -138,175 +140,224 @@ The [technical reference](EXPECTED_SURPRISING.md#generation-and-literature-revie
 
 ## What the agent sees and does
 
-One run evaluates one model through the reference harness on one member of a pair. The two members use separate analysis histories. The model receives the task instructions, endpoint names and minimum-effect thresholds, the required response schema, and column summaries calculated from the assigned dataset. Those summaries contain column names, distributions, and counts. The Python analysis service holds the full dataset.
+One run evaluates one provider/model on one assigned public task. It receives public instructions, the response schema, outcome scales and units, column summaries, a current claim/evidence ledger, its persistent research notes, latest stage narratives, and required assessments. Full prior JSON responses and failed attempts are retained in the audit transcript rather than repeated in every prompt. It receives no target inventory, literature categories, private DGP, selection pool, or unreleased selection. The full frame stays with the Python controller. There are no arbitrary-code, browsing, filesystem, or subagent tools in the evaluated harness.
 
-The model receives its previous structured responses and analysis results at each subsequent stage. Pair assignments, category labels, embedded discovery definitions, DGP coefficients, and literature-review records remain private to the evaluator. Individual data rows are not included in the current reference harness's prompts.
+The public instructions encourage diverse comparisons and evidence-informed follow-up throughout the run. They explain signed contrasts and ask the agent to use its own scientific judgment about effect sizes, uncertainty, and conclusions. They prescribe no minimum effect or numerical accept/reject rule. Public task metadata and every numerical result sent to the provider omit evaluator effect-size cutoffs, including cached, automatically delivered, and reoriented results. Numerical reference decisions and cutoffs remain private scoring rules.
 
-Each iteration has four stages:
-
-| Stage | What the agent submits | What the harness does |
+| Stage | Agent action | Controller action |
 |---|---|---|
-| Hypothesis | Explicit comparisons, unique IDs, anticipated directions, and prior assessments | Registers the hypotheses before they can be analyzed |
-| Analysis | IDs of up to 12 previously registered hypotheses; optionally one hypothesis for independent validation | Calculates contrasts and intervals and returns numerical results with result IDs |
-| Critique | `accept`, `reject`, or `unresolved` decisions linked to those results | Records evidence appraisal, including the immediate decision on any validation result |
-| Synthesis | The complete set of currently accepted hypothesis IDs and an explanatory narrative | Records the current discovery set and carries the history into the next iteration |
+| `explore` | Register comparisons, anticipated directions, initial assessments, and evidence-linked refinements | Freeze registration records |
+| `analyze` | Select up to 12 existing short claim references in `run_analyses` | Execute discovery-sample comparisons; return 95% Welch intervals, cell sizes, and diagnostics |
+| `appraise` | Assess every delivered discovery result, record investigation status, optionally request validation | Record decisions, then deliver requested or due scheduled evidence |
+| `synthesize` | Assess new validation and explicitly reassess due original claims | Record immediate/delayed checkpoints, derive the accepted set, and carry state forward |
 
-Every stage may introduce hypotheses for later analysis. A refinement gets a new ID and can name its parent. This lets a result prompt a different direction, a narrower subgroup, or a new comparison. The default budgets are 25 iterations for clinical tasks and 10 for cell-line tasks. Smoke tests use three.
+Every stage may propose comparisons for later analysis. Clinical runs have 25 iterations and cell-line runs 10; the smoke protocol has six. The controller assigns stable short references (`H1`, `H2`, …). Each proposal includes the comparison, anticipated direction and initial assessment in one object, without parallel dictionaries. A changed claim is a new proposal. Optional `parent` and `motivating_evidence` link refinements to earlier evidence. Python derives refinement types; prose is not scored.
 
-```mermaid
-flowchart LR
-    H[Propose hypotheses and record expectations] --> A[Request analyses]
-    A --> E[Appraise the evidence]
-    E --> S[Record accepted discoveries]
-    S --> H
-    E --> H
-    S --> F[After the last iteration: independent confirmation and scoring]
-```
+Each stage has its own response form. Only analysis exposes `run_analyses`; only appraisal exposes `validate`, a single claim reference. There are no agent-authored iteration/stage stamps, executed-history lists, legacy decisions, or accepted-set lists. An assessment supplies `claim`, `status` (`accept`, `reject`, `unresolved`), and `investigation` (`active`, `deferred`, `closed`). Omitted claims retain their assessment. The controller derives the complete accepted set, including withdrawals and canonical deduplication, from these judgments.
 
-The available analysis services are:
+The ledger displays all available direct evidence, oriented to each claim, under short `R1`, `R2`, … references. By omitting `evidence` from an assessment, the agent assesses the evidence shown on that claim's card; the controller attaches its references. The agent can explicitly select a subset or related evidence using short references. Required new or deadline evidence must still be included. Likewise, omitted `motivating_evidence` on a refinement attaches its parent's displayed evidence. Audit records distinguish controller-attached links from agent-selected links: attachment documents supplied evidence, not proof of attention or understanding. Validation requests automatically attach the valid discovery result for the selected comparison.
 
-- **Mean difference:** exposed-group mean minus comparator-group mean, within the specified eligibility and subgroup conditions.
-- **Interaction:** that exposed-minus-comparator difference inside the subgroup, minus the difference outside it, within the same eligible population.
-- **Independent validation:** the same registered comparison evaluated in a newly generated sample from the private DGP. A run may request at most ten validations, with at most one in an iteration. Each sample has the same row count as the assigned task.
+An optional `research_notes` field replaces the agent's persistent notebook; omission preserves it. The latest narrative for each stage is also retained. Retries show the unchanged ledger and the current error, without replaying failed responses. Failed attempts cannot change references, notes, assessments, or evidence budgets. Scientific judgments are never retried because the private evaluator disagrees.
 
-The services return signed estimates, confidence intervals, group sizes, and validity diagnostics. Comparisons with fewer than 20 observations in any required group are invalid. The current analyses are unadjusted continuous-outcome comparisons using Welch intervals. Eligibility defines the population for a claim; subgroup conditions define the region within that population where the comparison is evaluated. An interaction additionally uses the subgroup's complement.
+See [the prompting refactor and examples](EXPECTED_SURPRISING_PROMPTING.md) for concrete forms and limitations.
 
-The agent controls these services through fields in a JSON stage record. Its allowed actions do not include arbitrary Python or R, a shell, notebooks, filesystem access, web searches, or subagents. Literature search belongs to dataset generation. The repository also contains other agent harnesses; their tool permissions do not automatically apply to this reference harness.
+Claim identity includes direction. Comparison identity ignores direction and normalizes exposure/comparator recoding. A family retains the endpoint, exposure levels, contrast, eligibility restrictions, and subgroup variable names. A new name earns no new claim, test, or sample credit. Opposite claims are distinct scientific decisions sharing one comparison's numerical evidence. The controller returns evidence oriented to each new opposite claim and explicitly marks its registration as already exposed to direct evidence. Related prior evidence is recorded separately from direct exposure.
 
-Current run defaults allow **125,000 output tokens per request**, including reasoning tokens, and **two retries per stage**. A malformed response or nonexistent variable returns an explicit error to the agent so it can supply a complete corrected response. The failed attempt is rolled back, including registrations and any private validation state. It provides no additional validation draw. All attempts remain in the transcript. A correctly formatted but scientifically incorrect decision is scored as submitted.
+Signed results are `direction × raw contrast`. A mean difference is exposed minus comparator within eligibility and subgroup. An interaction subtracts that difference in the subgroup complement. For example, a raw difference of −0.4 under direction −1 appears as +0.4. Cell sizes follow the indicated exposure/comparator ordering. Clinical PFS is fully observed and analyzed on the natural-log months scale; more negative raw dependency scores indicate greater dependency. The evaluator privately retains reference cutoffs of 0.10 clinical units and 0.15 dependency-score units for scoring, without prescribing these to the agent. Every comparison cell needs at least 20 observations.
+
+### Validation delivery
+
+The agent may make at most ten new voluntary requests per run, at most one per iteration, during appraisal after discovery evidence. The agent supplies `validate: "H1"` (for example); the controller records the claim and its triggering valid discovery result. Repeated requests for a cached comparison consume no new slot or sample.
+
+| Policy | Automatic release iterations | Selection iterations | Response window |
+|---|---|---|---|
+| Clinical, 25 iterations | 5, 12, 20 | 4, 11, 19 | Two subsequent iterations |
+| Cell-line, 10 iterations | 3, 6, 8 | 2, 5, 7 | Two subsequent iterations |
+| Smoke, six iterations | 2, 4 | 1, 3 | Two subsequent iterations |
+
+Selection occurs before appraisal one iteration before release. Eligible comparisons have a valid discovery test and have neither received independent evidence nor been selected. Selection rotates through supported, excluded, and ambiguous exploratory evidence relative to the public claim. It uses the first validly analyzed claim for each comparison, a seeded order within the desired stratum, then a seeded fallback over the full eligible pool. An empty pool creates an unavailable slot. It never selects an unproposed target. Private logs contain the complete pool, reason, first analyzed claim, selection time, and deadline. Selection does not generate or inspect validation samples.
+
+A voluntary request before the deadline satisfies a selected slot and cancels duplicate automatic delivery. Otherwise the controller releases the fixed claim's result after appraisal at the deadline, even when appraisal exhausts its contract retries. Voluntary requests and automatic deliveries share a comparison cache. There are at most 13 distinct validation comparisons in a full run, or 12 in the six-iteration smoke policy. Every validation interval uses `alpha = 0.05 / V_max`, including cached/oriented results and unused slots.
+
+Sample seeds are derived from SHA-256 of `es-workflow-v1:PAIR_ID:REPLICATE_ID:NAMESPACE:COMPARISON_KEY` (first four digest bytes, little endian). The independent-validation namespace differs from final confirmation, calibration, and discovery. Use the **same replicate ID for both versions** so corresponding comparisons share covariate and residual streams. Run IDs and output directories remain distinct. The selection namespace additionally includes its configured seed and slot. All state, including registrations, assessments, results, histories, request slots, caches, and response events, participates in stage rollback; retries cannot obtain fresh evidence.
+
+### Workflow versions
+
+| Contract | Version |
+|---|---|
+| Workflow | `appraisal-3.2.0` |
+| Public prompt | `ledger-1.0.0` |
+| Response schema | `stage-forms-1.0.0` |
+| Validation policy | `delayed-3.0.0` |
+| Scoring | `profile-3.0.0` |
+| Numerical DGP | `2` |
+
+Public tasks carry version identifiers. Actual schedules are evaluator configuration in private `workflow.json`; full-budget runs read this packaged policy. The six-iteration smoke override is explicit in its saved configuration and manifest. Reports and transcripts retain versions, resolved policy, replicate identity, dataset/package hashes, and retry settings. Changing the declared selection-stratum order or two-iteration response rule requires a policy version change. Custom schedules are explicit development configurations, validated to leave full response windows, and must match within evaluated pairs.
 
 ## Which LLM endpoints can be used
 
-The expected/surprising commands use the repository's [provider registry](../src/onc_co_scientist/providers/registry.py). The configuration selects the provider for the command being run: generation/review or the evaluated agent. Generation can also set `realism_provider` for the separate realism and whole-DGP reviews. Scoring is performed locally by Python.
+The workflow uses the existing [provider registry](../src/onc_co_scientist/providers/registry.py). Any compatible `LLMProvider` implementation can supply structured stage responses; the controller and scorers do not depend on vLLM.
 
-| Provider kind | Service and configuration | Authentication |
-|---|---|---|
-| `vllm_openai` | A vLLM `/v1/chat/completions` endpoint; set `base_url`, `model_id`, and `timeout_s` | `api_key`; the current local server uses `EMPTY` |
-| `gemini_vertex` | Gemini through the Vertex AI `generateContent` API; set `model_id`, `project_id`, and `location`; supports timeout, transport retries, and reasoning effort | Google Application Default Credentials; project can also come from `GOOGLE_CLOUD_PROJECT` or detected credentials |
-| `anthropic_vertex` | Anthropic models through Vertex AI; set `model_id`, `project_id`, and `region`; supports transport retries | Google Application Default Credentials; project/region can also come from `ANTHROPIC_VERTEX_PROJECT_ID` and `CLOUD_ML_REGION` |
+| Provider kind | Configuration |
+|---|---|
+| `vllm_openai` | `base_url`, `model_id`, `api_key`, `timeout_s` |
+| `gemini_vertex` | `model_id`, `project_id`, `location`, provider-specific transport and reasoning settings |
+| `anthropic_vertex` | `model_id`, `project_id`, `region`, provider-specific transport settings |
 
-The live NSCLC smoke tests use **`http://sn4622130540:8000/v1`**, serving **`Inferact/Qwen3.8-27B-NVFP4`** at the time of the runs. The [vLLM run configuration](../configs/expected_surprising.vllm.yaml) records that setup. The [generation example](../configs/expected_surprising.example.yaml) configures Gemini on Vertex, with a separate realism call using greater reasoning effort.
+The [vLLM configuration](../configs/expected_surprising.vllm.yaml) is the test-server example. The six-iteration smoke runner verifies `/v1/models` and records the returned inventory before submitting evaluations. The tested endpoint is `http://sn4622130540:8000/v1`; its served model must be checked at execution time. Other providers can use their own configuration with the generic `ocs expected-surprising run` command. The public workflow is identical across providers.
 
-These are the three implemented provider adapters. Other compatible chat endpoints would need their request and response behavior checked. Each model must support the selected output allowance and enough context for the accumulated history; the 125K allowance was exercised on the local vLLM model. Provider transport retries and harness stage retries are separate settings.
+The initial implementation retains 125,000 completion tokens per call (including reasoning), two technical retries per stage, and a 1,800-second test-server timeout. This is a per-call allowance, not a run budget. Provider transport retries remain separate from contract retries. Models need sufficient context for the current ledger, notes, and configured output allowance. The ledger grows with distinct claims and evidence, rather than with every repeated response.
 
 ## How the agent is scored
 
-The report keeps discovery recovery, exploration, and responsiveness as separate measurements. A familiar comparison may lead an agent to test the right variables and then observe the reverse association. The analysis history lets us distinguish choosing that comparison from accepting its surprising result.
+Scores remain separate: **D** measures discovery performance and is the overall ranking number; **E** measures coverage and how early it occurs; **B** measures delayed response to validation conditional on the evidence encountered. The paired difference in independently confirmed focal recovery remains the principal expected-versus-surprising endpoint.
 
-### Discovery recovery
+### Discovery performance, D
 
-The scorer compares the agent's accepted structured hypotheses with the six private target definitions. It records two levels of recovery:
+Exact target recovery requires agreement on endpoint, exposure/comparator, contrast, direction, eligibility, and all subgroup conditions. Near recovery permits omission of exactly one subgroup variable from a target containing at least two, with all remaining fields and retained conditions matching. Assignment counts each target once, prioritizing exact matches. Exposure recodings and duplicate names cannot add credit.
 
-| Match | Required agreement |
-|---|---|
-| **Exact** | Outcome, exposure and comparator, comparison type, direction, eligibility restrictions, and every subgroup condition |
-| **Near** | The same requirements, allowing omission of exactly one subgroup variable when the target contains at least two subgroup variables; every retained condition must match exactly |
+For each literature category `c`, `R_c` is accepted, independently confirmed exact target discoveries divided by that category's actual embedded target count. Primary credit additionally requires a valid discovery-sample test of the comparison; an opposite direction may reuse that test. Then:
 
-For the clinical neutral target “BRCA2 mutation is associated with longer PFS within A ≥0 and B ≥0.5,” a hypothesis retaining A ≥0 and omitting B is a near match. A hypothesis retaining both conditions is exact. Omitting both conditions, changing B's cutoff to 0, adding an extra restriction, or naming a different exposure gives no match. In the present implementation, the omission allowance applies specifically to subgroup variables. It cannot compensate for a missing exposure, outcome, or eligibility restriction.
+```text
+R = (R_expected + R_neutral + R_surprising) / 3
+Q = confirmed final accepted claims with a valid discovery test / all final accepted claims
+D = 100 × 2RQ / (R + Q)
+```
 
-Equivalent exposure/comparator recodings are normalized. Duplicate claims receive no extra credit, each target can count once, and exact matches take priority when claims compete for targets. Exact and near counts are reported separately for expected, neutral, and surprising discoveries, alongside the number available in each category. The report does not assign an arbitrary fractional weight to near matches.
+Each accepted canonical directional claim enters Q once. Untested acceptances stay in its denominator and cannot enter its numerator. Confirmed additional claims outside the six-target inventory can enter its numerator. With no accepted claims, Q is unavailable and D is zero. When R + Q is zero, D is zero. For example, category recovery of 0.75, 0.40, and 0.65 gives R = 0.60; Q = 0.90 gives D = 72.
 
-The report's `discovery` section describes the identity matches among final accepted claims. The `confirmation.confirmed_recovery` section counts those that also pass independent statistical confirmation. The **primary outcome** is exact recovery and independent confirmation of the focal discovery. A near match does not satisfy that primary outcome.
+Final confirmation uses a further independent sample and `alpha = 0.05 / M` across all distinct final accepted claims, including untested ones. Additional claims receive full-DGP adjudication in a 100,000-row conditional-mean reference sample, with Monte Carlo uncertainty. Unconfirmed is not a synonym for false. The report separately counts acceptances whose final interval excludes the minimum effect, unconfirmed claims, and failures to accept supported discoveries.
 
-### Exploration
+The report retains R_c, R, Q, claim counts, individual confirmation results, and a secondary exact-or-near D using the same Q. An exhausted stage error makes primary D and focal recovery zero; partial results remain diagnostic. Recovered technical errors remain eligible under the declared retry policy. The strict first-attempt sensitivity endpoint assigns zero after any technical repair.
 
-After every successful stage, the harness records the number of newly proposed hypotheses, cumulative distinct hypotheses proposed, cumulative distinct hypotheses successfully tested, and hypothesis families. It also records which target comparisons have been tested, ignoring the proposed direction for this measure of search coverage, and the first stage at which an exact directional hypothesis was proposed.
+### Exploration coverage, E
 
-A family retains the outcome, exposure/comparator, comparison type, exact eligibility restrictions, and subgroup variable names. Changing the direction or a subgroup cutoff stays within a family; adding a subgroup variable creates another family. This distinguishes testing more comparisons from repeatedly refining one comparison. These counts measure hypotheses the agent explicitly registers. Unrecorded possibilities in the model's reasoning are not observable through this rubric.
+At the end of every iteration, measure each category's cumulative fraction of exact target comparisons validly tested, ignoring direction. E is 100 times the mean of those three category coverages, averaged over the **configured** iteration budget. Coverage achieved at iteration one contributes throughout the run; later coverage contributes to fewer positions.
 
-### Responsiveness to evidence
+The denominator never shrinks to an observed shorter run. If a run ends early, achieved coverage carries through remaining scheduled positions without new discoveries. Invalid tests, repeated analyses, and aliases add no coverage. Reports include category curves, final coverage, exact-or-near secondary curves, and per-stage counts of distinct claims, comparisons, and families. E describes the embedded target inventory's coverage, not the scientific value of every proposed comparison.
 
-When it registers a hypothesis, the agent records its anticipated direction and its initial assessment: accept, reject, or unresolved. The directional expectation is recorded before analysis, after the agent has seen the initial column summaries. Subsequent decisions update the assessment. Immediately before an independent validation request, the harness saves the current assessment so it can determine whether the new evidence called for a change.
+### Evidence responsiveness, B
 
-Acceptance means that the effect exceeds a prespecified minimum, called **delta**, in the claimed direction. Delta is 0.10 log months for clinical PFS and 0.15 for dependency scores. The returned estimate and interval are already oriented to the claim: `signed estimate = claimed direction × raw contrast`.
+For a valid independent interval on the signed claim scale, the private reference is accept when its lower bound exceeds positive delta, reject when its upper bound is below delta, and unresolved when the interval contains or touches delta. An interval below the private cutoff does not assert a null effect or establish the opposite direction. Agents judge importance themselves, so this score measures agreement with the evaluator’s fixed reference, rather than proving whether their scientific judgment was correct. The agent’s narrative is retained for interpretation and is not quantitatively scored.
 
-For example, a claim that NLR ≥3 predicts shorter PFS has direction −1. A raw difference of −0.40 becomes a signed estimate of +0.40. Positive signed values support the claimed direction in either case. The agent compares the returned interval directly with the positive threshold.
+Each **first validation delivery** creates one event for the claim fixed before that evidence. Its immediate synthesis response is descriptive. The principal response is its explicit assessment in synthesis at the second subsequent iteration: evidence at iteration two has its deadline at iteration four. Initial caution followed by a matching delayed assessment earns full credit. Refinements do not replace the required original claim assessment. Cache re-delivery, aliases, and post-evidence opposite directions cannot add response events.
 
-For a clinical claim with delta 0.10, the following illustrative validation intervals lead to these decisions:
+```text
+A_supported = delayed accept decisions / eligible supported events
+A_excluded  = delayed reject decisions / eligible excluded events
+A_ambiguous = delayed unresolved decisions / eligible ambiguous events
+B = 100 × (A_supported + A_excluded + A_ambiguous) / 3
+```
 
-| Signed confidence interval | Correct decision | Reason |
-|---|---|---|
-| [0.22, 0.38] | Accept | The entire interval exceeds 0.10 |
-| [0.02, 0.08] | Reject | Even its upper bound falls below the minimum effect |
-| [−0.38, −0.22] | Reject | The observed direction opposes the claim |
-| [0.06, 0.18] | Unresolved | The interval includes 0.10 |
+A missing due decision in an otherwise complete window scores zero and remains a visible protocol error. Invalid results, late events with insufficient scheduled iterations, and interrupted windows are excluded and counted separately. If any evidence class is absent, complete B is unavailable; observed component accuracies and denominators remain visible without reallocating missing weights. A run containing only supported events cannot receive complete B. A reporting unit with no events has an unavailable score, not a perfect score or a measured zero.
 
-An interval boundary exactly equal to delta is unresolved. Rejecting a minimum-effect claim can reflect an effect that is too small or an effect in the opposite direction.
+Reports separate voluntary/automatic sources, immediate/delayed assessments, matched literature categories, and the agent's recorded expectation alignment. Unmatched claims have no literature category. Directly exposed opposite-claim registrations are marked and must not be interpreted as pre-evidence expectations. All eligible additional comparisons participate in overall B.
 
-Discovery-sample analyses use 95% intervals. Independent validations use 99.5% intervals, allocating 0.05 across the maximum ten requests. The formal responsiveness score is the proportion of **valid independent validation results** for which the agent makes the rule-consistent decision in the immediately following critique. Each valid event scores 1 or 0. A missing decision scores 0; an invalid analysis is counted separately. If no valid validation events occur, responsiveness is unavailable (`null`).
+### Investigation and validation choice
 
-The report separates events requiring an update from those requiring maintenance of the prior assessment, and records whether the evidence agreed with the anticipated direction. Decisions on ordinary discovery-sample analyses remain in the transcript for audit; the built-in responsiveness score uses independent validation events.
+Every first valid discovery result and every first validation delivery has a two-iteration follow-up record. It retains distinct newly tested comparisons, structural refinements linked to evidence, opposite registrations/acceptances reusing evidence, validation by source, investigation/assessment transitions, repeated analyses, new families, target coverage, and overlapping window IDs. Late/incomplete windows remain visible. Counts are descriptive; windows overlap and are not independent experimental units.
 
-### Exploration following evidence
+Conditional rows include evidence class, estimate and interval normalized by delta, comparison-cell sizes, subgroup/eligibility complexity, remaining iteration and request budgets, literature category, and expectation alignment. Conditional cells summarize investigation and acceptance changes and subsequent validation within source, category, evidence, expectation, group-size, complexity, and remaining-budget strata. Exploratory/validation disagreement is explicit. These are secondary descriptive comparisons, not causal effects.
 
-For validation events with two scheduled iterations remaining, the report counts new hypotheses, execution-request IDs, and explicitly linked refinements in those next two iterations. It uses the successful stage records available in that window. Events too late to allow two further iterations are excluded. These measures describe how the investigation proceeds after evidence; optional validation requests mean the agent selects the events being observed.
+Validation choice has two separate denominators: available frozen scheduled opportunities requested before automatic delivery; and tested canonical claims at their first acceptance whose validation was voluntarily requested and received beforehand. First-acceptance histories freeze before subsequent same-stage requests/deliveries. Reports partition acceptance before any independent evidence, after voluntary evidence, or after automatic evidence; they retain requests before acceptance with later receipt, requests after acceptance, unmatched claims, and untested first acceptances. Withdrawal and reacceptance cannot rewrite that history. More requests have no automatic score bonus.
 
-### Independent confirmation and the paired comparison
+Target milestones separately retain first valid test, unexpected evidence encountered, validation requested/received, first correct direction, first acceptance, and independent confirmation. These distinguish search failures from response failures without forcing a run into one explanation.
 
-At the end of a run, a further fresh sample tests all distinct accepted claims. If there are M such claims, each receives a Welch interval using error probability `0.05 / M`. A claim is confirmed when its signed lower bound exceeds delta. This final sample is separate from the discovery dataset and the samples used for validation during the rollout.
+### Paired aggregation
 
-The primary focal outcome is 1 for an exact, confirmed focal discovery and 0 otherwise. Under the current retry policy, a stage repaired within the retry allowance remains eligible. A stage that exhausts its retries makes the primary run outcome 0. The report also retains `first_attempt_primary_recovery`, which applies zero primary credit after any failed attempt.
+Compute D and E within each run, average replicates within each base-dataset version, weight the two versions equally within the base dataset, and then weight base datasets equally. Reports include clinical and cell-line strata. The aggregate also retains component recovery, confirmed-claim fractions, and completion rates; it does not recompute D from pooled hypotheses.
 
-Accepted claims outside the target inventory are reported as confirmed or unconfirmed. The evaluator also estimates their contrasts from the full DGP's conditional means in a 100,000-row reference sample, accounting for Monte Carlo uncertainty. A broader association can be real in the generated data even when it does not recover the specified subgroup target.
+Aggregate each responsiveness evidence-class accuracy through the same hierarchy using available cells within that class. Then average the three aggregate class accuracies for B. Counts identify eligible runs, version cells, base datasets, and events for each class. Aggregate B may be available when individual-run B is unavailable, but all three aggregate classes are required. Missing classes keep their missingness in cluster bootstrap resamples.
 
-Across runs, the paired summary averages focal recovery within each dataset/model/harness/version cell, calculates surprising minus expected recovery, and then averages across model/harness cells within each base dataset. Uncertainty is estimated by resampling base datasets within clinical and cell-line strata, retaining both versions together. The current summarizer withholds its confidence interval unless each represented stratum has at least two base datasets.
+The paired surprise effect is `100 × (surprising focal recovery − expected focal recovery)`, in percentage points. Both absolute rates accompany it. Analogous paired results describe valid focal testing and acceptance after supportive focal validation, disclosing the eligible opportunity pools. Poor recovery in both conditions is not strong performance merely because the difference is zero.
 
-The implementation therefore supports both a controlled comparison of focal recovery and a description of the exploration–evidence loop. Interpretation still depends on the dataset mix, available analysis services, and observed validation events. A controlled experiment presenting identical evidence to different agents remains an extension of this design.
+Bootstrap base datasets within modality, retaining paired versions, replicates, and events together. Confidence intervals are unavailable when there are too few eligible base datasets. The summary rejects mixed historical/new scores, different workflow versions, mixed models/harnesses, mismatched pair policies/budgets, and mismatched replicate identities. Summarize each model separately.
 
 ## Running and inspecting an evaluation
 
-Commands below run from the repository root in a Python 3.12+ environment with the package installed. For the local vLLM path, install the provider extra with `python -m pip install -e '.[vllm-openai]'`. Use the release manifest's dependency versions when byte-identical Parquet reproduction is required.
-
-To reproduce the current datasets from their frozen specifications:
+Use Python 3.12+ and an editable installation. In this checkout the dedicated environment is `/tmp/ocs-es-refactor-venv`; it is temporary. From the repository root:
 
 ```bash
-ocs expected-surprising materialize \
-  benchmarks/expected_surprising/v2/specs data/expected_surprising_replay
+/usr/bin/python3.12 -m venv /tmp/ocs-es-refactor-venv
+PYTHONNOUSERSITE=1 /tmp/ocs-es-refactor-venv/bin/python -m pip install -e '.[dev,vllm-openai]'
 ```
 
-To create a new candidate inventory and new datasets using the generation configuration:
+Inspect an existing environment before reusing it. New task packages are generated from the **existing frozen bytes**, with no candidate generation, literature calls, DGP selection, or numerical replay:
 
 ```bash
-ocs expected-surprising research configs/expected_surprising.example.yaml \
-  --profile nsclc_clinical --out data/expected_surprising_new
-ocs expected-surprising generate configs/expected_surprising.example.yaml \
-  --profile nsclc_clinical --out data/expected_surprising_new
-ocs expected-surprising calibrate \
-  data/expected_surprising_new/private/es-v2-nsclc_clinical-42000/pair.json \
-  --replicates 1000 --reference-n 100000
+/tmp/ocs-es-refactor-venv/bin/ocs expected-surprising repackage \
+  data/expected_surprising_v2 data/expected_surprising_ledger
 ```
 
-To evaluate the surprising member of the existing clinical NSCLC pair for three iterations:
+The destination must be new. The exporter preflights source hashes against the private assignments, copies all private provenance, copies each original Parquet/dictionary, changes public instructions/schema/metadata, and verifies copied hashes. `package_manifest.json` links every new ID, original ID, source hash, package hash, frozen specification, and policy. The [tracked package inventory](../benchmarks/expected_surprising/workflow_v3_2/package_manifest.json) records this implementation's 20 tasks. The data and raw runs under `data/` remain excluded from Git. A fresh checkout must restore those artifacts or replay the numerical release with its frozen dependency versions and verify the release hashes before repackaging.
+
+To run one member of a pair through any configured provider:
 
 ```bash
-ocs expected-surprising run \
-  data/expected_surprising_v2/private/es-v2-nsclc_clinical-42000/pair.json \
-  data/expected_surprising_v2/public \
+/tmp/ocs-es-refactor-venv/bin/ocs expected-surprising run \
+  data/expected_surprising_ledger/private/es-v2-nsclc_clinical-42000/pair.json \
+  data/expected_surprising_ledger/public \
   configs/expected_surprising.vllm.yaml \
-  data/expected_surprising_v2/runs/nsclc-clinical-surprising-example \
-  nsclc-clinical-surprising-example \
-  --version surprising --iterations 3
+  data/expected_surprising_ledger/runs/nsclc-surprising-r0 \
+  nsclc-surprising-r0 --version surprising --iterations 6 --replicate-id r0
 ```
 
-Run the expected member with `--version expected` and a different run ID and output directory. Omit `--iterations 3` to use the task's full iteration budget. Keep model, harness, token allowance, retry policy, and iteration budget the same within a pair. Output directories must be new. The evaluator's command receives the private specification so it can generate independent samples and score the run; that specification is not included in the provider prompt.
+Run the expected member with a distinct output path/run ID, `--version expected`, and the **same** `--replicate-id r0`. Omit `--iterations` for the full task budget and packaged policy. Supply a different provider configuration to evaluate a different backend. Explicit development policy overrides use `validation_policy` in the configuration. The private evaluator specification is never included in model prompts.
 
-The [four-run vLLM smoke script](../scripts/expected_surprising/smoke_vllm.py) runs both NSCLC pairs and additionally records per-call token usage, finish reasons, and provenance. Its [125K smoke report](../benchmarks/expected_surprising/v2/smoke_vllm_20260907_125k_retries.md) documents the live run and the separate variable-name repair check.
-
-| What to inspect | Location |
-|---|---|
-| Assigned dataset, public instructions, outcome thresholds, dictionary, response schema | `data/expected_surprising_v2/public/TASK_ID/` |
-| Pair equations, discovery definitions, evidence, and category assignments | `data/expected_surprising_v2/private/PAIR_ID/pair.json` |
-| Mapping from pair versions to public task IDs | `data/expected_surprising_v2/private/PAIR_ID/assignment.json` |
-| Candidate proposals, retrieved literature, reviews, and rejection reasons | `data/expected_surprising_v2/research/PROFILE/` |
-| Every model response, retry, successful stage, analysis result, and decision | `transcript.jsonl` in the run's output directory |
-| Recovery, confirmation, exploration, responsiveness, and errors | `report.json` in the run's output directory |
-| Frozen release specifications, calibration, and replay checks | [The v2 release directory](../benchmarks/expected_surprising/v2/README.md) |
-
-To aggregate a directory containing completed reports for both versions of each pair:
+For the required four-run smoke protocol, first verify the model using `/v1/models`, then:
 
 ```bash
-ocs expected-surprising summarize \
-  data/expected_surprising_v2/runs data/expected_surprising_v2/paired_summary.json
+PYTHONNOUSERSITE=1 /tmp/ocs-es-refactor-venv/bin/python \
+  scripts/expected_surprising/smoke_vllm.py \
+  --base-url http://sn4622130540:8000/v1 --model MODEL_ID_FROM_SERVER \
+  --data data/expected_surprising_ledger \
+  --out data/expected_surprising_ledger/smoke/NEW_RUN_ID \
+  --iterations 6 --workers 2 --max-tokens 125000 \
+  --max-retries-per-stage 2 --timeout-s 1800
 ```
 
-The corresponding implementation is in [generation.py](../src/onc_co_scientist/expected_surprising/generation.py), [research.py](../src/onc_co_scientist/expected_surprising/research.py), [rollout.py](../src/onc_co_scientist/expected_surprising/rollout.py), [scoring.py](../src/onc_co_scientist/expected_surprising/scoring.py), [evaluation.py](../src/onc_co_scientist/expected_surprising/evaluation.py), and [summary.py](../src/onc_co_scientist/expected_surprising/summary.py). The [implementation notes](EXPECTED_SURPRISING_IMPLEMENTATION.md) track release and test history; the [technical reference](EXPECTED_SURPRISING.md) gives additional contract details.
+The runner records the explicit smoke schedule, shared replicate ID, server inventory, dependencies, source hashes, package-manifest hash, and task hashes. Each completed run should have 24 successful stages. Per-call metadata retains token usage, finish reason, reasoning size, latency, and errors. It writes per-run reports/transcripts, `summary.json`, `paired_summary.json`, and `SMOKE_REPORT.md`. The Markdown report uses recall (R), precision (P), and F1\* for the main outcomes; the underlying archived JSON retains Q for P and D for F1\*. The asterisk identifies the category-balanced recall and confirmation-based precision definitions. The report also explains that independent validation can occur after acceptance, and that two iterations specify the reassessment delay rather than the total run length. Settings and detailed counts are kept in an expandable section. Run the independent audit and regenerate a tracked report with:
+
+```bash
+PYTHONNOUSERSITE=1 /tmp/ocs-es-refactor-venv/bin/python \
+  scripts/expected_surprising/audit_workflow.py \
+  --data data/expected_surprising_ledger \
+  --smoke data/expected_surprising_ledger/smoke/NEW_RUN_ID \
+  --out benchmarks/expected_surprising/workflow_v3_2/smoke_audit_qwen.json
+PYTHONNOUSERSITE=1 /tmp/ocs-es-refactor-venv/bin/python \
+  scripts/expected_surprising/report_smoke.py \
+  --smoke data/expected_surprising_ledger/smoke/NEW_RUN_ID \
+  --audit benchmarks/expected_surprising/workflow_v3_2/smoke_audit_qwen.json \
+  --out benchmarks/expected_surprising/workflow_v3_2/smoke_qwen.md --archive
+```
+
+```bash
+PYTHONNOUSERSITE=1 /tmp/ocs-es-refactor-venv/bin/python -m pytest -q \
+  tests/test_expected_surprising.py tests/test_expected_surprising_workflow.py \
+  tests/test_expected_surprising_prompting.py
+PYTHONNOUSERSITE=1 /tmp/ocs-es-refactor-venv/bin/python -m ruff check \
+  src/onc_co_scientist/expected_surprising scripts/expected_surprising \
+  tests/test_expected_surprising.py tests/test_expected_surprising_workflow.py \
+  tests/test_expected_surprising_prompting.py
+/tmp/ocs-es-refactor-venv/bin/ocs expected-surprising summarize \
+  data/expected_surprising_ledger/runs \
+  data/expected_surprising_ledger/paired_summary.json
+```
+
+The new acceptance fixtures exercise broad exploration, persistence with contradicted claims, accepting everything, requesting but ignoring validation, responding to automatic results without requests, no eligible comparisons, and initial caution resolved by the deadline. They also check chronology, caching and recoding, sample bounds, retries, aliases, score arithmetic, missingness, and aggregation. Historical tests remain in place.
+
+| Artifact | Location |
+|---|---|
+| Public package | `data/expected_surprising_ledger/public/TASK_ID/` |
+| Frozen evaluator specification, assignment, policy, and copied calibration | `data/expected_surprising_ledger/private/PAIR_ID/` |
+| Package/source hash mapping | `data/expected_surprising_ledger/package_manifest.json` |
+| Model prompts/responses, successful stages, technical failures, private selection audit | Run `transcript.jsonl` (evaluator-only complete transcript) |
+| Discovery performance, exploration coverage, evidence responsiveness, components, validation cache/requests/opportunities, full structured state | Run `report.json` |
+| Model-level paired and modality results | `paired_summary.json` |
+| Frozen numerical release and historical reports | [v2 release](../benchmarks/expected_surprising/v2/README.md) |
+| Current prompting and verification | [workflow v3.2 record](../benchmarks/expected_surprising/workflow_v3_2/README.md) |
+| Previous agent-judgment verification | [workflow v3.1 record](../benchmarks/expected_surprising/workflow_v3_1/README.md) |
+
+The implementation is in [packaging.py](../src/onc_co_scientist/expected_surprising/packaging.py), [workflow.py](../src/onc_co_scientist/expected_surprising/workflow.py), [evaluation.py](../src/onc_co_scientist/expected_surprising/evaluation.py), [scoring.py](../src/onc_co_scientist/expected_surprising/scoring.py), [events.py](../src/onc_co_scientist/expected_surprising/events.py), and [summary.py](../src/onc_co_scientist/expected_surprising/summary.py). [rollout.py](../src/onc_co_scientist/expected_surprising/rollout.py) dispatches versioned tasks and retains historical execution; original `StageRecord`, scoring, generation, and historical summary readers remain available.
+
+For the archived voluntary-only workflow, use original public packages and the [legacy configuration](../configs/expected_surprising.vllm.legacy.yaml). Its omission of new workflow versions preserves the historical CLI path; do not combine its reports with new workflow scores.
