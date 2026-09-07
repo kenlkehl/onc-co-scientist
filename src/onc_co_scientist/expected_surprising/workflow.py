@@ -483,6 +483,10 @@ class WorkflowController:
         return {"record": record.model_dump(), "results": results, "reused_evidence": reused}
 
 
+class WorkflowInfrastructureError(RuntimeError):
+    """Stop rather than treating a persistence/provenance error as an agent mistake."""
+
+
 def run_workflow(
     spec,
     version,
@@ -496,6 +500,7 @@ def run_workflow(
     max_retries_per_stage=2,
     policy=None,
     replicate_id=None,
+    stage_executor=None,
 ):
     from .events import behavioral_summary, response_summary
 
@@ -606,11 +611,16 @@ def run_workflow(
                     )
                 try:
                     with stage_transaction([controller.state, controller.service.state]):
-                        response = provider.chat(
-                            [ChatMessage(role="user", content=prompt)],
-                            temperature=0,
-                            max_tokens=max_tokens_per_call,
-                        )
+                        if stage_executor is None:
+                            response = provider.chat(
+                                [ChatMessage(role="user", content=prompt)],
+                                temperature=0,
+                                max_tokens=max_tokens_per_call,
+                            )
+                        else:
+                            response = stage_executor.respond(
+                                prompt, iteration=iteration, stage=stage, attempt=attempt
+                            )
                         response_text = response.text
                         log(
                             "model",
@@ -636,6 +646,8 @@ def run_workflow(
                         if record.stage != stage or record.iteration != iteration:
                             raise ValueError(f"Return iteration={iteration}, stage={stage}")
                         event = controller.apply(record)
+                    if stage_executor is not None:
+                        stage_executor.commit()
                     if compact:
                         if form.research_notes is not None:
                             memory["notes"] = form.research_notes
@@ -658,7 +670,11 @@ def run_workflow(
                         )
                         log("stage_recovered", recovered[-1])
                     break
+                except WorkflowInfrastructureError:
+                    raise
                 except Exception as exc:
+                    if stage_executor is not None:
+                        stage_executor.reject()
                     retrying = attempt <= max_retries_per_stage
                     error = {
                         "iteration": iteration,

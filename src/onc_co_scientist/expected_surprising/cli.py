@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Annotated
 
 import typer
 import yaml
@@ -190,6 +191,30 @@ def summarize_command(reports_root: Path, out: Path, bootstrap_replicates: int =
     typer.echo(
         f"{summary['base_dataset_n']} base datasets; difference={summary['paired_difference']}"
     )
+
+
+@app.command("summarize-workflows")
+def summarize_workflows_command(
+    config: Annotated[Path, typer.Option("--config")],
+    out: Annotated[Path | None, typer.Option("--out")] = None,
+    bootstrap_replicates: int = 2000,
+):
+    """Rebuild the Aim 2 workflow comparison from an existing matrix run."""
+    from ..harness.experiment import load_experiment_spec
+    from ..harness.orchestrator import build_run_plans
+    from .experiment_report import write_report
+
+    spec = load_experiment_spec(config)
+    if spec.expected_surprising is None:
+        raise ValueError("Requires an expected_surprising experiment config")
+    root = out or spec.output_root
+    saved = json.loads((root / "summary.json").read_text())
+    if saved["spec_fingerprint"] != spec.fingerprint():
+        raise ValueError("Report configuration differs from the frozen experiment")
+    write_report(
+        spec, build_run_plans(spec), saved["runs"], root, bootstrap_replicates=bootstrap_replicates
+    )
+    typer.echo(str(root / "expected_surprising_report.md"))
 
 
 @app.command("materialize")

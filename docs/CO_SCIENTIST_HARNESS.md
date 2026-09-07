@@ -4,6 +4,12 @@ The harness is a model-agnostic experiment controller. It keeps the scientific
 workflow, communication policy, site boundary, resource budget, and audit trail
 outside the agent runtime so those factors can be manipulated independently.
 
+For Aim 2 expected/surprising discovery experiments, see the
+[paired-workflow integration](EXPECTED_SURPRISING_AIM2.md). It uses this matrix
+runner with the Aim 1 scientific ledger, evidence service, and scores. The
+provider protocol's conversation, resource, and resume rules are described there;
+the native artifact-runtime instructions below continue to apply to other tasks.
+
 ## What it implements
 
 - **Persistent workflow:** one session performs every scientific stage.
@@ -25,8 +31,8 @@ outside the agent runtime so those factors can be manipulated independently.
 - **Gold isolation:** `private_evaluation_path` is harness-side metadata. It is
   excluded from agent requests and from the resolved public specification.
 
-The default stages are hypothesis generation, analysis, critique, and
-synthesis. They can be replaced in the experiment YAML.
+The default stages are explore, analyze, appraise, and synthesize. Generic
+artifact experiments can replace them in YAML and run up to 25 iterations.
 
 ## Treatment roles
 

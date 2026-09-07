@@ -12,6 +12,11 @@ The [workflow and scoring refactor](EXPECTED_SURPRISING_REFACTOR_PLAN.md) is imp
 
 The provider-independent controller uses the repository's `LLMProvider` interface. No server address or model is built into its workflow, validation, or scoring logic. The configured vLLM endpoint is used for live smoke testing.
 
+For Aim 2, the same task, evidence service, and scoring now run through persistent,
+sequential, and deliberative workflows in the experiment matrix. See the
+[paired workflow guide](EXPECTED_SURPRISING_AIM2.md) for the communication rules,
+25-iteration configurations, and comparison of each workflow's expected/surprising gap.
+
 Contents: [discoveries and pairs](#discoveries-and-pairs) · [example rows](#actual-rows-from-the-two-types-of-dataset) · [generation](#how-the-datasets-are-generated) · [agent loop and tools](#what-the-agent-sees-and-does) · [LLM endpoints](#which-llm-endpoints-can-be-used) · [scoring](#how-the-agent-is-scored) · [running and inspecting an evaluation](#running-and-inspecting-an-evaluation)
 
 ## Discoveries and pairs

@@ -15,7 +15,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-AdapterKind = Literal["cli-json", "pi-rpc", "stub"]
+AdapterKind = Literal["cli-json", "pi-rpc", "stub", "provider"]
 WorkflowMode = Literal["persistent", "sequential", "deliberative"]
 WorkspaceStrategy = Literal["reference", "copy"]
 CompletionMode = Literal["fixed"]
@@ -45,7 +45,7 @@ class IterationPolicy(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    iterations: int = Field(default=1, ge=1, le=20)
+    iterations: int = Field(default=1, ge=1, le=25)
     completion_mode: CompletionMode = "fixed"
 
 
@@ -115,6 +115,7 @@ class ModelSpec(BaseModel):
     id: str = Field(min_length=1, description="Stable profile identifier used in run IDs.")
     model_id: str = Field(min_length=1)
     provider: str | None = None
+    provider_config: dict[str, Any] | None = None
     adapter: AdapterKind = "pi-rpc"
     command: list[str] = Field(default_factory=list)
     extra_args: list[str] = Field(default_factory=list)
@@ -139,6 +140,13 @@ class ModelSpec(BaseModel):
     def validate_command(self) -> ModelSpec:
         if self.adapter == "cli-json" and not self.command:
             raise ValueError("cli-json model profiles require a non-empty command.")
+        if self.adapter == "provider":
+            if not self.provider_config or "kind" not in self.provider_config:
+                raise ValueError("provider profiles require provider_config with a kind.")
+            if self.provider_config.get("model_id") != self.model_id:
+                raise ValueError("provider_config.model_id must equal model_id.")
+        elif self.provider_config is not None:
+            raise ValueError("provider_config requires adapter: provider.")
         return self
 
     def for_scope(self, scope: str | None) -> ModelSpec:
@@ -220,6 +228,19 @@ class ClinicalBenchmarkSource(BaseModel):
     limit_per_cohort: int | None = Field(default=None, ge=1)
 
 
+class ExpectedSurprisingSource(BaseModel):
+    """Frozen paired packages evaluated with the common Aim 1 scientific controller."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    root: Path
+    pair_ids: list[str] = Field(default_factory=list)
+    profiles: list[str] = Field(default_factory=list)
+    max_tokens_per_call: int = Field(default=125000, ge=1)
+    max_retries_per_stage: int = Field(default=2, ge=0, le=10)
+    persistent_history_chars: int | None = Field(default=120000, ge=1)
+
+
 class ExperimentSpec(BaseModel):
     """Top-level co-scientist experiment manifest."""
 
@@ -232,6 +253,7 @@ class ExperimentSpec(BaseModel):
     workspace_strategy: WorkspaceStrategy = "reference"
     tasks: list[TaskSpec] = Field(default_factory=list)
     clinical_benchmark: ClinicalBenchmarkSource | None = None
+    expected_surprising: ExpectedSurprisingSource | None = None
     models: list[ModelSpec] = Field(min_length=1)
     workflows: list[WorkflowSpec] = Field(min_length=1)
     stages: list[StageSpec] = Field(default_factory=default_stages, min_length=1)
@@ -247,8 +269,16 @@ class ExperimentSpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_matrix(self) -> ExperimentSpec:
-        if not self.tasks and self.clinical_benchmark is None:
-            raise ValueError("Provide at least one task or a clinical_benchmark source.")
+        if not self.tasks and self.clinical_benchmark is None and self.expected_surprising is None:
+            raise ValueError(
+                "Provide tasks, a clinical_benchmark, or an expected_surprising source."
+            )
+        if self.expected_surprising is not None:
+            from ..expected_surprising.experiment import validate_experiment
+
+            validate_experiment(self)
+        elif any(model.adapter == "provider" for model in self.models):
+            raise ValueError("adapter: provider currently requires expected_surprising.")
         for label, values in (
             ("task", [item.id for item in self.tasks]),
             ("model", [item.id for item in self.models]),
@@ -297,6 +327,11 @@ def _resolve_paths(spec: ExperimentSpec, config_dir: Path) -> ExperimentSpec:
             for site, path in task.site_workspaces.items()
         }
     source = spec.clinical_benchmark
+    if spec.expected_surprising is not None:
+        spec.expected_surprising.root = (
+            _resolve_path(spec.expected_surprising.root, config_dir)
+            or spec.expected_surprising.root
+        )
     if source is not None:
         source.questions_root = (
             _resolve_path(source.questions_root, config_dir) or source.questions_root
@@ -321,9 +356,7 @@ def required_agent_calls(
     calls_per_stage = 1
     if workflow.mode == "deliberative":
         calls_per_stage = workflow.agents_per_stage * workflow.deliberation_rounds + 1
-    scientific_calls = (
-        spec.iteration_policy.iterations * len(spec.stages) * calls_per_stage
-    )
+    scientific_calls = spec.iteration_policy.iterations * len(spec.stages) * calls_per_stage
     if workflow.federated:
         scientific_calls *= len(task.site_workspaces)
         scientific_calls += 1  # one evaluator-blind central synthesis
@@ -419,7 +452,15 @@ def load_experiment_spec(path: Path | str) -> ExperimentSpec:
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(f"Expected a YAML mapping at {config_path}")
+    if raw.get("expected_surprising") is not None:
+        raw.setdefault("iteration_policy", {"iterations": 25})
     spec = _resolve_paths(ExperimentSpec.model_validate(raw), config_path.parent)
+    if spec.expected_surprising is not None:
+        from ..expected_surprising.experiment import import_tasks
+
+        spec.tasks = import_tasks(spec.expected_surprising, spec.iteration_policy.iterations)
+        # Validate the expanded matrix and its healthy-run resource requirements.
+        spec = ExperimentSpec.model_validate(spec.model_dump())
     if spec.clinical_benchmark is not None:
         imported = import_clinical_benchmark_tasks(spec.clinical_benchmark)
         existing = {task.id for task in spec.tasks}

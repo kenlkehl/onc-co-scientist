@@ -4,6 +4,8 @@
 
 **Expected/surprising task:** [How it works](docs/EXPECTED_SURPRISING_GUIDE.md) covers dataset generation, actual clinical and cell-line rows, paired discoveries, the agent's tools and analysis loop, LLM endpoints, and the scoring rubric. The commands in that guide use the current paired-discovery reference harness. Most of the instructions below describe the earlier named/masked workflow.
 
+**Aim 2 workflow comparison:** [Expected/surprising across workflows](docs/EXPECTED_SURPRISING_AIM2.md) runs the same scientific controller through persistent, sequential, and deliberative agents, with paired workflow effects and readable reports.
+
 **DS001 local CLI replication:** [Codex handoff and launch instructions](docs/DS001_CODEX_CLI_HANDOFF.md)
 for repeating the NSCLC Sol 5.6 medium experiment on your own machine.
 

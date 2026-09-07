@@ -636,7 +636,7 @@ def test_iteration_validation_and_exact_call_ceiling(tmp_path: Path) -> None:
             budget=ResourceBudget(max_agent_calls=239),
         )
     with pytest.raises(ValidationError):
-        IterationPolicy(iterations=21)
+        IterationPolicy(iterations=26)
 
 
 class _InterruptAfterRuntime(_RecordingRuntime):

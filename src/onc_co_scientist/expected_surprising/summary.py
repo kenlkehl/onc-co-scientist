@@ -179,6 +179,31 @@ def paired_summary(reports: list[dict], *, bootstrap_replicates=2000, seed=0) ->
         raise ValueError("Cannot combine different workflow/scoring versions")
     if len({(r["model"], r["harness"]) for r in reports}) != 1:
         raise ValueError("Summarize one model and harness at a time")
+    if len({(r.get("model_profile"), r.get("workflow_id")) for r in reports}) != 1:
+        raise ValueError("Summarize one model profile and workflow at a time")
+    if (
+        len(
+            {
+                json.dumps(
+                    {
+                        key: r.get("coordination", {}).get(key)
+                        for key in (
+                            "version",
+                            "workflow",
+                            "persistent_history_chars",
+                            "memory_policy",
+                        )
+                    },
+                    sort_keys=True,
+                )
+                for r in reports
+            }
+        )
+        != 1
+    ):
+        raise ValueError("Cannot combine different coordination settings")
+    if len({(r["pair_id"], r["version"], r["replicate_id"]) for r in reports}) != len(reports):
+        raise ValueError("Duplicate paired replicate identities")
     for pair in {r["pair_id"] for r in reports}:
         settings = {
             (

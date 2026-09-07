@@ -46,6 +46,11 @@ from .runtime import (
 from .treatment_roles import render_treatment_roles
 
 _BUILTIN_RESUME_COMPATIBILITY = {
+    # Adds a separate expected/surprising dispatch; legacy artifact cells follow
+    # exactly the same controller, call contracts and resume checks.
+    "0944d73a76ce76b27f2cfbc6c3d623214b262d8391291f066d27c0992f3605db": (
+        "built_in_expected_surprising_dispatch_compatible_resume"
+    ),
     # The only controller change after this implementation was frozen is the
     # stage-label migration from hypothesis_generation/analysis/critique/
     # synthesis to explore/analyze/appraise/synthesize. Frozen manifests keep
@@ -1358,6 +1363,10 @@ def _run_one(
     implementation_sha256: str,
     compatible_resume_implementation_sha256s: Collection[str] = (),
 ) -> dict[str, Any]:
+    if spec.expected_surprising is not None:
+        from ..expected_surprising.experiment import run_cell
+
+        return run_cell(spec, plan, output_root, fingerprint, resume=resume)
     run_dir = output_root / "runs" / plan.run_id
     run_path = run_dir / "run.json"
     if resume and durable_is_file(run_path):
@@ -1683,4 +1692,8 @@ def run_experiment(
         "runs": results,
     }
     _atomic_json(root / "summary.json", summary)
+    if spec.expected_surprising is not None:
+        from ..expected_surprising.experiment_report import write_report
+
+        write_report(spec, plans, results, root)
     return summary

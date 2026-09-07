@@ -114,8 +114,8 @@ class AgentRequest(BaseModel):
     reasoning_effort: str | None = None
     stage_id: str
     require_final_answer: bool = False
-    iteration_index: int = Field(default=1, ge=1, le=20)
-    max_iterations: int = Field(default=1, ge=1, le=20)
+    iteration_index: int = Field(default=1, ge=1, le=25)
+    max_iterations: int = Field(default=1, ge=1, le=25)
     stage_index: int = Field(default=0, ge=0)
     stage_position: int = Field(default=1, ge=1)
     terminal: bool = False
