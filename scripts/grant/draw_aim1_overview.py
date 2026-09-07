@@ -13,9 +13,9 @@ OUT = ROOT / "docs/figures"
 OUT.mkdir(parents=True, exist_ok=True)
 plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 9,
                      "svg.fonttype": "none", "pdf.fonttype": 42})
-fig, ax = plt.subplots(figsize=(7.5, 6.5))
+fig, ax = plt.subplots(figsize=(7.5, 6.7))
 fig.subplots_adjust(0, 0, 1, 1)
-ax.set(xlim=(0, 100), ylim=(0, 100)); ax.axis("off")
+ax.set(xlim=(0, 100), ylim=(-4, 100)); ax.axis("off")
 ink, green, blue, orange = "#21312C", "#E2EED9", "#E4EDF4", "#FAE6D4"
 
 def box(x, y, w, h, title, body="", color="white", fontsize=8.3):
@@ -151,7 +151,22 @@ box(54,5.5,42,9.5,"Independent validation", color=blue)
 icon_label("Refresh", 57.0, 8.2, "Same comparison on fresh simulated data", 7.5)
 arrow((62,18),(62,15.6)); arrow((88,15.6),(88,18))
 ax.text(26,10.2,"Repeat through the full iteration budget",ha="center",fontsize=8.1,weight="bold",color=ink)
-ax.text(50,2.3,"Outcomes: discovery recall · precision · combined F1* score\nExploration coverage · responsiveness to new evidence",ha="center",va="center",fontsize=8.0,linespacing=1.2)
+# One continuous return path, with a long final stem and an unobstructed arrowhead.
+ax.plot([98.5, 99.4, 99.4, 4], [25, 25, 3.5, 3.5],
+        color=ink, linewidth=1.1, solid_joinstyle="round")
+ax.add_patch(FancyArrowPatch((4, 3.5), (4, 18), arrowstyle="-|>",
+                           mutation_scale=10, color=ink, linewidth=1.1,
+                           shrinkA=0, shrinkB=0))
+ax.text(2, -.9, "Outcomes", ha="left", va="center", fontsize=8.2,
+        weight="bold", color=ink)
+for kind, x, label in [
+    ("Discoveries", 13, "Discovery recall"),
+    ("Check", 29, "Precision"),
+    ("Outcomes", 42, "F1*"),
+    ("Search", 51, "Exploration coverage"),
+    ("Refresh", 75, "Evidence responsiveness"),
+]:
+    icon_label(kind, x, -.9, label, 7.2)
 for suffix in ("svg", "pdf", "png"):
     fig.savefig(OUT / f"aim1_overview.{suffix}",dpi=300,facecolor="white")
 plt.close(fig)

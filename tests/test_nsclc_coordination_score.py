@@ -68,7 +68,7 @@ def _record(
     artifact.setdefault(
         "final_answer",
         ({"conclusion": "final", "supported_claim_indices": [0]}
-         if stage.removesuffix("_consensus") == "synthesis"
+         if stage.removesuffix("_consensus") in {"synthesis", "synthesize"}
          else None),
     )
     return {
@@ -285,6 +285,28 @@ def test_deliberative_uses_consensus_checkpoints_and_scores_survival() -> None:
     assert score["analysis_to_final_survival"] is True
     assert score["discovery_loss"] is False
     assert score["usage"]["tokens_to_first_recovery"] == 600
+
+
+def test_current_stage_names_are_scored_without_rewriting_frozen_names() -> None:
+    artifacts = [
+        _record(1, "explore", {"summary": "none", "handoff": "none"}),
+        _record(2, "analyze", _artifact("analysis", EXACT_PREDICATES)),
+        _record(3, "appraise", _artifact("appraisal", EXACT_PREDICATES)),
+        _record(4, "synthesize", _artifact("final", EXACT_PREDICATES)),
+    ]
+    score = score_run(
+        {"run_id": "current-names", "workflow_id": "sequential", "status": "completed"},
+        artifacts,
+    )
+
+    assert [item["canonical_stage"] for item in score["checkpoint_scores"]] == [
+        "explore",
+        "analyze",
+        "appraise",
+        "synthesize",
+    ]
+    assert score["analysis_to_final_survival"] is True
+    assert score["terminal_supported_exact"] is True
 
 
 def test_critique_rescue_and_analysis_loss_are_explicit_denominators() -> None:

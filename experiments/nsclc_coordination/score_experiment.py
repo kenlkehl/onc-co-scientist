@@ -52,8 +52,25 @@ LEVEL_RANK: dict[RecoveryLevel, int] = {
     "near": 2,
     "exact": 3,
 }
-BASE_STAGES = ("hypothesis_generation", "analysis", "critique", "synthesis")
-FINAL_STAGES = {"synthesis", "synthesis_consensus", "federated_synthesis"}
+STAGE_KINDS = ("explore", "analyze", "appraise", "synthesize")
+STAGE_KIND_ALIASES = {
+    "explore": "explore",
+    "hypothesis_generation": "explore",
+    "analyze": "analyze",
+    "analysis": "analyze",
+    "appraise": "appraise",
+    "critique": "appraise",
+    "synthesize": "synthesize",
+    "synthesis": "synthesize",
+}
+BASE_STAGES = tuple(STAGE_KIND_ALIASES)
+FINAL_STAGES = {
+    "synthesize",
+    "synthesize_consensus",
+    "synthesis",
+    "synthesis_consensus",
+    "federated_synthesis",
+}
 
 
 @dataclass(frozen=True)
@@ -1001,6 +1018,12 @@ def _canonical_stage(stage_id: str) -> str:
     return stage_id
 
 
+def _stage_kind(stage_id: str) -> str | None:
+    """Return the stable semantic kind for current and frozen legacy stage IDs."""
+
+    return STAGE_KIND_ALIASES.get(_canonical_stage(stage_id))
+
+
 def _is_deliberative(run: Mapping[str, Any], artifacts: Sequence[Mapping[str, Any]]) -> bool:
     mode = _normal_name(run.get("workflow_mode", ""))
     workflow_id = _normal_name(run.get("workflow_id", ""))
@@ -1015,8 +1038,8 @@ def _is_checkpoint(stage_id: str, *, deliberative: bool) -> bool:
     if stage_id in {"federated_synthesis", "independent_verification"}:
         return True
     if deliberative:
-        return stage_id.endswith("_consensus") and _canonical_stage(stage_id) in BASE_STAGES
-    return stage_id in BASE_STAGES
+        return stage_id.endswith("_consensus") and _stage_kind(stage_id) in STAGE_KINDS
+    return _stage_kind(stage_id) in STAGE_KINDS
 
 
 def _usage(record: Mapping[str, Any]) -> dict[str, float]:
@@ -1033,9 +1056,11 @@ def _usage(record: Mapping[str, Any]) -> dict[str, float]:
 
 
 def _best_stage(
-    scores: Sequence[Mapping[str, Any]], canonical_stage: str
+    scores: Sequence[Mapping[str, Any]], stage_kind: str
 ) -> Mapping[str, Any] | None:
-    candidates = [item for item in scores if item["canonical_stage"] == canonical_stage]
+    candidates = [
+        item for item in scores if _stage_kind(str(item["canonical_stage"])) == stage_kind
+    ]
     if not candidates:
         return None
     return max(
@@ -1052,7 +1077,11 @@ def _final_stage(scores: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | Non
     central = [item for item in scores if item["stage_id"] == "federated_synthesis"]
     if central:
         return max(central, key=lambda item: item["call_index"])
-    synthesis = [item for item in scores if item["canonical_stage"] == "synthesis"]
+    synthesis = [
+        item
+        for item in scores
+        if _stage_kind(str(item["canonical_stage"])) == "synthesize"
+    ]
     return max(synthesis, key=lambda item: item["call_index"]) if synthesis else None
 
 
@@ -1096,7 +1125,7 @@ def score_run(
             isinstance(artifact.get(key), str) and bool(str(artifact.get(key)).strip())
             for key in ("summary", "handoff")
         )
-        if canonical_stage == "synthesis":
+        if _stage_kind(canonical_stage) == "synthesize":
             malformed = malformed or artifact.get("final_answer") is None
         elif artifact.get("final_answer") is not None:
             malformed = True
@@ -1151,16 +1180,20 @@ def score_run(
     for index, checkpoint in enumerate(checkpoints, start=1):
         checkpoint["checkpoint_index"] = index
 
-    def last_stage(stage: str) -> Mapping[str, Any] | None:
-        candidates = [item for item in checkpoints if item["canonical_stage"] == stage]
+    def last_stage(stage_kind: str) -> Mapping[str, Any] | None:
+        candidates = [
+            item
+            for item in checkpoints
+            if _stage_kind(str(item["canonical_stage"])) == stage_kind
+        ]
         return max(
             candidates,
             key=lambda item: (item["iteration_index"], item["call_index"]),
             default=None,
         )
 
-    analysis = last_stage("analysis")
-    critique = last_stage("critique")
+    analysis = last_stage("analyze")
+    critique = last_stage("appraise")
     final = _final_stage(checkpoints)
     analysis_supported = _target_supported(analysis)
     critique_supported = _target_supported(critique)
@@ -1179,7 +1212,11 @@ def score_run(
         ),
         None,
     )
-    syntheses = [item for item in checkpoints if item["canonical_stage"] == "synthesis"]
+    syntheses = [
+        item
+        for item in checkpoints
+        if _stage_kind(str(item["canonical_stage"])) == "synthesize"
+    ]
     ever_exact_synthesis = next(
         (
             item
@@ -1250,13 +1287,28 @@ def score_run(
     for iteration in sorted({item["iteration_index"] for item in checkpoints}):
         current = [item for item in checkpoints if item["iteration_index"] == iteration]
         current_analysis = next(
-            (item for item in current if item["canonical_stage"] == "analysis"), None
+            (
+                item
+                for item in current
+                if _stage_kind(str(item["canonical_stage"])) == "analyze"
+            ),
+            None,
         )
         current_critique = next(
-            (item for item in current if item["canonical_stage"] == "critique"), None
+            (
+                item
+                for item in current
+                if _stage_kind(str(item["canonical_stage"])) == "appraise"
+            ),
+            None,
         )
         current_synthesis = next(
-            (item for item in current if item["canonical_stage"] == "synthesis"), None
+            (
+                item
+                for item in current
+                if _stage_kind(str(item["canonical_stage"])) == "synthesize"
+            ),
+            None,
         )
         if not _target_supported(current_analysis) and _target_supported(current_critique):
             critique_rescues += 1

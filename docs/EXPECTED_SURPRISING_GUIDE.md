@@ -8,7 +8,7 @@ The central comparison uses **a pair of datasets**. They contain the same synthe
 
 This guide describes the implementation on the `expected-or-surprising` branch as of September 7, 2026, using the **v2 development release**. It contains the evaluator's discovery definitions and pair assignments. The evaluated agent receives only its assigned task and the analysis history described below. Expert adjudication of the literature classifications and formal task locking remain pending.
 
-The [workflow and scoring refactor](EXPECTED_SURPRISING_REFACTOR_PLAN.md) is implemented as `appraisal-3.2.0`, with numerical DGP **v2 unchanged**. New packages copy all 20 original Parquet files byte for byte. The [historical guide](EXPECTED_SURPRISING_GUIDE_LEGACY.md) describes the earlier voluntary-only protocol; historical packages continue to select that implementation. The separate named/masked workflow is unchanged.
+The [workflow and scoring refactor](EXPECTED_SURPRISING_REFACTOR_PLAN.md) is implemented as `appraisal-3.2.0`, with numerical DGP **v2 unchanged**. New packages copy all 20 original Parquet files byte for byte. The [historical guide](EXPECTED_SURPRISING_GUIDE_LEGACY.md) describes the earlier voluntary-only protocol; historical packages continue to select that implementation. Fresh task packages use 25 iterations for both clinical and cell-line data. Existing packages and runs retain their recorded budgets. The separate named/masked workflow is unchanged.
 
 The provider-independent controller uses the repository's `LLMProvider` interface. No server address or model is built into its workflow, validation, or scoring logic. The configured vLLM endpoint is used for live smoke testing.
 
@@ -151,7 +151,7 @@ The public instructions encourage diverse comparisons and evidence-informed foll
 | `appraise` | Assess every delivered discovery result, record investigation status, optionally request validation | Record decisions, then deliver requested or due scheduled evidence |
 | `synthesize` | Assess new validation and explicitly reassess due original claims | Record immediate/delayed checkpoints, derive the accepted set, and carry state forward |
 
-Every stage may propose comparisons for later analysis. Clinical runs have 25 iterations and cell-line runs 10; the smoke protocol has six. The controller assigns stable short references (`H1`, `H2`, …). Each proposal includes the comparison, anticipated direction and initial assessment in one object, without parallel dictionaries. A changed claim is a new proposal. Optional `parent` and `motivating_evidence` link refinements to earlier evidence. Python derives refinement types; prose is not scored.
+Every stage may propose comparisons for later analysis. Clinical and cell-line runs both have 25 iterations; the smoke protocol has six. The common budget gives both task types the same opportunity for exploration and follow-up. The controller assigns stable short references (`H1`, `H2`, …). Each proposal includes the comparison, anticipated direction and initial assessment in one object, without parallel dictionaries. A changed claim is a new proposal. Optional `parent` and `motivating_evidence` link refinements to earlier evidence. Python derives refinement types; prose is not scored.
 
 Each stage has its own response form. Only analysis exposes `run_analyses`; only appraisal exposes `validate`, a single claim reference. There are no agent-authored iteration/stage stamps, executed-history lists, legacy decisions, or accepted-set lists. An assessment supplies `claim`, `status` (`accept`, `reject`, `unresolved`), and `investigation` (`active`, `deferred`, `closed`). Omitted claims retain their assessment. The controller derives the complete accepted set, including withdrawals and canonical deduplication, from these judgments.
 
@@ -172,7 +172,7 @@ The agent may make at most ten new voluntary requests per run, at most one per i
 | Policy | Automatic release iterations | Selection iterations | Response window |
 |---|---|---|---|
 | Clinical, 25 iterations | 5, 12, 20 | 4, 11, 19 | Two subsequent iterations |
-| Cell-line, 10 iterations | 3, 6, 8 | 2, 5, 7 | Two subsequent iterations |
+| Cell-line, 25 iterations | 3, 6, 8 | 2, 5, 7 | Two subsequent iterations |
 | Smoke, six iterations | 2, 4 | 1, 3 | Two subsequent iterations |
 
 Selection occurs before appraisal one iteration before release. Eligible comparisons have a valid discovery test and have neither received independent evidence nor been selected. Selection rotates through supported, excluded, and ambiguous exploratory evidence relative to the public claim. It uses the first validly analyzed claim for each comparison, a seeded order within the desired stratum, then a seeded fallback over the full eligible pool. An empty pool creates an unavailable slot. It never selects an unproposed target. Private logs contain the complete pool, reason, first analyzed claim, selection time, and deadline. Selection does not generate or inspect validation samples.
@@ -286,7 +286,7 @@ Inspect an existing environment before reusing it. New task packages are generat
 
 ```bash
 /tmp/ocs-es-refactor-venv/bin/ocs expected-surprising repackage \
-  data/expected_surprising_v2 data/expected_surprising_ledger
+  data/expected_surprising_v2 data/expected_surprising_ledger_25_iterations
 ```
 
 The destination must be new. The exporter preflights source hashes against the private assignments, copies all private provenance, copies each original Parquet/dictionary, changes public instructions/schema/metadata, and verifies copied hashes. `package_manifest.json` links every new ID, original ID, source hash, package hash, frozen specification, and policy. The [tracked package inventory](../benchmarks/expected_surprising/workflow_v3_2/package_manifest.json) records this implementation's 20 tasks. The data and raw runs under `data/` remain excluded from Git. A fresh checkout must restore those artifacts or replay the numerical release with its frozen dependency versions and verify the release hashes before repackaging.
@@ -295,10 +295,10 @@ To run one member of a pair through any configured provider:
 
 ```bash
 /tmp/ocs-es-refactor-venv/bin/ocs expected-surprising run \
-  data/expected_surprising_ledger/private/es-v2-nsclc_clinical-42000/pair.json \
-  data/expected_surprising_ledger/public \
+  data/expected_surprising_ledger_25_iterations/private/es-v2-nsclc_clinical-42000/pair.json \
+  data/expected_surprising_ledger_25_iterations/public \
   configs/expected_surprising.vllm.yaml \
-  data/expected_surprising_ledger/runs/nsclc-surprising-r0 \
+  data/expected_surprising_ledger_25_iterations/runs/nsclc-surprising-r0 \
   nsclc-surprising-r0 --version surprising --iterations 6 --replicate-id r0
 ```
 
@@ -310,8 +310,8 @@ For the required four-run smoke protocol, first verify the model using `/v1/mode
 PYTHONNOUSERSITE=1 /tmp/ocs-es-refactor-venv/bin/python \
   scripts/expected_surprising/smoke_vllm.py \
   --base-url http://sn4622130540:8000/v1 --model MODEL_ID_FROM_SERVER \
-  --data data/expected_surprising_ledger \
-  --out data/expected_surprising_ledger/smoke/NEW_RUN_ID \
+  --data data/expected_surprising_ledger_25_iterations \
+  --out data/expected_surprising_ledger_25_iterations/smoke/NEW_RUN_ID \
   --iterations 6 --workers 2 --max-tokens 125000 \
   --max-retries-per-stage 2 --timeout-s 1800
 ```
@@ -321,12 +321,12 @@ The runner records the explicit smoke schedule, shared replicate ID, server inve
 ```bash
 PYTHONNOUSERSITE=1 /tmp/ocs-es-refactor-venv/bin/python \
   scripts/expected_surprising/audit_workflow.py \
-  --data data/expected_surprising_ledger \
-  --smoke data/expected_surprising_ledger/smoke/NEW_RUN_ID \
+  --data data/expected_surprising_ledger_25_iterations \
+  --smoke data/expected_surprising_ledger_25_iterations/smoke/NEW_RUN_ID \
   --out benchmarks/expected_surprising/workflow_v3_2/smoke_audit_qwen.json
 PYTHONNOUSERSITE=1 /tmp/ocs-es-refactor-venv/bin/python \
   scripts/expected_surprising/report_smoke.py \
-  --smoke data/expected_surprising_ledger/smoke/NEW_RUN_ID \
+  --smoke data/expected_surprising_ledger_25_iterations/smoke/NEW_RUN_ID \
   --audit benchmarks/expected_surprising/workflow_v3_2/smoke_audit_qwen.json \
   --out benchmarks/expected_surprising/workflow_v3_2/smoke_qwen.md --archive
 ```
@@ -340,17 +340,17 @@ PYTHONNOUSERSITE=1 /tmp/ocs-es-refactor-venv/bin/python -m ruff check \
   tests/test_expected_surprising.py tests/test_expected_surprising_workflow.py \
   tests/test_expected_surprising_prompting.py
 /tmp/ocs-es-refactor-venv/bin/ocs expected-surprising summarize \
-  data/expected_surprising_ledger/runs \
-  data/expected_surprising_ledger/paired_summary.json
+  data/expected_surprising_ledger_25_iterations/runs \
+  data/expected_surprising_ledger_25_iterations/paired_summary.json
 ```
 
 The new acceptance fixtures exercise broad exploration, persistence with contradicted claims, accepting everything, requesting but ignoring validation, responding to automatic results without requests, no eligible comparisons, and initial caution resolved by the deadline. They also check chronology, caching and recoding, sample bounds, retries, aliases, score arithmetic, missingness, and aggregation. Historical tests remain in place.
 
 | Artifact | Location |
 |---|---|
-| Public package | `data/expected_surprising_ledger/public/TASK_ID/` |
-| Frozen evaluator specification, assignment, policy, and copied calibration | `data/expected_surprising_ledger/private/PAIR_ID/` |
-| Package/source hash mapping | `data/expected_surprising_ledger/package_manifest.json` |
+| Public package | `data/expected_surprising_ledger_25_iterations/public/TASK_ID/` |
+| Frozen evaluator specification, assignment, policy, and copied calibration | `data/expected_surprising_ledger_25_iterations/private/PAIR_ID/` |
+| Package/source hash mapping | `data/expected_surprising_ledger_25_iterations/package_manifest.json` |
 | Model prompts/responses, successful stages, technical failures, private selection audit | Run `transcript.jsonl` (evaluator-only complete transcript) |
 | Discovery performance, exploration coverage, evidence responsiveness, components, validation cache/requests/opportunities, full structured state | Run `report.json` |
 | Model-level paired and modality results | `paired_summary.json` |

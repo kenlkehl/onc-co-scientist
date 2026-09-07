@@ -2,6 +2,8 @@
 
 The `appraisal-3.2.0` workflow uses `ledger-1.0.0` prompts and `stage-forms-1.0.0` responses. It moves record keeping into the controller while leaving scientific choices with the model. The numerical datasets, validation schedules and budgets, effect-size judgment instructions, and scoring formulas remain unchanged.
 
+A subsequent budget update sets fresh full tasks to 25 iterations for both clinical and cell-line data. It does not alter these prompt forms, validation schedules, or scoring formulas. Existing packages retain their recorded budgets; current packaging instructions are in the [guide](EXPECTED_SURPRISING_GUIDE.md#running-and-inspecting-an-evaluation).
+
 The previous interface mixed scientific work with a substantial formatting task. Models had to copy long result IDs, synchronize registration dictionaries, remember which fields were forbidden at each stage, and reconstruct an accepted list already implied by their assessments. Failed attempts were also replayed in subsequent prompts. Gemma sometimes repeated completed analyses in `executed_ids` during synthesis, causing the whole stage to be rejected.
 
 ## What changed

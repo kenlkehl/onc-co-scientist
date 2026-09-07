@@ -16,6 +16,7 @@ from onc_co_scientist.harness.experiment import (
     ModelSpec,
     ResourceBudget,
     SafeguardSpec,
+    StageSpec,
     TaskSpec,
     WorkflowSpec,
     import_clinical_benchmark_tasks,
@@ -313,7 +314,7 @@ def test_copy_strategy_isolates_workspace_and_scratch_by_session(tmp_path: Path)
         assert len({requests[0].scratch_dir for requests in by_session.values()}) == len(by_session)
 
 
-def test_only_final_synthesis_prompts_require_final_answer(tmp_path: Path) -> None:
+def test_only_final_synthesize_prompts_require_final_answer(tmp_path: Path) -> None:
     workflow = WorkflowSpec(id="persistent", mode="persistent")
     spec = _spec(tmp_path, [workflow])
     plan = RunPlan(
@@ -335,7 +336,7 @@ def test_only_final_synthesis_prompts_require_final_answer(tmp_path: Path) -> No
     controller.execute()
 
     for request in runtime.requests:
-        if request.stage_id == "synthesis":
+        if request.stage_id == "synthesize":
             assert "final_answer MUST be non-null" in request.prompt
             assert '"final_answer": {"conclusion"' in request.prompt
         else:
@@ -569,16 +570,41 @@ def test_twenty_iteration_call_graph_order_sessions_and_final_contract(tmp_path:
             if item["position_kind"] in ({"chair"} if workflow_id == "deliberative" else {"linear"})
         ]
         assert [item["canonical_stage"] for item in checkpoints[:4]] == [
-            "hypothesis_generation",
-            "analysis",
-            "critique",
-            "synthesis",
+            "explore",
+            "analyze",
+            "appraise",
+            "synthesize",
         ]
         for item in artifacts:
-            if item["canonical_stage"] == "synthesis":
+            if item["canonical_stage"] == "synthesize":
                 assert item["artifact"]["final_answer"] is not None
             else:
                 assert item["artifact"]["final_answer"] is None
+
+
+def test_frozen_legacy_stage_ids_still_complete(tmp_path: Path) -> None:
+    workflow = WorkflowSpec(id="legacy-sequential", mode="sequential")
+    spec = _spec(tmp_path, [workflow])
+    spec.stages = [
+        StageSpec(id="hypothesis_generation", role="hypothesis scientist", instructions="Explore."),
+        StageSpec(id="analysis", role="analysis scientist", instructions="Analyze."),
+        StageSpec(id="critique", role="critical reviewer", instructions="Appraise."),
+        StageSpec(id="synthesis", role="synthesis scientist", instructions="Synthesize."),
+    ]
+    spec.iteration_policy = IterationPolicy(iterations=2)
+    controller = RunController(
+        spec=spec,
+        plan=build_run_plans(spec)[0],
+        run_dir=tmp_path / "legacy-run",
+        runtime=_RecordingRuntime(),
+        fingerprint=spec.fingerprint(),
+    )
+
+    result = controller.execute()
+
+    assert result["status"] == "completed"
+    assert result["iterations_completed"] == 2
+    assert result["terminal_iteration"] == 2
 
 
 def test_iteration_validation_and_exact_call_ceiling(tmp_path: Path) -> None:
@@ -904,6 +930,49 @@ def test_resume_requires_and_audits_compatible_implementation_migration(
             "reason": "explicit_resilience_compatible_resume",
         }
     ]
+
+
+def test_stage_label_migration_preserves_frozen_supervisor_resume(tmp_path: Path) -> None:
+    workflow = WorkflowSpec(id="legacy-sequential", mode="sequential")
+    spec = _spec(tmp_path, [workflow])
+    spec.stages = [
+        StageSpec(id="hypothesis_generation", role="hypothesis scientist", instructions="Explore."),
+        StageSpec(id="analysis", role="analysis scientist", instructions="Analyze."),
+        StageSpec(id="critique", role="critical reviewer", instructions="Appraise."),
+        StageSpec(id="synthesis", role="synthesis scientist", instructions="Synthesize."),
+    ]
+    plan = build_run_plans(spec)[0]
+    run_dir = tmp_path / "frozen-stage-label-run"
+    frozen_implementation = (
+        "c4a02fffbe85fb033d3d8d74fee83f3e6117ce57b0e54996f371fb8c1bac54cb"
+    )
+    controller = RunController(
+        spec=spec,
+        plan=plan,
+        run_dir=run_dir,
+        runtime=_InterruptAfterRuntime(1),
+        fingerprint=spec.fingerprint(),
+        implementation_sha256=frozen_implementation,
+    )
+    with pytest.raises(RuntimeError, match="deliberate interruption"):
+        controller.execute()
+
+    resumed = RunController(
+        spec=spec,
+        plan=plan,
+        run_dir=run_dir,
+        runtime=_RecordingRuntime(),
+        fingerprint=spec.fingerprint(),
+        resume=True,
+        implementation_sha256="c" * 64,
+    )
+    result = resumed.execute()
+    state = json.loads((run_dir / "run_state.json").read_text(encoding="utf-8"))
+
+    assert result["status"] == "completed"
+    assert state["implementation_migrations"][-1]["reason"] == (
+        "built_in_stage_label_compatible_resume"
+    )
 
 
 def test_resume_adopts_runtime_success_before_controller_checkpoint(tmp_path: Path) -> None:

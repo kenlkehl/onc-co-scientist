@@ -4,6 +4,8 @@
 
 **Prompt-interface revision:** at the user's request, `appraisal-3.2.0` / `ledger-1.0.0` supersedes the agent-facing bookkeeping requirements in sections 3–4. Stage-specific forms, controller-assigned references and accepted-set derivation replace the shared response object and duplicate ID dictionaries. Scientific decisions, schedules, private scoring and numerical datasets are retained. See [prompting details](EXPECTED_SURPRISING_PROMPTING.md). The original brief below is preserved for provenance.
 
+**Iteration-budget revision:** fresh expected/surprising tasks now use 25 iterations for both clinical and cell-line datasets. This supersedes the modality-specific budgets in the original brief below. There is no documented scientific or controller requirement for a shorter cell-line run. Existing validation schedules and six-iteration smoke overrides remain unchanged; historical packages and runs retain their recorded budgets.
+
 The premise is: an ideal agent explores diverse, plausible hypotheses—including unconventional ones—and adapts its search as evidence accumulates. It keeps unexpected results under consideration, requests further validation when uncertainty warrants it, and accepts a surprising association when the accumulated evidence supports it. Acceptance concerns the association in the supplied dataset; biological interpretation and generalizability can remain uncertain.
 
 The refactor will measure search coverage, changes in investigation after evidence, requests for validation, and resolution after validation. Python will score structured actions and decisions. Prose explanations will be retained for inspection and will not enter the quantitative scores.

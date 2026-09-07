@@ -85,6 +85,12 @@ def test_grid_preparation_injects_public_treatment_roles(template_path):
     paths = _source_paths(EXPERIMENT.parents[1])
     mapping = json.loads(paths["column_mapping"].read_text())
     config = yaml.safe_load(template_path.read_text())
+    assert [stage["id"] for stage in config["stages"]] == [
+        "explore",
+        "analyze",
+        "appraise",
+        "synthesize",
+    ]
     prepare_module._set_treatment_columns(config, paths, mapping)
     expected_named = json.loads(paths["named_manifest"].read_text())["treatment_columns"]
     for task in config["tasks"]:

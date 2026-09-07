@@ -62,7 +62,7 @@ class StageSpec(BaseModel):
 def default_stages() -> list[StageSpec]:
     return [
         StageSpec(
-            id="hypothesis_generation",
+            id="explore",
             role="hypothesis scientist",
             instructions=(
                 "Generate specific, falsifiable hypotheses. State the expected direction, "
@@ -70,7 +70,7 @@ def default_stages() -> list[StageSpec]:
             ),
         ),
         StageSpec(
-            id="analysis",
+            id="analyze",
             role="analysis scientist",
             instructions=(
                 "Test the candidate hypotheses using only the permitted task data and tools. "
@@ -78,7 +78,7 @@ def default_stages() -> list[StageSpec]:
             ),
         ),
         StageSpec(
-            id="critique",
+            id="appraise",
             role="critical reviewer",
             instructions=(
                 "Audit the hypotheses and analyses for leakage, confounding, multiplicity, "
@@ -86,7 +86,7 @@ def default_stages() -> list[StageSpec]:
             ),
         ),
         StageSpec(
-            id="synthesis",
+            id="synthesize",
             role="synthesis scientist",
             instructions=(
                 "Produce the final scientific report. Distinguish supported findings, negative "

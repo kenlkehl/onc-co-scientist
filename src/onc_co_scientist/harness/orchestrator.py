@@ -45,6 +45,18 @@ from .runtime import (
 )
 from .treatment_roles import render_treatment_roles
 
+_BUILTIN_RESUME_COMPATIBILITY = {
+    # The only controller change after this implementation was frozen is the
+    # stage-label migration from hypothesis_generation/analysis/critique/
+    # synthesis to explore/analyze/appraise/synthesize. Frozen manifests keep
+    # their explicit stage IDs, and the controller remains behaviorally
+    # identical for them. Keeping this exact predecessor hash here preserves
+    # audited supervisor failover for the already-running experiments.
+    "c4a02fffbe85fb033d3d8d74fee83f3e6117ce57b0e54996f371fb8c1bac54cb": (
+        "built_in_stage_label_compatible_resume"
+    ),
+}
+
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds")
@@ -246,7 +258,7 @@ class RunController:
         )
         self.compatible_resume_implementation_sha256s = frozenset(
             compatible_resume_implementation_sha256s
-        )
+        ) | frozenset(_BUILTIN_RESUME_COMPATIBILITY)
         self.implementation_migrations: list[dict[str, str]] = []
         self.call_index = self._existing_call_index()
         self.artifacts: list[dict[str, Any]] = []
@@ -313,7 +325,10 @@ class RunController:
                     "from_sha256": str(prior_implementation),
                     "to_sha256": self.implementation_sha256,
                     "accepted_at": _utc_now(),
-                    "reason": "explicit_resilience_compatible_resume",
+                    "reason": _BUILTIN_RESUME_COMPATIBILITY.get(
+                        str(prior_implementation),
+                        "explicit_resilience_compatible_resume",
+                    ),
                 }
             )
         raw_artifacts = state.get("artifacts")
@@ -896,7 +911,11 @@ class RunController:
         self.completed_slots[call_slot] = record
         if authoritative:
             self.previous_authoritative_handoff = artifact.handoff
-            if canonical_stage == "synthesis":
+            # Stage semantics are defined by their ordered position, not by a
+            # particular historical ID (for example, ``synthesis`` versus
+            # ``synthesize``). This keeps frozen experiment manifests resumable
+            # while allowing future manifests to use clearer stage names.
+            if stage_index == len(self.spec.stages) - 1:
                 self.iterations_completed = max(self.iterations_completed, iteration_index)
                 if terminal:
                     self.terminal_iteration = iteration_index

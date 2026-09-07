@@ -9,10 +9,14 @@ dataset with a 2 × 3 factorial design:
 - coordination workflow: `persistent`, `sequential`, or `deliberative`;
 - five replicates in each of the six cells;
 - twenty ordered scientific iterations per run, where one iteration is exactly:
-  `hypothesis_generation → analysis → critique → synthesis`.
+  `explore → analyze → appraise → synthesize`.
 
 This document is an implementation and execution plan. Do not start the main
 model run until all preflight gates below pass.
+
+Future manifests use the stage IDs above. Frozen manifests and checkpoints
+that already use `hypothesis_generation`, `analysis`, `critique`, and
+`synthesis` retain those IDs and remain resume- and scorer-compatible.
 
 ## Locked interpretation
 
@@ -30,8 +34,8 @@ model run until all preflight gates below pass.
    when to stop. A timeout or unrecoverable technical failure may truncate a
    run and must be reported as such. Earliest discovery is calculated after
    execution.
-4. Every synthesis is a scored checkpoint and must return a non-null
-   `final_answer`. The iteration-20 synthesis is the terminal result.
+4. Every `synthesize` stage is a scored checkpoint and must return a non-null
+   `final_answer`. The iteration-20 `synthesize` stage is the terminal result.
 5. Use `gpt-5.6-luna` with low reasoning effort. Retain the prior timeout fix:
    3,600 seconds in the outer harness and 3,580 seconds in the Codex adapter.
 6. The comparison is **native-resource**, not resource-matched. Deliberative
@@ -193,8 +197,8 @@ stage.
 - [ ] Add one-based `iteration_index`, `max_iterations`, and zero/one-based
   stage position consistently to prompts, requests, artifacts, event records,
   call records, and `run.json`.
-- [ ] Require a non-null `final_answer` for every synthesis and `null` for all
-  other stages. Mark the iteration-20 synthesis as terminal.
+- [ ] Require a non-null `final_answer` for every `synthesize` stage and `null`
+  for all other stages. Mark the iteration-20 `synthesize` stage as terminal.
 - [ ] Include iteration in nonpersistent session IDs, workspace IDs, call
   slots, and artifact keys so later iterations cannot resume an earlier
   session accidentally.
@@ -208,7 +212,7 @@ Workflow semantics must be exact:
   stage calls. The full session history supplies context.
 - **Sequential:** a fresh session/workspace for every iteration-stage pair.
   Each receives only the immediately preceding structured handoff. Iteration
-  `k + 1` hypothesis generation receives iteration `k` synthesis.
+  `k + 1` `explore` receives iteration `k` `synthesize`.
 - **Deliberative:** for every iteration-stage pair, start two fresh independent
   peers and a fresh chair. Both peers receive only the prior authoritative
   handoff. The chair receives that handoff plus both peer artifacts and emits
@@ -279,10 +283,10 @@ Minimum scored outputs:
 
 Pre-register these endpoints in the experiment protocol before live calls:
 
-- **Primary:** evidence-supported exact recovery at a synthesis checkpoint on
+- **Primary:** evidence-supported exact recovery at a `synthesize` checkpoint on
   or before iteration 20.
 - **Key secondary:** evidence-supported exact recovery retained in the
-  iteration-20 terminal synthesis.
+  iteration-20 terminal `synthesize` stage.
 - First supported exact recovery iteration, censored at 20 for nonrecovery.
 - Near/component recovery, rescue, loss, unsupported convergence, malformed
   outputs, and timeouts.
@@ -347,10 +351,10 @@ workflows:
     deliberation_rounds: 1
 
 stages:
-  - hypothesis_generation
-  - analysis
-  - critique
-  - synthesis
+  - explore
+  - analyze
+  - appraise
+  - synthesize
 
 replicates: 5
 max_parallel: 2
@@ -387,7 +391,7 @@ the six cells within each block.
   unique by iteration and stage.
 - [ ] Cross-iteration handoffs are exactly as specified.
 - [ ] Call limits are 80, 80, and 240 at 20 iterations.
-- [ ] Every synthesis has a final answer; other stages do not.
+- [ ] Every `synthesize` stage has a final answer; other stages do not.
 - [ ] Interruption/resume passes after every linear stage and after each
   deliberative peer/chair position, without duplicate calls or usage.
 - [ ] A stale spec fingerprint or changed substrate is rejected on resume.
@@ -480,10 +484,10 @@ Do not declare the experiment complete until all of the following hold:
   exact model profile, machine runtime, and all substrate hashes.
 - [ ] All 30 planned main runs have terminal status, with five planned runs in
   each of the six cells; technical failures remain visible.
-- [ ] Every healthy run has 20 ordered synthesis checkpoints.
+- [ ] Every healthy run has 20 ordered `synthesize` checkpoints.
 - [ ] Healthy persistent and sequential runs have 80 calls each; healthy
   deliberative runs have 240 calls each.
-- [ ] If all 30 runs complete normally, there are exactly 600 synthesis
+- [ ] If all 30 runs complete normally, there are exactly 600 `synthesize`
   checkpoints, 2,400 logical stage checkpoints, and 4,000 model artifacts.
 - [ ] No gold file, mapping, private path, sibling workspace, or prior-run
   result was exposed to an experiment agent.
