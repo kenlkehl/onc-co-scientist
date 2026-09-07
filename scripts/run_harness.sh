@@ -21,7 +21,7 @@ Usage: scripts/run_harness.sh <harness-spec> <tasks-root> [flags]
 
 Positional arguments:
   <harness-spec>    Either a bare harness name (claude, codex, opencode,
-                    droid, pi) or an ollama-launch wrapper form
+                    droid, pi, ocs-gemini-agent) or an ollama-launch wrapper form
                     ("ollama launch claude --model qwen3.6:27b --yes").
                     The wrapper form auto-inserts the `--` separator that
                     ollama needs to pass trailing flags through to the
@@ -75,6 +75,9 @@ profile_args() {
             ;;
         droid)
             printf '%s\0' 'exec' '--auto' 'high'
+            ;;
+        ocs-gemini-agent)
+            : # Native Gemini runner supplies its own tool and output contracts.
             ;;
         pi)
             : # No documented flags; user can pass --extra-args.
@@ -183,6 +186,7 @@ run_one_replicate() {
         if [[ -n "${PYTHON_ENV:-}" ]]; then
             export PATH="$PYTHON_ENV/bin:$PATH"
         fi
+        export OCS_RUN_DIR="$PWD/runs/$run_name"
         exec "${argv[@]}" >"runs/$run_name/harness.log" 2>&1
     )
     local rc=$?
@@ -380,7 +384,7 @@ fi
 # user can preview commands without installing every harness).
 launcher_bin="${spec_tokens[0]:-}"
 if (( ! DRY_RUN )); then
-    if ! command -v "$launcher_bin" >/dev/null 2>&1; then
+    if ! PATH="${PYTHON_ENV:+$PYTHON_ENV/bin:}$PATH" command -v "$launcher_bin" >/dev/null 2>&1; then
         echo "error: launcher binary not on PATH: $launcher_bin" >&2
         exit 2
     fi

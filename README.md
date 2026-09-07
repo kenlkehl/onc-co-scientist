@@ -1,5 +1,9 @@
 # onc-co-scientist
 
+**Named/masked task:** [How it works](docs/NAMED_MASKED_GUIDE.md) explains generation and masking, actual paired rows, agent tools and endpoints, the research protocols, and identity versus held-out confirmation scoring.
+
+**Expected/surprising task:** [How it works](docs/EXPECTED_SURPRISING_GUIDE.md) covers dataset generation, actual clinical and cell-line rows, paired discoveries, the agent's tools and analysis loop, LLM endpoints, and the scoring rubric. The commands in that guide use the current paired-discovery reference harness. Most of the instructions below describe the earlier named/masked workflow.
+
 **DS001 local CLI replication:** [Codex handoff and launch instructions](docs/DS001_CODEX_CLI_HANDOFF.md)
 for repeating the NSCLC Sol 5.6 medium experiment on your own machine.
 
@@ -151,7 +155,7 @@ scripts/run_harness.sh codex ../data/ds001/tasks \
     --replicates 5
 ```
 
-The script `cd`s into each `tasks/<ct>/<variant>/` before launching, so the harness inherits that as its working directory and cannot see the synth bundle's manifest one level up. Per-replicate outputs land under `tasks/<ct>/<variant>/runs/run_NNN/{transcript.json,analysis_summary.txt,harness.log}`. Re-invoking with the same `--replicates` tops up missing runs idempotently.
+The script `cd`s into each `tasks/<ct>/<variant>/` before launching, so the harness inherits that working directory. Task instructions restrict it to public inputs and its own outputs; filesystem read isolation depends on the selected harness and sandbox. Per-replicate outputs land under `tasks/<ct>/<variant>/runs/run_NNN/{transcript.json,analysis_summary.txt,harness.log}`. Re-invoking with the same `--replicates` tops up missing runs idempotently.
 
 Built-in profiles: `claude`, `codex`, `opencode`, `droid`, `pi`. Local-model wrappers also work (the script auto-inserts the `--` separator that ollama needs):
 
@@ -335,3 +339,11 @@ and [preliminary findings](experiments/GROUPTHINK_FINDINGS.md).
 ## License
 
 MIT.
+
+Gemini through GCP Vertex AI is available for chat/judging, the experiment harness,
+structured analysis, legacy task batches, and groupthink runs. See
+[Gemini setup and experiment examples](docs/GEMINI.md).
+
+## Expected and surprising discovery tasks
+
+Start with [How the expected/surprising task works](docs/EXPECTED_SURPRISING_GUIDE.md). The [technical reference](docs/EXPECTED_SURPRISING.md) gives additional generation, review, and scoring details. Use `ocs expected-surprising --help` for commands. New datasets use `data/expected_surprising_v2/`; frozen replay specifications and calibration reports are in [benchmarks/expected_surprising/v2](benchmarks/expected_surprising/v2/README.md).

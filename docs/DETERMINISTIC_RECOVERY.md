@@ -1,5 +1,7 @@
 # Deterministic hypothesis recovery
 
+Start with [How the named/masked task works](NAMED_MASKED_GUIDE.md) for an explanation with actual paired rows, agent tools and endpoints, and worked scoring examples. This page provides the detailed scoring contract and backend instructions.
+
 Primary planted-finding recovery no longer uses an LLM. Research agents emit
 `proposed_hypotheses[].finding` alongside their prose. LLM novelty scoring remains
 available as a separate optional endpoint. Archived prose transcripts remain
@@ -226,11 +228,15 @@ tokens, model turns, tool calls, request deadlines, and Python execution timeout
 HTTP authentication and malformed-request errors are not blindly retried.
 
 The same `execute_python` and `submit_iteration` tools are used throughout an
-endpoint session. Code runs in the task workspace; credentials are excluded
-from its inherited environment, subprocess groups are killed on timeout, and
-code/tool outputs are retained. Both backends rely on explicit task boundaries
-within a shared filesystem unless deployed inside an external container or
-sandbox. Do not claim OS isolation from the workspace path alone.
+endpoint session. The current endpoint and Gemini structured runners require
+Linux bubblewrap isolation: public inputs and runtime libraries are read-only,
+only the job's analysis directory is writable, and network access, evaluator
+files, other jobs, and controller records are unavailable to the Python process.
+The environment excludes credentials, subprocess groups are killed on timeout,
+and code/tool outputs are retained. Isolation failure stops the run before the
+first model request. Work and older CLI experiments retain the execution
+boundaries recorded in their protocols; their separate workspace directories
+alone do not establish read isolation.
 
 The Work and endpoint runners share the output/scoring contract, but have
 different agent harnesses and telemetry. A model comparison that changes the

@@ -761,6 +761,25 @@ class AnthropicVertexJudge:
 
 
 @dataclass
+class GeminiVertexJudge(AnthropicVertexJudge):
+    """Use Gemini for the same novelty and hypothesis matching contracts."""
+
+    model_id: str = "gemini-3.8-flash"
+
+    def __post_init__(self) -> None:
+        from ..providers.gemini_vertex import GeminiVertexConfig, GeminiVertexProvider
+        self._provider = GeminiVertexProvider(GeminiVertexConfig(
+            model_id=self.model_id, project_id=self.project_id, location=self.region,
+            max_retries=self.max_retries,
+        ))
+
+    def _run_chunk(self, prompt: str, *, expected: int) -> list[dict]:
+        # Include model identity in the existing prompt-keyed judge cache.
+        prompt = f"Judge model: {self.model_id} (Gemini Vertex AI).\n\n" + prompt
+        return super()._run_chunk(prompt, expected=expected)
+
+
+@dataclass
 class StubJudge:
     """Deterministic test-only judge.
 

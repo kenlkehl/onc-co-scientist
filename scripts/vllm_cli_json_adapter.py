@@ -19,6 +19,7 @@ import resource
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -26,7 +27,26 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from onc_co_scientist.harness.runtime import AgentArtifact, AgentResponse, AgentUsage
+# Direct execution is the production contract for this adapter. Resolve its
+# sibling source tree before importing the harness package, even if the selected
+# host-local environment contains an older installed wheel.
+_CHECKOUT_SOURCE = Path(__file__).resolve().parents[1] / "src"
+if _CHECKOUT_SOURCE.is_dir() and str(_CHECKOUT_SOURCE) not in sys.path:
+    sys.path.insert(0, str(_CHECKOUT_SOURCE))
+
+from onc_co_scientist.harness.durable_io import (  # noqa: E402
+    atomic_write_bytes,
+    atomic_write_text,
+    durable_is_file,
+    durable_mkdir,
+    durable_read_text,
+    local_spool_directory,
+)
+from onc_co_scientist.harness.runtime import (  # noqa: E402
+    AgentArtifact,
+    AgentResponse,
+    AgentUsage,
+)
 
 try:
     from scripts.codex_cli_json_adapter import (
@@ -136,15 +156,19 @@ def _remaining(deadline: float) -> float:
     return remaining
 
 
-def _session_path(request: dict[str, Any]) -> Path:
+def _session_path(request: dict[str, Any], provider: str = "vllm") -> Path:
     scratch_dir = Path(_required_string(request, "scratch_dir"))
     digest = _sha256(_required_string(request, "session_id"))
-    return scratch_dir.parent / ".vllm_sessions" / f"{digest}.json"
+    namespace = ".gemini_sessions" if provider == "gemini-vertex" else ".vllm_sessions"
+    return scratch_dir.parent / namespace / f"{digest}.json"
 
 
 def _session_settings(args: argparse.Namespace, model_id: str) -> dict[str, Any]:
     return {
         "adapter_protocol_version": ADAPTER_PROTOCOL_VERSION,
+        **({"provider": args.provider, "project_id": args.project_id,
+            "location": args.location, "reasoning_effort": args.reasoning_effort}
+           if getattr(args, "provider", "vllm") == "gemini-vertex" else {}),
         "model_id": model_id,
         "base_url": args.base_url.rstrip("/"),
         "temperature": args.temperature,
@@ -167,9 +191,9 @@ def _load_session(
     session_id: str,
     settings: dict[str, Any],
 ) -> list[dict[str, str]]:
-    if not path.exists():
+    if not durable_is_file(path):
         return []
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(durable_read_text(path))
     if payload.get("harness_session_sha256") != _sha256(session_id):
         raise RuntimeError("Refusing to resume a vLLM session with a mismatched session ID.")
     if payload.get("settings") != settings:
@@ -223,12 +247,24 @@ def _api_target(args: argparse.Namespace, model_id: str) -> tuple[str, str]:
     vLLM replicas (including replicas that expose a different served-model alias).
     """
 
+    if getattr(args, "provider", "vllm") == "gemini-vertex":
+        return args.base_url.rstrip("/"), model_id
     base_url = os.environ.get(BASE_URL_OVERRIDE_ENV, "").strip() or args.base_url
     api_model_id = os.environ.get(MODEL_ID_OVERRIDE_ENV, "").strip() or model_id
     return base_url.rstrip("/"), api_model_id
 
 
 def _build_client(args: argparse.Namespace, *, base_url: str | None = None):
+    if getattr(args, "provider", "vllm") == "gemini-vertex":
+        from onc_co_scientist.providers.gemini_vertex import (
+            GeminiVertexClient,
+            GeminiVertexConfig,
+        )
+        return GeminiVertexClient(GeminiVertexConfig(
+            project_id=args.project_id, location=args.location,
+            timeout_s=args.api_timeout_seconds, max_retries=0,
+            reasoning_effort=args.reasoning_effort,
+        ))
     try:
         from openai import OpenAI
     except ImportError as exc:  # pragma: no cover - environment validation covers this.
@@ -371,7 +407,7 @@ def _chat_completion(
             "json_schema": {"name": schema_name, "strict": True, "schema": schema},
         },
     }
-    turn_dir.mkdir(parents=True, exist_ok=False)
+    durable_mkdir(turn_dir, exist_ok=False)
 
     total_duration = 0.0
     total_input_tokens = 0
@@ -380,7 +416,7 @@ def _chat_completion(
     disable_thinking_for_recovery = False
     for attempt_number in range(1, args.max_api_retries + 2):
         attempt_dir = turn_dir / f"attempt_{attempt_number:04d}"
-        attempt_dir.mkdir(parents=True, exist_ok=False)
+        durable_mkdir(attempt_dir, exist_ok=False)
         attempt_messages = list(messages)
         if recovery is not None:
             attempt_messages.append({"role": "user", "content": recovery})
@@ -469,7 +505,7 @@ def _chat_completion(
             delay = min(float(2 ** (attempt_number - 1)), _remaining(deadline))
             time.sleep(delay)
             continue
-        (attempt_dir / "content.json").write_text(content + "\n", encoding="utf-8")
+        atomic_write_text(attempt_dir / "content.json", content + "\n")
         _write_json_atomic(
             attempt_dir / "success.json",
             {
@@ -563,6 +599,9 @@ def _native_tool_call(response: Any) -> tuple[dict[str, str], dict[str, Any]]:
             }
         ],
     }
+    parts = getattr(message, "gemini_parts", None)
+    if parts is not None:
+        assistant_message["gemini_parts"] = message.model_dump()["gemini_parts"]
     return normalized, assistant_message
 
 
@@ -609,7 +648,7 @@ def _native_tool_completion(
         str(tool["function"]["name"]): tool["function"]["parameters"]
         for tool in tools
     }
-    turn_dir.mkdir(parents=True, exist_ok=False)
+    durable_mkdir(turn_dir, exist_ok=False)
 
     total_duration = 0.0
     total_input_tokens = 0
@@ -618,7 +657,7 @@ def _native_tool_completion(
     disable_thinking_for_recovery = False
     for attempt_number in range(1, args.max_api_retries + 2):
         attempt_dir = turn_dir / f"attempt_{attempt_number:04d}"
-        attempt_dir.mkdir(parents=True, exist_ok=False)
+        durable_mkdir(attempt_dir, exist_ok=False)
         attempt_messages = list(messages)
         if recovery is not None:
             attempt_messages.append({"role": "user", "content": recovery})
@@ -771,9 +810,7 @@ def _native_tool_completion(
             delay = min(float(2 ** (attempt_number - 1)), _remaining(deadline))
             time.sleep(delay)
             continue
-        (attempt_dir / "content.json").write_text(
-            tool_call["arguments"] + "\n", encoding="utf-8"
-        )
+        atomic_write_text(attempt_dir / "content.json", tool_call["arguments"] + "\n")
         _write_json_atomic(
             attempt_dir / "success.json",
             {
@@ -972,11 +1009,11 @@ def _run_python_tool(
     if not code.strip():
         raise ValueError("A python action must provide non-empty python_code.")
     python, environment_root, python_root = _analysis_python_roots(args.analysis_python)
-    tool_dir.mkdir(parents=True, exist_ok=False)
+    durable_mkdir(tool_dir, exist_ok=False)
     audit_code = tool_dir / "python_code.py"
-    audit_code.write_text(code.rstrip() + "\n", encoding="utf-8")
+    atomic_write_text(audit_code, code.rstrip() + "\n")
     execution_code = scratch_dir / f"vllm_tool_{os.getpid()}_{tool_number:04d}.py"
-    execution_code.write_text(code.rstrip() + "\n", encoding="utf-8")
+    atomic_write_text(execution_code, code.rstrip() + "\n")
     stdout_path = tool_dir / "stdout.log"
     stderr_path = tool_dir / "stderr.log"
     command = _sandbox_command(
@@ -992,30 +1029,46 @@ def _run_python_tool(
     started = time.monotonic()
     timed_out = False
     returncode: int | None = None
-    try:
-        with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
-            completed = subprocess.run(
-                command,
-                stdin=subprocess.DEVNULL,
-                stdout=stdout,
-                stderr=stderr,
-                timeout=args.python_timeout_seconds,
-                check=False,
-                preexec_fn=lambda: _resource_limits(
-                    args.python_timeout_seconds,
-                    args.python_memory_limit_mb,
-                ),
-            )
-            returncode = completed.returncode
-    except subprocess.TimeoutExpired:
-        timed_out = True
-    duration = time.monotonic() - started
-    stdout_text, stdout_truncated, stdout_bytes = _read_tool_log(
-        stdout_path, args.max_tool_output_chars
-    )
-    stderr_text, stderr_truncated, stderr_bytes = _read_tool_log(
-        stderr_path, args.max_tool_output_chars
-    )
+    # A Python analysis can emit enough output to make an SSHFS file handle
+    # block indefinitely. Capture it entirely on host-local storage, then
+    # publish bounded audit files only after the child has exited.
+    with tempfile.TemporaryDirectory(
+        prefix=f"vllm-tool-{os.getpid()}-{tool_number:04d}-",
+        dir=local_spool_directory(),
+    ) as local_directory:
+        local_stdout_path = Path(local_directory) / "stdout.log"
+        local_stderr_path = Path(local_directory) / "stderr.log"
+        try:
+            with local_stdout_path.open("wb") as stdout, local_stderr_path.open(
+                "wb"
+            ) as stderr:
+                completed = subprocess.run(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=stdout,
+                    stderr=stderr,
+                    timeout=args.python_timeout_seconds,
+                    check=False,
+                    preexec_fn=lambda: _resource_limits(
+                        args.python_timeout_seconds,
+                        args.python_memory_limit_mb,
+                    ),
+                )
+                returncode = completed.returncode
+        except subprocess.TimeoutExpired:
+            timed_out = True
+        duration = time.monotonic() - started
+        stdout_text, stdout_truncated, stdout_bytes = _read_tool_log(
+            local_stdout_path, args.max_tool_output_chars
+        )
+        stderr_text, stderr_truncated, stderr_bytes = _read_tool_log(
+            local_stderr_path, args.max_tool_output_chars
+        )
+        audit_byte_limit = args.max_tool_output_chars * 4 + 1
+        with local_stdout_path.open("rb") as stream:
+            atomic_write_bytes(stdout_path, stream.read(audit_byte_limit))
+        with local_stderr_path.open("rb") as stream:
+            atomic_write_bytes(stderr_path, stream.read(audit_byte_limit))
     resource_failure = _python_resource_failure(stderr_text, returncode)
     result = {
         "tool": "python",
@@ -1146,9 +1199,18 @@ def _repair_prompt(error: ValueError) -> str:
 
 
 def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> AgentResponse:
-    request = json.loads(args.request_file.read_text(encoding="utf-8"))
+    request = json.loads(durable_read_text(args.request_file))
     if not isinstance(request, dict):
         raise ValueError("Request file must contain one JSON object.")
+    provider = getattr(args, "provider", "vllm")
+    audit_prefix = "gemini" if provider == "gemini-vertex" else "vllm"
+    if provider == "gemini-vertex":
+        requested_effort = request.get("reasoning_effort")
+        if args.reasoning_effort and requested_effort and args.reasoning_effort != requested_effort:
+            raise ValueError("Gemini reasoning effort differs from harness request")
+        args.reasoning_effort = args.reasoning_effort or requested_effort
+        if args.reasoning_effort not in {None, "low", "medium", "high"}:
+            raise ValueError("Gemini reasoning effort must be low, medium, high, or omitted")
     request_id = _required_string(request, "request_id")
     session_id = _required_string(request, "session_id")
     model_id = _required_string(request, "model_id")
@@ -1157,17 +1219,17 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
     prompt = _required_string(request, "prompt")
     workspace = Path(_required_string(request, "workspace")).resolve(strict=True)
     scratch_dir = Path(_required_string(request, "scratch_dir")).resolve()
-    scratch_dir.mkdir(parents=True, exist_ok=True)
+    durable_mkdir(scratch_dir)
     call_dir = args.output.parent
-    call_dir.mkdir(parents=True, exist_ok=True)
-    turns_dir = call_dir / "vllm_turns"
-    turns_dir.mkdir(parents=True, exist_ok=True)
-    audit_path = call_dir / "vllm_call.json"
+    durable_mkdir(call_dir)
+    turns_dir = call_dir / f"{audit_prefix}_turns"
+    durable_mkdir(turns_dir)
+    audit_path = call_dir / f"{audit_prefix}_call.json"
     deadline = time.monotonic() + args.timeout_seconds
     started = time.monotonic()
 
     settings = _session_settings(args, model_id)
-    session_path = _session_path(request)
+    session_path = _session_path(request, provider)
     history = _load_session(session_path, session_id=session_id, settings=settings)
     session_action = "resumed" if history else "started"
     stage_schema = artifact_schema(require_final_answer=require_final_answer)
@@ -1390,7 +1452,7 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
                 continue
 
             tool_calls += 1
-            tool_dir = call_dir / "vllm_tools" / f"tool_{tool_calls:04d}"
+            tool_dir = call_dir / f"{audit_prefix}_tools" / f"tool_{tool_calls:04d}"
             result = _run_python_tool(
                 code=decision["python_code"],
                 args=args,
@@ -1606,7 +1668,11 @@ def run_adapter(args: argparse.Namespace, *, client: Any | None = None) -> Agent
             ),
             raw_text=raw_text,
             runtime_metadata={
-                "adapter": "vllm-cli-json",
+                "adapter": ("gemini-cli-json" if getattr(args, "provider", "vllm")
+                            == "gemini-vertex" else "vllm-cli-json"),
+                **({"project_id": args.project_id, "location": args.location,
+                    "reasoning_effort": args.reasoning_effort}
+                   if getattr(args, "provider", "vllm") == "gemini-vertex" else {}),
                 "adapter_protocol_version": ADAPTER_PROTOCOL_VERSION,
                 "base_url": args.base_url,
                 "model_id": model_id,
@@ -1663,7 +1729,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--request-file", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--base-url", required=True)
+    parser.add_argument("--provider", choices=("vllm", "gemini-vertex"), default="vllm")
+    parser.add_argument("--project-id")
+    parser.add_argument("--location")
+    parser.add_argument("--reasoning-effort", choices=("low", "medium", "high"))
+    parser.add_argument("--base-url")
     parser.add_argument("--api-key", default="EMPTY")
     parser.add_argument("--analysis-python", type=Path, required=True)
     parser.add_argument("--bwrap", default="bwrap")
@@ -1736,6 +1806,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     args = parser.parse_args(argv)
+    if args.provider == "vllm" and not args.base_url:
+        parser.error("--base-url is required for vllm")
+    if args.provider == "gemini-vertex":
+        if args.thinking_mode != "server-default" or args.repetition_penalty != 1.0:
+            parser.error("Gemini does not support vLLM thinking-mode/repetition-penalty")
+        client = _build_client(args)
+        args.project_id, args.location = client.project_id, client.location
+        args.base_url = client.base_url
     if args.max_decision_tokens is None:
         args.max_decision_tokens = args.max_tokens
     if args.timeout_seconds <= 0:
@@ -1778,7 +1856,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         response = run_adapter(args)
     except Exception as exc:
-        print(f"vLLM CLI-JSON adapter failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(
+            f"{args.provider} CLI-JSON adapter failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
         return 1
     print(response.model_dump_json())
     return 0

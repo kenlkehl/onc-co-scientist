@@ -844,6 +844,68 @@ def test_resume_rejects_changed_fingerprint_or_substrate(tmp_path: Path) -> None
         )
 
 
+def test_resume_requires_and_audits_compatible_implementation_migration(
+    tmp_path: Path,
+) -> None:
+    workflow = WorkflowSpec(id="sequential", mode="sequential")
+    spec = _spec(tmp_path, [workflow])
+    plan = RunPlan(
+        run_id="run",
+        task=spec.tasks[0],
+        workflow=workflow,
+        model=spec.models[0],
+        replicate=1,
+    )
+    run_dir = tmp_path / "partial-implementation"
+    old_implementation = "a" * 64
+    new_implementation = "b" * 64
+    controller = RunController(
+        spec=spec,
+        plan=plan,
+        run_dir=run_dir,
+        runtime=_InterruptAfterRuntime(1),
+        fingerprint=spec.fingerprint(),
+        implementation_sha256=old_implementation,
+    )
+    with pytest.raises(RuntimeError, match="deliberate interruption"):
+        controller.execute()
+
+    with pytest.raises(RuntimeError, match="implementation_sha256 changed"):
+        RunController(
+            spec=spec,
+            plan=plan,
+            run_dir=run_dir,
+            runtime=_RecordingRuntime(),
+            fingerprint=spec.fingerprint(),
+            resume=True,
+            implementation_sha256=new_implementation,
+        )
+
+    resumed = RunController(
+        spec=spec,
+        plan=plan,
+        run_dir=run_dir,
+        runtime=_RecordingRuntime(),
+        fingerprint=spec.fingerprint(),
+        resume=True,
+        implementation_sha256=new_implementation,
+        compatible_resume_implementation_sha256s=(old_implementation,),
+    )
+    result = resumed.execute()
+    state = json.loads((run_dir / "run_state.json").read_text(encoding="utf-8"))
+
+    assert result["status"] == "completed"
+    assert state["implementation_sha256"] == new_implementation
+    assert state["implementation_migrations"] == [
+        {
+            "from_sha256": old_implementation,
+            "to_sha256": new_implementation,
+            "accepted_at": state["implementation_migrations"][0]["accepted_at"],
+            "reason": "explicit_resilience_compatible_resume",
+        }
+    ]
+
+
 def test_resume_adopts_runtime_success_before_controller_checkpoint(tmp_path: Path) -> None:
     adapter = tmp_path / "adapter.py"
     adapter.write_text(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the GPT-5.6 Luna sequential information-cascade assay."""
+"""Run the sequential information-cascade assay with Codex or Gemini."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -60,7 +61,10 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=HERE / "results" / "luna_cascade",
     )
-    parser.add_argument("--model", default="gpt-5.6-luna")
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--provider", choices=("codex", "gemini-vertex"), default="codex")
+    parser.add_argument("--project-id")
+    parser.add_argument("--location")
     parser.add_argument(
         "--reasoning-effort",
         choices=("low", "medium", "high", "xhigh", "max"),
@@ -78,7 +82,13 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Path to the Codex CLI (defaults to PATH, then the macOS app bundle).",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.model = args.model or (
+        "gemini-3.8-flash" if args.provider == "gemini-vertex" else "gpt-5.6-luna"
+    )
+    if args.provider == "gemini-vertex" and args.reasoning_effort not in {"low", "medium", "high"}:
+        parser.error("Gemini reasoning effort must be low, medium, or high")
+    return args
 
 
 def resolve_codex_executable(explicit: Path | None = None) -> Path | None:
@@ -159,6 +169,27 @@ def _command(
     response_path: Path,
     prompt: str,
 ) -> list[str]:
+    if getattr(args, "provider", "codex") == "gemini-vertex":
+        command = [
+            sys.executable,
+            "-m",
+            "onc_co_scientist.providers.gemini_prompt",
+            "--model",
+            args.model,
+            "--reasoning-effort",
+            args.reasoning_effort,
+            "--schema",
+            str(schema_path),
+            "--output",
+            str(response_path),
+            "--timeout",
+            str(args.timeout),
+        ]
+        if args.project_id:
+            command.extend(["--project-id", args.project_id])
+        if args.location:
+            command.extend(["--location", args.location])
+        return [*command, prompt]
     return [
         str(args.codex),
         "exec",
@@ -197,6 +228,15 @@ def _resume_record(call: CascadeCall, args: argparse.Namespace) -> dict[str, Any
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     expected_meta = {
         "model": args.model,
+        **(
+            {
+                "provider": "gemini-vertex",
+                "project_id": getattr(args, "project_id", None),
+                "location": getattr(args, "location", None),
+            }
+            if getattr(args, "provider", "codex") == "gemini-vertex"
+            else {}
+        ),
         "reasoning_effort": args.reasoning_effort,
         "prompt_sha256": text_sha256(call.prompt),
         "schema_sha256": file_sha256(SCHEMA_PATH),
@@ -283,7 +323,7 @@ def run_call(call: CascadeCall, args: argparse.Namespace) -> dict[str, Any]:
                 last_error = f"codex exit {result.returncode}: {diagnostic}"
                 continue
             if not response_tmp.exists():
-                last_error = "Codex completed without output-last-message"
+                last_error = "Agent completed without a response file"
                 continue
             try:
                 response = _load_response(response_tmp, call)
@@ -324,6 +364,15 @@ def _meta(
         "stage": call.stage,
         "condition": call.condition,
         "model": args.model,
+        **(
+            {
+                "provider": "gemini-vertex",
+                "project_id": getattr(args, "project_id", None),
+                "location": getattr(args, "location", None),
+            }
+            if getattr(args, "provider", "codex") == "gemini-vertex"
+            else {}
+        ),
         "reasoning_effort": args.reasoning_effort,
         "prompt_sha256": text_sha256(call.prompt),
         "schema_sha256": file_sha256(SCHEMA_PATH),
@@ -341,7 +390,10 @@ def execute_calls(
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     failures: list[str] = []
-    print(f"Starting {stage_name}: {len(calls)} Luna calls with {args.workers} workers", flush=True)
+    print(
+        f"Starting {stage_name}: {len(calls)} {args.model} calls with {args.workers} workers",
+        flush=True,
+    )
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures: dict[Future[dict[str, Any]], CascadeCall] = {
             pool.submit(run_call, call, args): call for call in calls
@@ -440,7 +492,7 @@ def execute_networks(
     records: list[dict[str, Any]] = []
     failures: list[str] = []
     print(
-        f"Starting sequential chains: {len(paths)} paths, 3 Luna calls per path",
+        f"Starting sequential chains: {len(paths)} paths, 3 {args.model} calls per path",
         flush=True,
     )
     with ThreadPoolExecutor(max_workers=min(args.workers, len(paths))) as pool:
@@ -511,6 +563,15 @@ def chair_calls(
 def expected_manifest(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "model": args.model,
+        **(
+            {
+                "provider": "gemini-vertex",
+                "project_id": getattr(args, "project_id", None),
+                "location": getattr(args, "location", None),
+            }
+            if getattr(args, "provider", "codex") == "gemini-vertex"
+            else {}
+        ),
         "reasoning_effort": args.reasoning_effort,
         "replicates": args.replicates,
         "seed": args.seed,
@@ -558,7 +619,11 @@ def main() -> int:
     if args.replicates < 1 or args.workers < 1:
         raise SystemExit("--replicates and --workers must be positive")
     args.codex = resolve_codex_executable(args.codex)
-    if not args.dry_run and (args.codex is None or not args.codex.is_file()):
+    if (
+        args.provider == "codex"
+        and not args.dry_run
+        and (args.codex is None or not args.codex.is_file())
+    ):
         location = args.codex or "'codex' on PATH or the macOS app bundle"
         raise SystemExit(f"Codex CLI not found: {location}; pass --codex PATH")
     prepare_output(args)

@@ -249,7 +249,7 @@ Earlier analysts' public verdicts are:
 
 Every analyst saw the same shared cards S1 and S2 plus one different private card. The earlier
 private cards, rationales, evidence identifiers, and numerical values are not available to you.
-The verdicts above are actual outputs from earlier Luna analysts in this chain. There is no lead,
+The verdicts above are actual outputs from earlier analysts in this chain. There is no lead,
 vote requirement, or instruction to agree.
 
 Make your own final choice using the information available. Do not use tools, inspect files, or
@@ -758,7 +758,7 @@ def render_report(summary: dict[str, Any], output_path: Path) -> None:
     chain = summary["chain_aggregate"]
     paired = summary["paired_contrasts"]
     lines = [
-        "# GPT-5.6 Luna sequential information-cascade assay",
+        "# sequential information-cascade assay",
         "",
         summary["interpretation"],
         "",
@@ -766,14 +766,14 @@ def render_report(summary: dict[str, Any], output_path: Path) -> None:
         "",
         (
             "Two mirrored scientific tasks used calibrated log Bayes factors with a rule-defined "
-            "ground truth. Four Luna analysts each saw two common evidence cards and one private "
+            "ground truth. Four analysts each saw two common evidence cards and one private "
             "card. The same evidence multiset was run in adverse and favorable orders. Later "
             "analysts saw "
             "only earlier choices and confidences, never their private cards or rationales."
         ),
         "",
         (
-            "Fresh Luna chairs then received artifacts only, verdicts only, the identical "
+            "Fresh chairs then received artifacts only, verdicts only, the identical "
             "artifacts plus verdicts, or both with a minority-preservation protocol. The "
             "artifacts-plus-verdicts versus artifacts-only contrast holds complete evidence "
             "constant and isolates the effect "

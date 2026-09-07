@@ -8,12 +8,23 @@ import random
 import shutil
 import threading
 import time
+from collections.abc import Collection
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .durable_io import (
+    atomic_write_json,
+    durable_append_line,
+    durable_exists,
+    durable_is_dir,
+    durable_is_file,
+    durable_mkdir,
+    durable_read_json,
+    durable_replace,
+)
 from .experiment import (
     ExperimentSpec,
     ModelSpec,
@@ -49,10 +60,7 @@ def _slug(value: str) -> str:
 
 
 def _atomic_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    atomic_write_json(path, payload, sort_keys=True)
 
 
 def _sha256_file(path: Path) -> str:
@@ -152,7 +160,7 @@ class EventRecorder:
     def __init__(self, path: Path, run_id: str):
         self.path = path
         self.run_id = run_id
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        durable_mkdir(self.path.parent)
         self._lock = threading.Lock()
 
     def emit(self, event_type: str, payload: dict[str, Any]) -> None:
@@ -163,8 +171,8 @@ class EventRecorder:
             "payload": payload,
         }
         line = json.dumps(event, sort_keys=True, default=str)
-        with self._lock, self.path.open("a", encoding="utf-8") as stream:
-            stream.write(line + "\n")
+        with self._lock:
+            durable_append_line(self.path, line)
 
 
 class BudgetExceeded(RuntimeError):
@@ -220,6 +228,8 @@ class RunController:
         fingerprint: str,
         scoped_runtimes: dict[str, AgentRuntime] | None = None,
         resume: bool = False,
+        implementation_sha256: str | None = None,
+        compatible_resume_implementation_sha256s: Collection[str] = (),
     ):
         self.spec = spec
         self.plan = plan
@@ -231,7 +241,13 @@ class RunController:
         self.ledger = BudgetLedger(spec.budget)
         self.state_path = run_dir / "run_state.json"
         self.substrate_hashes = _substrate_hashes(plan)
-        self.implementation_sha256 = _sha256_file(Path(__file__).resolve())
+        self.implementation_sha256 = implementation_sha256 or _sha256_file(
+            Path(__file__).resolve()
+        )
+        self.compatible_resume_implementation_sha256s = frozenset(
+            compatible_resume_implementation_sha256s
+        )
+        self.implementation_migrations: list[dict[str, str]] = []
         self.call_index = self._existing_call_index()
         self.artifacts: list[dict[str, Any]] = []
         self.completed_slots: dict[str, dict[str, Any]] = {}
@@ -254,19 +270,18 @@ class RunController:
         return maximum
 
     def _restore_state(self) -> None:
-        if not self.state_path.exists():
+        if not durable_is_file(self.state_path):
             if self.call_index:
                 raise RuntimeError(
                     "Cannot resume: call directories exist but run_state.json is missing. "
                     "Archive the attempt and start fresh."
                 )
             return
-        state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        state = durable_read_json(self.state_path)
         expected = {
             "run_id": self.plan.run_id,
             "spec_fingerprint": self.fingerprint,
             "substrate_hashes": self.substrate_hashes,
-            "implementation_sha256": self.implementation_sha256,
         }
         for key, value in expected.items():
             if state.get(key) != value:
@@ -274,6 +289,33 @@ class RunController:
                     f"Cannot resume {self.plan.run_id}: {key} changed. "
                     "Use a new output root or archive this attempt before starting fresh."
                 )
+        prior_implementation = state.get("implementation_sha256")
+        raw_migrations = state.get("implementation_migrations", [])
+        if isinstance(raw_migrations, list):
+            self.implementation_migrations = [
+                dict(item)
+                for item in raw_migrations
+                if isinstance(item, dict)
+                and all(
+                    isinstance(key, str) and isinstance(value, str)
+                    for key, value in item.items()
+                )
+            ]
+        if prior_implementation != self.implementation_sha256:
+            if prior_implementation not in self.compatible_resume_implementation_sha256s:
+                raise RuntimeError(
+                    f"Cannot resume {self.plan.run_id}: implementation_sha256 changed. "
+                    "Only an explicitly allow-listed resilience-compatible implementation "
+                    "may migrate an existing checkpoint."
+                )
+            self.implementation_migrations.append(
+                {
+                    "from_sha256": str(prior_implementation),
+                    "to_sha256": self.implementation_sha256,
+                    "accepted_at": _utc_now(),
+                    "reason": "explicit_resilience_compatible_resume",
+                }
+            )
         raw_artifacts = state.get("artifacts")
         raw_slots = state.get("completed_slots")
         raw_ledger = state.get("usage_ledger")
@@ -315,7 +357,7 @@ class RunController:
 
     def _session_records(self) -> list[dict[str, str]]:
         root = self.run_dir / "scratch" / ".codex_sessions"
-        if not root.is_dir():
+        if not durable_is_dir(root):
             return []
         return [
             {
@@ -327,7 +369,7 @@ class RunController:
 
     def _workspace_state(self) -> list[str]:
         root = self.run_dir / "workspaces"
-        if not root.is_dir():
+        if not durable_is_dir(root):
             return []
         return [
             path.relative_to(self.run_dir).as_posix()
@@ -370,6 +412,7 @@ class RunController:
                 "spec_fingerprint": self.fingerprint,
                 "substrate_hashes": self.substrate_hashes,
                 "implementation_sha256": self.implementation_sha256,
+                "implementation_migrations": self.implementation_migrations,
                 "call_slot_cursor": (
                     self.last_position.get("call_slot") if self.last_position else None
                 ),
@@ -405,12 +448,12 @@ class RunController:
 
         candidates: list[tuple[int, Path, AgentResponse]] = []
         for call_dir in sorted((self.run_dir / "calls").glob("call_[0-9]*")):
-            if (call_dir / "controller_rejected.json").exists():
+            if durable_is_file(call_dir / "controller_rejected.json"):
                 continue
             request_path = call_dir / "request.json"
-            if not request_path.is_file():
+            if not durable_is_file(request_path):
                 continue
-            request = json.loads(request_path.read_text(encoding="utf-8"))
+            request = durable_read_json(request_path)
             metadata = request.get("metadata", {})
             if not isinstance(metadata, dict) or metadata.get("call_slot") != call_slot:
                 continue
@@ -445,8 +488,8 @@ class RunController:
 
             response_payload: Any | None = None
             marker_path = call_dir / "runtime_success.json"
-            if marker_path.is_file():
-                marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            if durable_is_file(marker_path):
+                marker = durable_read_json(marker_path)
                 if marker.get("prompt_sha256") != hashlib.sha256(
                     prompt.encode("utf-8")
                 ).hexdigest():
@@ -459,10 +502,10 @@ class RunController:
                 # outer CLI wrapper can persist the generic marker.
                 output_path = call_dir / "response.json"
                 audit_path = call_dir / "codex_call.json"
-                if output_path.is_file() and audit_path.is_file():
-                    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+                if durable_is_file(output_path) and durable_is_file(audit_path):
+                    audit = durable_read_json(audit_path)
                     if audit.get("returncode") == 0 and audit.get("error") is None:
-                        response_payload = json.loads(output_path.read_text(encoding="utf-8"))
+                        response_payload = durable_read_json(output_path)
             if not isinstance(response_payload, dict):
                 continue
             if "request_id" in response_payload and "artifact" in response_payload:
@@ -500,14 +543,14 @@ class RunController:
 
     def _workspace(self, source: Path, label: str) -> Path:
         source = source.resolve()
-        if not source.is_dir():
+        if not durable_is_dir(source):
             raise FileNotFoundError(
                 f"Public workspace does not exist or is not a directory: {source}"
             )
         if self.spec.workspace_strategy == "reference":
             return source
         target = self.run_dir / "workspaces" / _slug(label)
-        if not target.exists():
+        if not durable_exists(target):
             shutil.copytree(source, target)
         return target
 
@@ -523,7 +566,7 @@ class RunController:
 
     def _central_workspace(self, session_id: str) -> Path:
         path = self.run_dir / "workspaces" / _slug(f"session-{session_id}")
-        path.mkdir(parents=True, exist_ok=True)
+        durable_mkdir(path)
         return path
 
     def _scratch_dir(self, session_id: str) -> Path:
@@ -670,7 +713,7 @@ class RunController:
             self.call_index += 1
             successful_call_index = self.call_index
             call_dir = self.run_dir / "calls" / f"call_{self.call_index:04d}"
-            if call_dir.exists():
+            if durable_exists(call_dir):
                 raise RuntimeError(f"Refusing to overwrite existing call directory: {call_dir}")
             scoped_model = self.plan.model.for_scope(self._runtime_scope(site_id))
             request = AgentRequest(
@@ -1158,7 +1201,7 @@ class RunController:
         )
 
     def execute(self) -> dict[str, Any]:
-        self.run_dir.mkdir(parents=True, exist_ok=True)
+        durable_mkdir(self.run_dir)
         self.recorder.emit(
             "run_resumed" if self.resumed_from_state else "run_started",
             {
@@ -1265,6 +1308,8 @@ class RunController:
             "terminal_iteration": self.terminal_iteration,
             "stop_reason": "fixed_iterations_complete",
             "substrate_hashes": self.substrate_hashes,
+            "implementation_sha256": self.implementation_sha256,
+            "implementation_migrations": self.implementation_migrations,
             "final_artifact": final_artifact.model_dump(mode="json"),
             "verification_artifact": (
                 verification.model_dump(mode="json") if verification is not None else None
@@ -1291,11 +1336,13 @@ def _run_one(
     fingerprint: str,
     *,
     resume: bool,
+    implementation_sha256: str,
+    compatible_resume_implementation_sha256s: Collection[str] = (),
 ) -> dict[str, Any]:
     run_dir = output_root / "runs" / plan.run_id
     run_path = run_dir / "run.json"
-    if resume and run_path.exists():
-        prior = json.loads(run_path.read_text(encoding="utf-8"))
+    if resume and durable_is_file(run_path):
+        prior = durable_read_json(run_path)
         if prior.get("status") == "completed":
             if prior.get("spec_fingerprint") != fingerprint:
                 raise RuntimeError(
@@ -1306,12 +1353,12 @@ def _run_one(
                     f"Cannot resume completed run {plan.run_id}: public substrate changed."
                 )
             return {**prior, "resumed": True}
-    if not resume and run_dir.exists() and any(run_dir.iterdir()):
+    if not resume and durable_exists(run_dir) and any(run_dir.iterdir()):
         archive_root = output_root / "archive"
-        archive_root.mkdir(parents=True, exist_ok=True)
+        durable_mkdir(archive_root)
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
         archive_path = archive_root / f"{plan.run_id}__{timestamp}"
-        run_dir.replace(archive_path)
+        durable_replace(run_dir, archive_path)
 
     started_at = _utc_now()
     runtime = create_runtime(plan.model.for_scope(None))
@@ -1330,11 +1377,16 @@ def _run_one(
         fingerprint=fingerprint,
         scoped_runtimes=scoped_runtimes,
         resume=resume,
+        implementation_sha256=implementation_sha256,
+        compatible_resume_implementation_sha256s=(
+            compatible_resume_implementation_sha256s
+        ),
     )
     try:
         result = controller.execute()
         result["started_at"] = started_at
         result["resumed"] = controller.resumed_from_state
+        result["implementation_migrations"] = controller.implementation_migrations
     except Exception as exc:
         controller._write_state(  # noqa: SLF001 - run boundary owns controller state
             status="failed", stop_reason=f"technical_failure:{type(exc).__name__}"
@@ -1360,7 +1412,9 @@ def _run_one(
             "terminal_iteration": controller.terminal_iteration,
             "stop_reason": f"technical_failure:{type(exc).__name__}",
             "substrate_hashes": controller.substrate_hashes,
+            "implementation_sha256": controller.implementation_sha256,
             "resumed": controller.resumed_from_state,
+            "implementation_migrations": controller.implementation_migrations,
         }
     finally:
         for scoped_runtime in scoped_runtimes.values():
@@ -1379,8 +1433,8 @@ def _frozen_schedule(
     by_id = {plan.run_id: plan for plan in plans}
     if len(by_id) != len(plans):
         raise ValueError("Run IDs are not unique; refusing to construct a schedule.")
-    if schedule_path.exists():
-        payload = json.loads(schedule_path.read_text(encoding="utf-8"))
+    if durable_is_file(schedule_path):
+        payload = durable_read_json(schedule_path)
         if payload.get("spec_fingerprint") != fingerprint:
             raise ValueError(
                 f"Frozen schedule fingerprint does not match the experiment: {schedule_path}"
@@ -1461,12 +1515,27 @@ def run_experiment(
     resume: bool = False,
     dry_run: bool = False,
     max_parallel: int | None = None,
+    compatible_resume_implementation_sha256s: Collection[str] = (),
 ) -> dict[str, Any]:
     """Expand and execute a full matched experiment matrix."""
 
+    compatible_implementations = frozenset(compatible_resume_implementation_sha256s)
+    invalid_implementations = [
+        value
+        for value in compatible_implementations
+        if len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
+    ]
+    if invalid_implementations:
+        raise ValueError(
+            "Compatible resume implementation hashes must be lowercase SHA-256 values: "
+            + ", ".join(sorted(invalid_implementations))
+        )
     root = (output_root or spec.output_root).resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    durable_mkdir(root)
     fingerprint = spec.fingerprint()
+    # Freeze this once for the whole invocation.  A concurrent branch checkout
+    # must not make later-scheduled cells record a different implementation.
+    implementation_sha256 = _sha256_file(Path(__file__).resolve())
     plans = _frozen_schedule(
         spec=spec,
         plans=build_run_plans(spec),
@@ -1508,15 +1577,70 @@ def run_experiment(
     results: list[dict[str, Any]] = []
     if workers <= 1:
         for plan in plans:
-            results.append(_run_one(spec, plan, root, fingerprint, resume=resume))
+            results.append(
+                _run_one(
+                    spec,
+                    plan,
+                    root,
+                    fingerprint,
+                    resume=resume,
+                    implementation_sha256=implementation_sha256,
+                    compatible_resume_implementation_sha256s=compatible_implementations,
+                )
+            )
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = {
-                pool.submit(_run_one, spec, plan, root, fingerprint, resume=resume): plan
+                pool.submit(
+                    _run_one,
+                    spec,
+                    plan,
+                    root,
+                    fingerprint,
+                    resume=resume,
+                    implementation_sha256=implementation_sha256,
+                    compatible_resume_implementation_sha256s=compatible_implementations,
+                ): plan
                 for plan in plans
             }
             for future in as_completed(futures):
-                results.append(future.result())
+                plan = futures[future]
+                try:
+                    results.append(future.result())
+                except Exception as exc:
+                    # A failure while terminalizing a cell (for example, a
+                    # temporarily unavailable checkpoint mount) must not abort
+                    # the other futures or prevent an auditable resume.
+                    failed = {
+                        **plan.public_dict(),
+                        "status": "failed",
+                        "spec_fingerprint": fingerprint,
+                        "started_at": None,
+                        "ended_at": _utc_now(),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "agent_calls": 0,
+                        "call_attempts": 0,
+                        "call_failures": [],
+                        "timeout_count": 0,
+                        "usage": AgentUsage().model_dump(mode="json"),
+                        "iteration_policy": spec.iteration_policy.model_dump(mode="json"),
+                        "iterations_completed": 0,
+                        "terminal_iteration": None,
+                        "stop_reason": f"worker_failure:{type(exc).__name__}",
+                        "substrate_hashes": _substrate_hashes(plan),
+                        "implementation_sha256": implementation_sha256,
+                        "resumed": resume,
+                        "implementation_migrations": [],
+                    }
+                    try:
+                        _atomic_json(root / "runs" / plan.run_id / "run.json", failed)
+                    except Exception as persistence_exc:
+                        failed["terminalization_storage_error"] = {
+                            "error_type": type(persistence_exc).__name__,
+                            "error": str(persistence_exc),
+                        }
+                    results.append(failed)
     schedule_positions = {plan.run_id: index for index, plan in enumerate(plans)}
     results.sort(key=lambda item: schedule_positions[str(item["run_id"])])
     counts = {
@@ -1527,6 +1651,7 @@ def run_experiment(
         "experiment_id": spec.experiment_id,
         "status": "completed" if counts["failed"] == 0 else "completed_with_failures",
         "spec_fingerprint": fingerprint,
+        "implementation_sha256": implementation_sha256,
         "n_runs": len(results),
         "n_completed": counts["completed"],
         "n_failed": counts["failed"],

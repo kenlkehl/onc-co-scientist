@@ -12,6 +12,7 @@ from typing import Any
 
 from .anthropic_vertex import AnthropicVertexConfig, AnthropicVertexProvider
 from .base import LLMProvider
+from .gemini_vertex import GeminiVertexConfig, GeminiVertexProvider
 from .vllm_openai import VLLMConfig, VLLMProvider
 
 ProviderConfig = dict[str, Any]
@@ -19,6 +20,10 @@ ProviderConfig = dict[str, Any]
 
 def get_provider(config: ProviderConfig) -> LLMProvider:
     kind = config.get("kind")
+    if kind == "gemini_vertex":
+        return GeminiVertexProvider(
+            GeminiVertexConfig(**{key: value for key, value in config.items() if key != "kind"})
+        )
     if kind == "anthropic_vertex":
         return AnthropicVertexProvider(
             AnthropicVertexConfig(
@@ -40,5 +45,6 @@ def get_provider(config: ProviderConfig) -> LLMProvider:
             )
         )
     raise ValueError(
-        f"Unknown provider kind {kind!r}. Supported: 'anthropic_vertex', 'vllm_openai'."
+        f"Unknown provider kind {kind!r}. "
+        "Supported: 'anthropic_vertex', 'vllm_openai', 'gemini_vertex'."
     )

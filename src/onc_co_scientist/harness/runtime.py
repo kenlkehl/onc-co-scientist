@@ -18,6 +18,16 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .durable_io import (
+    atomic_write_json,
+    atomic_write_text,
+    durable_append_line,
+    durable_is_file,
+    durable_mkdir,
+    durable_read_text,
+    durable_unlink,
+    storage_health_probe,
+)
 from .experiment import ModelSpec, ResourceBudget
 
 
@@ -160,16 +170,22 @@ def _runtime_environment(model: ModelSpec) -> dict[str, str]:
         # not alter the frozen experiment spec or conversational session identity.
         "OCS_VLLM_BASE_URL_OVERRIDE",
         "OCS_VLLM_MODEL_ID_OVERRIDE",
+        # Storage reliability controls are inherited by CLI adapters so their
+        # audit files use the same local spool and retry policy as the harness.
+        "OCS_LOCAL_IO_SPOOL_ROOT",
+        "OCS_STORAGE_RETRY_ATTEMPTS",
+        "OCS_STORAGE_RETRY_INITIAL_SECONDS",
+        "OCS_STORAGE_RETRY_MAX_SECONDS",
+        "OCS_STORAGE_RETRY_DEADLINE_SECONDS",
+        "OCS_STORAGE_CIRCUIT_FAILURE_THRESHOLD",
+        "OCS_STORAGE_CIRCUIT_COOLDOWN_SECONDS",
     )
     keys = {*inherited, *model.env_passthrough}
     return {key: value for key in keys if (value := os.environ.get(key)) is not None}
 
 
 def _write_json_atomic(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    atomic_write_json(path, payload)
 
 
 def _persist_runtime_success(request: AgentRequest, response: AgentResponse) -> None:
@@ -372,16 +388,18 @@ class CliJsonRuntime:
         self.model = model
 
     def run(self, request: AgentRequest, budget: ResourceBudget) -> AgentResponse:
-        request.call_dir.mkdir(parents=True, exist_ok=True)
-        request.scratch_dir.mkdir(parents=True, exist_ok=True)
+        durable_mkdir(request.call_dir)
+        durable_mkdir(request.scratch_dir)
+        # Fail before launching an expensive model turn when the artifact mount
+        # cannot currently support create/write/replace/read/unlink.
+        storage_health_probe(request.call_dir)
         request_path = request.call_dir / "request.json"
         output_path = request.call_dir / "response.json"
-        request_path.write_text(
+        atomic_write_text(
+            request_path,
             request.model_dump_json(indent=2, exclude={"call_dir"}) + "\n",
-            encoding="utf-8",
         )
-        if output_path.exists():
-            output_path.unlink()
+        durable_unlink(output_path)
 
         replacements = {
             "{request_file}": str(request_path),
@@ -408,19 +426,21 @@ class CliJsonRuntime:
                 f"Agent call {request.request_id} exceeded {budget.max_runtime_seconds_per_call}s"
             ) from exc
         duration = time.monotonic() - started
-        (request.call_dir / "stdout.log").write_text(completed.stdout, encoding="utf-8")
-        (request.call_dir / "stderr.log").write_text(completed.stderr, encoding="utf-8")
-        (request.call_dir / "command.json").write_text(
-            json.dumps(command, indent=2) + "\n", encoding="utf-8"
+        atomic_write_text(request.call_dir / "stdout.log", completed.stdout)
+        atomic_write_text(request.call_dir / "stderr.log", completed.stderr)
+        atomic_write_json(
+            request.call_dir / "command.json",
+            command,
         )
         if completed.returncode != 0:
             raise RuntimeError(
                 f"Agent command exited {completed.returncode}: {completed.stderr[-1000:]}"
             )
-        if not output_path.exists():
+        if not durable_is_file(output_path):
             raise RuntimeError("Agent completed without writing its output file.")
 
-        payload = json.loads(output_path.read_text(encoding="utf-8"))
+        output_text = durable_read_text(output_path)
+        payload = json.loads(output_text)
         if isinstance(payload, dict) and "request_id" in payload and "artifact" in payload:
             response = AgentResponse.model_validate(payload)
             response.usage.duration_seconds = duration
@@ -431,7 +451,7 @@ class CliJsonRuntime:
             request_id=request.request_id,
             artifact=artifact,
             usage=AgentUsage(duration_seconds=duration),
-            raw_text=output_path.read_text(encoding="utf-8"),
+            raw_text=output_text,
             runtime_metadata={"adapter": "cli-json", "command": command[0]},
         )
         _persist_runtime_success(request, response)
@@ -609,8 +629,9 @@ class PiRpcRuntime:
         self.sessions: dict[str, _PiSession] = {}
 
     def run(self, request: AgentRequest, budget: ResourceBudget) -> AgentResponse:
-        request.call_dir.mkdir(parents=True, exist_ok=True)
-        request.scratch_dir.mkdir(parents=True, exist_ok=True)
+        durable_mkdir(request.call_dir)
+        durable_mkdir(request.scratch_dir)
+        storage_health_probe(request.call_dir)
         session = self.sessions.get(request.session_id)
         if session is None:
             session = _PiSession(self.model, request.workspace)
@@ -618,8 +639,7 @@ class PiRpcRuntime:
         events_path = request.call_dir / "events.jsonl"
 
         def sink(raw: str) -> None:
-            with events_path.open("a", encoding="utf-8") as stream:
-                stream.write(raw if raw.endswith("\n") else raw + "\n")
+            durable_append_line(events_path, raw.rstrip("\n"))
 
         started = time.monotonic()
         raw_text = session.prompt(
@@ -630,7 +650,7 @@ class PiRpcRuntime:
         duration = time.monotonic() - started
         usage = session.stats(timeout=30.0, event_sink=sink)
         usage.duration_seconds = duration
-        (request.call_dir / "response.txt").write_text(raw_text, encoding="utf-8")
+        atomic_write_text(request.call_dir / "response.txt", raw_text)
         return AgentResponse(
             request_id=request.request_id,
             artifact=parse_agent_artifact(raw_text),
@@ -669,9 +689,10 @@ class StubRuntime:
                 else None
             ),
         )
-        request.call_dir.mkdir(parents=True, exist_ok=True)
-        (request.call_dir / "response.json").write_text(
-            artifact.model_dump_json(indent=2) + "\n", encoding="utf-8"
+        durable_mkdir(request.call_dir)
+        atomic_write_text(
+            request.call_dir / "response.json",
+            artifact.model_dump_json(indent=2) + "\n",
         )
         return AgentResponse(
             request_id=request.request_id,

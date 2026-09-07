@@ -72,7 +72,10 @@ class StructuredRunner:
         self,
         workspace: str | Path,
         *,
-        base_url: str,
+        base_url: str = "",
+        provider: str = "endpoint",
+        project_id: str | None = None,
+        location: str | None = None,
         model: str,
         api_key: str = "",
         reasoning_effort: str | None = None,
@@ -86,6 +89,19 @@ class StructuredRunner:
         harness_id: str = "structured-runner@1",
     ) -> None:
         self.workspace = Path(workspace).resolve()
+        if provider not in {"endpoint", "gemini-vertex"}:
+            raise ValueError(f"Unknown endpoint provider: {provider}")
+        if provider == "gemini-vertex" and service_tier:
+            raise ValueError("Gemini does not support OpenAI service tiers")
+        self.provider = provider
+        self._gemini = None
+        if provider == "gemini-vertex":
+            from ..providers.gemini_vertex import GeminiVertexClient, GeminiVertexConfig
+            self._gemini = GeminiVertexClient(GeminiVertexConfig(
+                model_id=model, project_id=project_id, location=location,
+                timeout_s=timeout, reasoning_effort=reasoning_effort,
+            ))
+            base_url = self._gemini.base_url
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
@@ -122,6 +138,10 @@ class StructuredRunner:
             body["reasoning_effort"] = self.reasoning_effort
         if self.service_tier:
             body["service_tier"] = self.service_tier
+        if self._gemini is not None:
+            result = self._gemini.complete(**body)
+            self._log(body, result)
+            return result
         data = json.dumps(body).encode()
         req = urllib.request.Request(
             self.base_url + "/chat/completions",
@@ -370,6 +390,8 @@ class StructuredRunner:
         (self.workspace / "runtime_metadata.json").write_text(
             json.dumps(
                 {
+                    "provider": self.provider,
+                    "base_url": self.base_url,
                     "model_id": self.model,
                     "returned_model": result.get("model"),
                     "service_tier_returned": result.get("service_tier"),
@@ -477,7 +499,10 @@ def main() -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run")
     run.add_argument("--workspace", required=True)
-    run.add_argument("--base-url", required=True)
+    run.add_argument("--base-url", default="")
+    run.add_argument("--provider", choices=["endpoint", "gemini-vertex"], default="endpoint")
+    run.add_argument("--project-id")
+    run.add_argument("--location")
     run.add_argument("--model", required=True)
     run.add_argument("--api-key-env", default="OPENAI_API_KEY")
     run.add_argument("--reasoning-effort")
@@ -497,9 +522,12 @@ def main() -> int:
     final.add_argument("--harness-id")
     a = parser.parse_args()
     if a.command == "run":
+        if a.provider == "endpoint" and not a.base_url:
+            parser.error("--base-url is required for endpoint")
         StructuredRunner(
             a.workspace,
             base_url=a.base_url,
+            provider=a.provider, project_id=a.project_id, location=a.location,
             model=a.model,
             api_key=os.environ.get(a.api_key_env, ""),
             reasoning_effort=a.reasoning_effort,

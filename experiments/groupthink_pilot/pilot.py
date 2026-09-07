@@ -619,14 +619,14 @@ def _pct(value: float | None) -> str:
 
 def render_report(summary: dict[str, Any], output_path: Path) -> None:
     lines = [
-        "# GPT-5.6 Luna multi-agent groupthink pilot",
+        "# multi-agent groupthink pilot",
         "",
         summary["interpretation"],
         "",
         "## Design",
         "",
         (
-            "Four fresh Luna principals first analyzed private site evidence. Each then received "
+            "Four fresh principals first analyzed private site evidence. Each then received "
             "the same complete evidence under three protocols across "
             f"{summary['design']['scenario_count']} "
             f"scenarios and {summary['design']['replicates']} replicate(s)."
@@ -702,7 +702,7 @@ def render_report(summary: dict[str, Any], output_path: Path) -> None:
             f"**{execution['tool_events']}**.",
             f"- Token accounting: {execution['input_tokens']:,} input and "
             f"{execution['output_tokens']:,} output tokens.",
-            "- Each revision was a fresh ephemeral Luna process supplied with that "
+            "- Each revision was a fresh independent model call supplied with that "
             "principal's initial commitment. It was a stateless continuation, not a resumed "
             "hidden-state session.",
             "- The scenarios probe behavior under controlled evidence-aggregation conditions; "

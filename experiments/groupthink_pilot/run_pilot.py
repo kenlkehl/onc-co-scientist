@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the controlled federated-analysis pilot with fresh Codex CLI agents."""
+"""Run the controlled federated-analysis pilot with fresh Codex or Gemini agents."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -61,7 +62,10 @@ def parse_args() -> argparse.Namespace:
         default=HERE / "results" / "luna_pilot",
         help="Output directory. Reuse the same path with --resume after interruption.",
     )
-    parser.add_argument("--model", default="gpt-5.6-luna")
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--provider", choices=("codex", "gemini-vertex"), default="codex")
+    parser.add_argument("--project-id")
+    parser.add_argument("--location")
     parser.add_argument(
         "--reasoning-effort", choices=("low", "medium", "high", "xhigh", "max"), default="low"
     )
@@ -78,7 +82,13 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to the Codex CLI (defaults to PATH, then the macOS app bundle).",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.model = args.model or (
+        "gemini-3.8-flash" if args.provider == "gemini-vertex" else "gpt-5.6-luna"
+    )
+    if args.provider == "gemini-vertex" and args.reasoning_effort not in {"low", "medium", "high"}:
+        parser.error("Gemini reasoning effort must be low, medium, or high")
+    return args
 
 
 def _strip_json_fence(text: str) -> str:
@@ -148,6 +158,27 @@ def _command(
     response_path: Path,
     prompt: str,
 ) -> list[str]:
+    if getattr(args, "provider", "codex") == "gemini-vertex":
+        command = [
+            sys.executable,
+            "-m",
+            "onc_co_scientist.providers.gemini_prompt",
+            "--model",
+            args.model,
+            "--reasoning-effort",
+            args.reasoning_effort,
+            "--schema",
+            str(schema_path),
+            "--output",
+            str(response_path),
+            "--timeout",
+            str(args.timeout),
+        ]
+        if args.project_id:
+            command.extend(["--project-id", args.project_id])
+        if args.location:
+            command.extend(["--location", args.location])
+        return [*command, prompt]
     return [
         str(args.codex),
         "exec",
@@ -181,6 +212,12 @@ def run_call(call: AgentCall, args: argparse.Namespace) -> dict[str, Any]:
     if args.resume and final_response_path.exists() and final_meta_path.exists():
         response = _load_response(final_response_path, call)
         meta = json.loads(final_meta_path.read_text(encoding="utf-8"))
+        if (
+            meta.get("model") != args.model
+            or meta.get("reasoning_effort") != args.reasoning_effort
+            or meta.get("provider", "codex") != getattr(args, "provider", "codex")
+        ):
+            raise RuntimeError("Refusing to resume a report from another model/provider")
         return {**meta, "response": response, "resumed": True}
 
     call_dir.mkdir(parents=True, exist_ok=True)
@@ -209,6 +246,15 @@ def run_call(call: AgentCall, args: argparse.Namespace) -> dict[str, Any]:
             "round": call.round_name,
             "condition": call.condition,
             "model": args.model,
+            **(
+                {
+                    "provider": "gemini-vertex",
+                    "project_id": getattr(args, "project_id", None),
+                    "location": getattr(args, "location", None),
+                }
+                if getattr(args, "provider", "codex") == "gemini-vertex"
+                else {}
+            ),
             "reasoning_effort": args.reasoning_effort,
             "tool_events": 0,
             "input_tokens": 0,
@@ -255,7 +301,7 @@ def run_call(call: AgentCall, args: argparse.Namespace) -> dict[str, Any]:
                 last_error = f"codex exit {result.returncode}: {diagnostic}"
                 continue
             if not response_tmp.exists():
-                last_error = "Codex completed without output-last-message"
+                last_error = "Agent completed without a response file"
                 continue
             try:
                 response = _load_response(response_tmp, call)
@@ -274,6 +320,15 @@ def run_call(call: AgentCall, args: argparse.Namespace) -> dict[str, Any]:
                 "round": call.round_name,
                 "condition": call.condition,
                 "model": args.model,
+                **(
+                    {
+                        "provider": "gemini-vertex",
+                        "project_id": getattr(args, "project_id", None),
+                        "location": getattr(args, "location", None),
+                    }
+                    if getattr(args, "provider", "codex") == "gemini-vertex"
+                    else {}
+                ),
                 "reasoning_effort": args.reasoning_effort,
                 "tool_events": tool_events,
                 "input_tokens": input_tokens,
@@ -291,7 +346,10 @@ def execute_stage(
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     failures: list[str] = []
-    print(f"Starting {stage_name}: {len(calls)} Luna calls with {args.workers} workers", flush=True)
+    print(
+        f"Starting {stage_name}: {len(calls)} {args.model} calls with {args.workers} workers",
+        flush=True,
+    )
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures: dict[Future[dict[str, Any]], AgentCall] = {
             pool.submit(run_call, call, args): call for call in calls
@@ -372,7 +430,7 @@ def main() -> int:
     args.codex = _resolve_codex_path(args.codex)
     if args.replicates < 1 or args.workers < 1:
         raise SystemExit("--replicates and --workers must be positive")
-    if not args.dry_run and not args.codex.is_file():
+    if args.provider == "codex" and not args.dry_run and not args.codex.is_file():
         raise SystemExit(f"Codex CLI not found: {args.codex}")
     if args.out.exists() and not args.resume and any(args.out.iterdir()):
         raise SystemExit(
@@ -382,6 +440,15 @@ def main() -> int:
 
     manifest = {
         "model": args.model,
+        **(
+            {
+                "provider": "gemini-vertex",
+                "project_id": getattr(args, "project_id", None),
+                "location": getattr(args, "location", None),
+            }
+            if getattr(args, "provider", "codex") == "gemini-vertex"
+            else {}
+        ),
         "reasoning_effort": args.reasoning_effort,
         "replicates": args.replicates,
         "workers": args.workers,
@@ -399,6 +466,12 @@ def main() -> int:
             for scenario in SCENARIOS
         ],
     }
+    previous = args.out / "manifest.json"
+    if args.resume and previous.exists():
+        old = json.loads(previous.read_text())
+        for key in ("model", "reasoning_effort", "provider", "project_id", "location"):
+            if old.get(key) != manifest.get(key):
+                raise RuntimeError(f"Refusing to resume changed {key}")
     (args.out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
     initial_records = execute_stage(initial_calls(args), args, stage_name="initial")

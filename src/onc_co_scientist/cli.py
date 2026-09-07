@@ -22,8 +22,10 @@ import yaml
 from pydantic import ValidationError
 from rich.console import Console
 
+from .expected_surprising.cli import app as expected_surprising_app
 from .harness.experiment import load_experiment_spec
 from .harness.orchestrator import build_run_plans, run_experiment
+from .harness.supervisor import SupervisorConfig, supervise_experiment
 from .harness.task_spec import (
     INSTRUCTIONS_FILENAME,
     TASK_DATASET_LINK,
@@ -85,6 +87,7 @@ class JudgeBackend(StrEnum):
 
     claude_cli = "claude-cli"
     codex_cli = "codex-cli"
+    gemini_vertex = "gemini-vertex"
     anthropic_vertex = "anthropic-vertex"
     stub = "stub"
 
@@ -101,6 +104,7 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+app.add_typer(expected_surprising_app, name="expected-surprising")
 synth_app = typer.Typer(help="Synthetic dataset generation (Aim 1.1).", no_args_is_help=True)
 harness_app = typer.Typer(help="Harness task bundle builder (Aim 1.2).", no_args_is_help=True)
 score_app = typer.Typer(help="Transcript scoring (Aim 1.2).", no_args_is_help=True)
@@ -412,6 +416,16 @@ def harness_run_experiment(
         int | None,
         typer.Option("--max-parallel", min=1, help="Optional run-level concurrency override."),
     ] = None,
+    resume_compatible_implementation_sha256: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--resume-compatible-implementation-sha256",
+            help=(
+                "Explicitly allow a prior checkpoint implementation SHA-256 for an "
+                "audited resilience-only migration. Repeat for multiple versions."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Run persistent, sequential, deliberative, and federated experiment cells."""
 
@@ -423,6 +437,9 @@ def harness_run_experiment(
             resume=resume,
             dry_run=dry_run,
             max_parallel=max_parallel,
+            compatible_resume_implementation_sha256s=(
+                resume_compatible_implementation_sha256 or []
+            ),
         )
     except (ValueError, ValidationError) as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -435,6 +452,114 @@ def harness_run_experiment(
             f"completed={summary['n_completed']} failed={summary['n_failed']} "
             f"resumed={summary['n_resumed']}"
         )
+
+
+@harness_app.command("supervise-experiment")
+def harness_supervise_experiment(
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Co-scientist experiment YAML manifest.",
+        ),
+    ],
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Optional output-root override."),
+    ] = None,
+    max_parallel: Annotated[
+        int | None,
+        typer.Option("--max-parallel", min=1, help="Run-level concurrency override."),
+    ] = None,
+    resume_compatible_implementation_sha256: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--resume-compatible-implementation-sha256",
+            help="Explicitly allow an audited resilience-only checkpoint migration.",
+        ),
+    ] = None,
+    poll_seconds: Annotated[
+        float,
+        typer.Option("--poll-seconds", min=1.0, help="Supervisor polling interval."),
+    ] = 30.0,
+    probe_timeout_seconds: Annotated[
+        float,
+        typer.Option(
+            "--probe-timeout-seconds",
+            min=1.0,
+            help="Hard timeout for isolated artifact-mount inspection.",
+        ),
+    ] = 20.0,
+    max_consecutive_probe_timeouts: Annotated[
+        int,
+        typer.Option(
+            "--max-consecutive-probe-timeouts",
+            min=1,
+            help="Consecutive isolated mount-probe hangs allowed before restart.",
+        ),
+    ] = 3,
+    orphan_grace_seconds: Annotated[
+        float,
+        typer.Option(
+            "--orphan-grace-seconds",
+            min=1.0,
+            help="Time a running cell may lack an adapter child before restart.",
+        ),
+    ] = 600.0,
+    hard_stale_grace_seconds: Annotated[
+        float,
+        typer.Option(
+            "--hard-stale-grace-seconds",
+            min=0.0,
+            help="Grace added to the experiment's per-call timeout.",
+        ),
+    ] = 900.0,
+    restart_backoff_seconds: Annotated[
+        float,
+        typer.Option("--restart-backoff-seconds", min=0.0),
+    ] = 60.0,
+    max_restarts: Annotated[
+        int,
+        typer.Option("--max-restarts", min=0),
+    ] = 12,
+    status_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--status-path",
+            help="Host-local supervisor status JSON (recommended for SSHFS outputs).",
+        ),
+    ] = None,
+) -> None:
+    """Run a resumable controller with mount-hang and orphan-call recovery."""
+
+    result = supervise_experiment(
+        SupervisorConfig(
+            config_path=config,
+            output_root=out,
+            max_parallel=max_parallel,
+            compatible_resume_implementation_sha256s=tuple(
+                resume_compatible_implementation_sha256 or []
+            ),
+            poll_seconds=poll_seconds,
+            probe_timeout_seconds=probe_timeout_seconds,
+            max_consecutive_probe_timeouts=max_consecutive_probe_timeouts,
+            orphan_grace_seconds=orphan_grace_seconds,
+            hard_stale_grace_seconds=hard_stale_grace_seconds,
+            restart_backoff_seconds=restart_backoff_seconds,
+            max_restarts=max_restarts,
+            status_path=status_path,
+        )
+    )
+    color = "green" if result["status"] == "completed" else "yellow"
+    console.print(
+        f"[{color}]Supervisor {result['status']}[/{color}] "
+        f"after {result['restart_count']} restart(s); status={result['status_path']}"
+    )
+    if result["status"] != "completed":
+        raise typer.Exit(code=1)
 
 
 def _build_judge(
@@ -455,6 +580,11 @@ def _build_judge(
         match_phrases = {key: frozenset(values) for key, values in match_phrases_raw.items()}
         return StubJudge(novel_phrases=novel_phrases, match_phrases=match_phrases)
     cache = JudgeCache(cache_dir=cache_dir)
+    if backend is JudgeBackend.gemini_vertex:
+        from .scoring.judge import GeminiVertexJudge
+        return GeminiVertexJudge(
+            model_id=judge_model or "gemini-3.8-flash", batch_size=batch_size, cache=cache,
+        )
     if backend is JudgeBackend.codex_cli:
         return CodexCliJudge(
             cli="codex" if judge_cli == "auto" else judge_cli,
@@ -521,7 +651,8 @@ JudgeOption = Annotated[
         "out to `claude --dangerously-skip-permissions -p` (uses existing "
         "Claude Code auth on the host; note: the CLI's pre-screen classifier "
         "may refuse oncology hypothesis prompts). 'codex-cli' shells out to "
-        "`codex exec` (uses existing Codex CLI auth). 'anthropic-vertex' calls "
+        "`codex exec` (uses existing Codex CLI auth). 'gemini-vertex' calls Gemini via GCP ADC. "
+        "'anthropic-vertex' calls "
         "the Anthropic SDK directly via AnthropicVertex (requires "
         "CLOUD_ML_REGION + ANTHROPIC_VERTEX_PROJECT_ID + ADC). 'stub' is a "
         "deterministic test-only backend driven by --stub-config.",
@@ -540,7 +671,8 @@ JudgeModelOption = Annotated[
     str | None,
     typer.Option(
         "--judge-model",
-        help="Optional model id for --judge=anthropic-vertex or --judge=codex-cli. "
+        help="Optional model id for --judge=anthropic-vertex, --judge=gemini-vertex "
+        "or --judge=codex-cli. "
         "Omit to use the backend default.",
     ),
 ]

@@ -68,7 +68,10 @@ def run_one(job: dict, args) -> dict:
         return {"job_id": job["job_id"], "status": "already_completed"}
     runner = StructuredRunner(
         workspace,
-        base_url=args.base_url,
+        base_url=args.base_url or "",
+        provider="gemini-vertex" if args.backend == "gemini-vertex" else "endpoint",
+        project_id=getattr(args, "project_id", None),
+        location=getattr(args, "location", None),
         model=args.model,
         api_key=os.environ.get(args.api_key_env, ""),
         reasoning_effort=args.reasoning_effort,
@@ -98,8 +101,10 @@ def run_one(job: dict, args) -> dict:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--plan", type=Path, required=True)
-    p.add_argument("--backend", choices=["work", "endpoint"], required=True)
+    p.add_argument("--backend", choices=["work", "endpoint", "gemini-vertex"], required=True)
     p.add_argument("--base-url")
+    p.add_argument("--project-id")
+    p.add_argument("--location")
     p.add_argument("--model")
     p.add_argument("--api-key-env", default="OPENAI_API_KEY")
     p.add_argument("--reasoning-effort")
@@ -159,7 +164,7 @@ def main() -> None:
                 )
             )
         return
-    if not args.base_url:
+    if args.backend == "endpoint" and not args.base_url:
         p.error("--base-url is required for endpoint runs")
     if args.jobs < 1:
         p.error("--jobs must be positive")

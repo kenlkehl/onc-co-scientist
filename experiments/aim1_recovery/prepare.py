@@ -398,7 +398,7 @@ def main() -> None:
     parser.add_argument("--clinical-repeats", type=int, default=20)
     parser.add_argument("--depmap-repeats", type=int, default=25)
     parser.add_argument("--model", default="gpt-5.6-luna")
-    parser.add_argument("--backend", choices=["work", "endpoint"], default="work")
+    parser.add_argument("--backend", choices=["work", "endpoint", "gemini-vertex"], default="work")
     parser.add_argument(
         "--reasoning-effort", default="medium", help="Use unspecified to omit for local endpoints"
     )

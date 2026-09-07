@@ -28,7 +28,24 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from onc_co_scientist.harness.runtime import (
+# These adapters are intentionally executable directly from a checkout. Prefer
+# that checkout's package code over an older wheel installed in the host-local
+# Python environment.
+_CHECKOUT_SOURCE = Path(__file__).resolve().parents[1] / "src"
+if _CHECKOUT_SOURCE.is_dir() and str(_CHECKOUT_SOURCE) not in sys.path:
+    sys.path.insert(0, str(_CHECKOUT_SOURCE))
+
+from onc_co_scientist.harness.durable_io import (  # noqa: E402
+    atomic_write_json,
+    atomic_write_text,
+    durable_copy_file,
+    durable_is_file,
+    durable_mkdir,
+    durable_read_text,
+    durable_unlink,
+    local_spool_directory,
+)
+from onc_co_scientist.harness.runtime import (  # noqa: E402
     AgentArtifact,
     AgentResponse,
     AgentUsage,
@@ -400,10 +417,7 @@ def _sha256(text: str) -> str:
 
 
 def _write_json_atomic(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    atomic_write_json(path, payload)
 
 
 def _session_record_path(request: dict[str, Any]) -> Path:
@@ -420,9 +434,9 @@ def _load_session(
     reasoning_effort: str,
     service_tier: str,
 ) -> str | None:
-    if not path.exists():
+    if not durable_is_file(path):
         return None
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(durable_read_text(path))
     expected = {
         "harness_session_sha256": _sha256(session_id),
         "model_id": model_id,
@@ -881,12 +895,17 @@ def _experiment_root_for_call(call_dir: Path) -> Path:
 
 def _circuit_paths(call_dir: Path) -> tuple[Path, Path]:
     root = _experiment_root_for_call(call_dir)
-    return root / ".codex_transport_circuit.json", root / ".codex_transport_circuit.lock"
+    # Advisory transport state must never depend on the health of the remote
+    # artifact mount it is protecting.  Key a host-local circuit by experiment
+    # root so all adapter processes on this machine still coordinate.
+    digest = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()
+    circuit_root = local_spool_directory() / "transport-circuits"
+    return circuit_root / f"{digest}.json", circuit_root / f"{digest}.lock"
 
 
 def _read_circuit_state(path: Path) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(durable_read_text(path))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return {}
     return payload if isinstance(payload, dict) else {}
@@ -897,7 +916,7 @@ def _locked_circuit_update(
     lock_path: Path,
     update: Any,
 ) -> dict[str, Any]:
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    durable_mkdir(lock_path.parent)
     with lock_path.open("a+", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state = _read_circuit_state(state_path)
@@ -953,7 +972,7 @@ def _register_transport_success(call_dir: Path) -> None:
 
 def _transport_open_until(call_dir: Path) -> float:
     state_path, lock_path = _circuit_paths(call_dir)
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    durable_mkdir(lock_path.parent)
     with lock_path.open("a+", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
         state = _read_circuit_state(state_path)
@@ -983,14 +1002,14 @@ def _copy_attempt_outputs(attempt_dir: Path, call_dir: Path) -> None:
     ):
         source = attempt_dir / name
         destination = call_dir / name
-        if source.exists():
-            shutil.copy2(source, destination)
+        if durable_is_file(source):
+            durable_copy_file(source, destination)
         else:
-            destination.unlink(missing_ok=True)
+            durable_unlink(destination)
 
 
 def run_adapter(args: argparse.Namespace) -> AgentResponse:
-    request = json.loads(args.request_file.read_text(encoding="utf-8"))
+    request = json.loads(durable_read_text(args.request_file))
     if not isinstance(request, dict):
         raise ValueError("Request file must contain one JSON object.")
 
@@ -1009,7 +1028,7 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
     if not workspace.is_dir():
         raise ValueError(f"Workspace is not a directory: {workspace}")
     scratch_dir = Path(_required_string(request, "scratch_dir")).resolve()
-    scratch_dir.mkdir(parents=True, exist_ok=True)
+    durable_mkdir(scratch_dir)
     read_roots = [path.resolve(strict=True) for path in args.read_root]
     # Codex launches its packaged native binary again inside bubblewrap when a
     # shell tool runs.  The user auth/config directory remains denied; only the
@@ -1051,9 +1070,9 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
             )
 
     call_dir = args.output.parent
-    call_dir.mkdir(parents=True, exist_ok=True)
+    durable_mkdir(call_dir)
     attempts_dir = call_dir / "attempts"
-    attempts_dir.mkdir(parents=True, exist_ok=True)
+    durable_mkdir(attempts_dir)
     audit_path = call_dir / "codex_call.json"
     stage_schema = artifact_schema(require_final_answer=require_final_answer)
     output_schema_sha256 = _sha256(
@@ -1212,14 +1231,14 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
         else:
             current_prompt = task_prompt
         attempt_dir = attempts_dir / f"attempt_{attempt_number:04d}"
-        attempt_dir.mkdir(parents=True, exist_ok=True)
+        durable_mkdir(attempt_dir)
         schema_path = attempt_dir / "codex_agent_artifact.schema.json"
         last_message_path = attempt_dir / "codex_last_message.json"
         events_path = attempt_dir / "codex_events.jsonl"
         stderr_path = attempt_dir / "codex_stderr.log"
         attempt_audit_path = attempt_dir / "codex_call.json"
         _write_json_atomic(schema_path, task_schema)
-        last_message_path.unlink(missing_ok=True)
+        durable_unlink(last_message_path)
 
         attempt_session_action = "resumed" if thread_id is not None else "started"
         command = _codex_command(
@@ -1272,8 +1291,8 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
 
         remaining_seconds = deadline - time.monotonic()
         if remaining_seconds <= 0:
-            events_path.write_text("", encoding="utf-8")
-            stderr_path.write_text("", encoding="utf-8")
+            atomic_write_text(events_path, "")
+            atomic_write_text(stderr_path, "")
             attempt_audit.update(
                 {
                     "status": "timeout",
@@ -1317,8 +1336,8 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
                 if isinstance(exc.stderr, bytes)
                 else (exc.stderr or "")
             )
-            events_path.write_text(stdout, encoding="utf-8")
-            stderr_path.write_text(stderr, encoding="utf-8")
+            atomic_write_text(events_path, stdout)
+            atomic_write_text(stderr_path, stderr)
             stats = parse_codex_events(stdout)
             total_input_tokens += stats.input_tokens
             total_output_tokens += stats.output_tokens
@@ -1361,8 +1380,8 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
             ) from exc
 
         attempt_duration = time.monotonic() - attempt_started
-        events_path.write_text(completed.stdout, encoding="utf-8")
-        stderr_path.write_text(completed.stderr, encoding="utf-8")
+        atomic_write_text(events_path, completed.stdout)
+        atomic_write_text(stderr_path, completed.stderr)
         stats = parse_codex_events(completed.stdout)
         total_input_tokens += stats.input_tokens
         total_output_tokens += stats.output_tokens
@@ -1631,7 +1650,7 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
             raise RuntimeError("Resumed Codex call emitted a different thread ID.")
 
         attempt_audit["codex_thread_id"] = thread_id
-        if not last_message_path.exists():
+        if not durable_is_file(last_message_path):
             attempt_audit.update(
                 {"status": "runtime_error", "error": "missing_last_message"}
             )
@@ -1654,7 +1673,7 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
             update_root_audit("runtime_error", error="missing_last_message")
             raise RuntimeError("Codex completed without writing --output-last-message.")
 
-        raw_text = last_message_path.read_text(encoding="utf-8")
+        raw_text = durable_read_text(last_message_path)
         candidate_artifact: AgentArtifact | None = None
         try:
             if task_kind == "supported_claim_indices_repair":
@@ -1672,9 +1691,9 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
                 candidate_artifact = AgentArtifact.model_validate(merged_payload)
                 artifact = candidate_artifact
                 raw_text = json.dumps(merged_payload, indent=2) + "\n"
-                (attempt_dir / "codex_merged_artifact.json").write_text(
+                atomic_write_text(
+                    attempt_dir / "codex_merged_artifact.json",
                     raw_text,
-                    encoding="utf-8",
                 )
                 attempt_audit["merged_artifact_file"] = "codex_merged_artifact.json"
             else:
@@ -1778,7 +1797,7 @@ def run_adapter(args: argparse.Namespace) -> AgentResponse:
         # A narrow correction attempt intentionally emits only a patch. Expose a
         # complete, stage-schema-valid artifact at the canonical call-root path.
         _write_json_atomic(call_dir / "codex_agent_artifact.schema.json", stage_schema)
-        (call_dir / "codex_last_message.json").write_text(raw_text, encoding="utf-8")
+        atomic_write_text(call_dir / "codex_last_message.json", raw_text)
         update_root_audit("accepted", returncode=completed.returncode)
         break
 
