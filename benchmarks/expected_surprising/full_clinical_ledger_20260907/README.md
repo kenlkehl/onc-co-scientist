@@ -22,3 +22,5 @@ The clinical pair is `es-v2-nsclc_clinical-42000`, the same numerical pair used 
 Each output directory contains `manifest.json`, `config.yaml`, `execution.json`, `status.json`, `STATUS.md`, API metadata, per-run transcripts and reports, and eventual model-specific summaries and `RESULTS.md`. Failed stages remain recorded and penalized under the existing scoring policy. Account usage limits pause Codex transport requests for retry; no usage-reset credit is redeemed by this runner.
 
 [Prompt refactor and verification](../workflow_v3_2/README.md) · [Response examples](../../../docs/EXPECTED_SURPRISING_PROMPTING.md)
+
+[Byte-level source audit](source_provenance.json): the frozen code matches the implementation commit apart from one blank line in `schemas.py`; its parsed Python AST is identical. Subsequent edits in the shared checkout cannot change these frozen runs.
