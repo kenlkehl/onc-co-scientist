@@ -194,8 +194,21 @@ class CodexCLIProvider:
                     ) from None
             raw = (attempt_dir / "events.jsonl").read_text()
             errors = (attempt_dir / "stderr.log").read_text()
+            events = [json.loads(line) for line in raw.splitlines() if line.strip()]
+            # Reconnect warnings are top-level errors too. Resolve the final
+            # turn state instead of discarding a later successful completion.
+            terminal = next(
+                (
+                    event
+                    for event in reversed(events)
+                    if event.get("type")
+                    in {"turn.started", "turn.completed", "turn.failed", "error"}
+                ),
+                {},
+            )
+            completed = terminal.get("type") == "turn.completed" and process.returncode == 0
             failure_text = (raw + "\n" + errors).lower()
-            if any(
+            if not completed and any(
                 s in failure_text
                 for s in (
                     "usage_limit_reached",
@@ -208,8 +221,7 @@ class CodexCLIProvider:
                 continue
             if process.returncode:
                 raise RuntimeError(f"Codex exited {process.returncode}: {(errors or raw)[-1600:]}")
-            events = [json.loads(line) for line in raw.splitlines() if line.strip()]
-            if any(event.get("type") in {"turn.failed", "error"} for event in events):
+            if not completed:
                 raise RuntimeError(f"Codex turn failed; see {attempt_dir}")
             tool_items = [
                 event
@@ -221,10 +233,7 @@ class CodexCLIProvider:
                 raise RuntimeError(
                     f"Unexpected tool use in controller-only task; see {attempt_dir}"
                 )
-            usage = next(
-                (e.get("usage", {}) for e in reversed(events) if e.get("type") == "turn.completed"),
-                {},
-            )
+            usage = terminal.get("usage") or {}
             if not final_path.exists():
                 raise RuntimeError(f"Codex returned no final message; see {attempt_dir}")
             response = final_path.read_text()
@@ -232,8 +241,8 @@ class CodexCLIProvider:
                 "finish_reason": "stop",
                 "response_chars": len(response),
                 "usage": {
-                    "prompt_tokens": usage.get("input_tokens", 0),
-                    "completion_tokens": usage.get("output_tokens", 0),
+                    "prompt_tokens": usage.get("input_tokens"),
+                    "completion_tokens": usage.get("output_tokens"),
                     "cached_input_tokens": usage.get("cached_input_tokens", 0),
                 },
                 "reasoning_effort": self.config.reasoning_effort,
@@ -244,6 +253,7 @@ class CodexCLIProvider:
                 "cli_usage": usage,
                 "audit_dir": str(attempt_dir),
                 "infrastructure_attempts": attempt,
+                "recovered_error_count": sum(e.get("type") == "error" for e in events),
                 "tool_items": 0,
             }
             (call / "metrics.json").write_text(json.dumps(metrics, indent=2))

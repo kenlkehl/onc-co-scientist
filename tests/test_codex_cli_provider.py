@@ -43,7 +43,12 @@ def fake_cli(monkeypatch, outcomes):
                 events.insert(
                     0, {"type": "item.completed", "item": {"type": "mcp_tool_call", "id": "tool-1"}}
                 )
+            if isinstance(outcome, dict):
+                self.returncode = outcome.get("returncode", 0)
+                events = outcome["events"]
             self.kwargs["stdout"].write("\n".join(map(json.dumps, events)) + "\n")
+            if isinstance(outcome, dict) and not outcome.get("write_final", True):
+                return
             output = Path(self.command[self.command.index("--output-last-message") + 1])
             output.write_text('{"ready": true}')
 
@@ -123,3 +128,82 @@ def test_resume_appends_audit_and_preserves_interrupted_calls(tmp_path, monkeypa
     resumed.instructions.write_text("changed")
     with pytest.raises(ValueError, match="changed instructions"):
         CodexCLIProvider(CodexCLIConfig(**config, resume_audit=True))
+
+
+def test_reconnect_warnings_followed_by_completion_preserve_response_and_usage(
+    tmp_path, monkeypatch
+):
+    events = [
+        {"type": "turn.started"},
+        {"type": "error", "message": "Reconnecting... 2/5 (request timed out)"},
+        {"type": "error", "message": "Reconnecting... 3/5 (request timed out)"},
+        {
+            "type": "turn.completed",
+            "usage": {"input_tokens": 123, "output_tokens": 456, "reasoning_output_tokens": 200},
+        },
+    ]
+    calls = fake_cli(monkeypatch, [{"events": events}])
+    provider = CodexCLIProvider(
+        CodexCLIConfig(model_id="gpt-6-astra", audit_dir=str(tmp_path / "audit"))
+    )
+    response = provider.chat([ChatMessage("user", "public ledger")])
+    assert json.loads(response.text) == {"ready": True}
+    assert len(calls) == 1
+    assert response.raw["metrics"]["usage"]["completion_tokens"] == 456
+    assert response.raw["metrics"]["recovered_error_count"] == 2
+    assert response.raw["metrics"]["cli_usage"]["reasoning_output_tokens"] == 200
+
+
+@pytest.mark.parametrize(
+    "events,returncode,write_final,match",
+    [
+        (
+            [{"type": "error", "message": "at capacity"}, {"type": "turn.failed"}],
+            0,
+            True,
+            "turn failed",
+        ),
+        ([{"type": "turn.completed"}, {"type": "turn.failed"}], 0, True, "turn failed"),
+        ([{"type": "turn.completed"}, {"type": "turn.started"}], 0, True, "turn failed"),
+        (
+            [{"type": "turn.completed"}, {"type": "error", "message": "fatal"}],
+            0,
+            True,
+            "turn failed",
+        ),
+        ([{"type": "turn.started"}], 0, True, "turn failed"),
+        ([{"type": "turn.completed"}], 1, True, "exited 1"),
+        ([{"type": "turn.completed"}], 0, False, "no final message"),
+        (
+            [
+                {"type": "error", "message": "reconnecting"},
+                {"type": "item.completed", "item": {"type": "mcp_tool_call"}},
+                {"type": "turn.completed"},
+            ],
+            0,
+            True,
+            "Unexpected tool use",
+        ),
+    ],
+)
+def test_completion_does_not_mask_terminal_failure_or_missing_output(
+    tmp_path, monkeypatch, events, returncode, write_final, match
+):
+    fake_cli(
+        monkeypatch, [{"events": events, "returncode": returncode, "write_final": write_final}]
+    )
+    provider = CodexCLIProvider(
+        CodexCLIConfig(model_id="gpt-6-astra", audit_dir=str(tmp_path / "audit"))
+    )
+    with pytest.raises(RuntimeError, match=match):
+        provider.chat([ChatMessage("user", "public ledger")])
+
+
+def test_completed_turn_with_missing_usage_remains_unknown(tmp_path, monkeypatch):
+    fake_cli(monkeypatch, [{"events": [{"type": "turn.completed"}]}])
+    provider = CodexCLIProvider(
+        CodexCLIConfig(model_id="gpt-6-astra", audit_dir=str(tmp_path / "audit"))
+    )
+    metrics = provider.chat([ChatMessage("user", "public ledger")]).raw["metrics"]
+    assert metrics["usage"]["completion_tokens"] is None
+    assert metrics["usage"]["prompt_tokens"] is None
