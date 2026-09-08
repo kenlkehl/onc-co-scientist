@@ -151,6 +151,11 @@ def test_all_workflows_share_science_with_distinct_memory_and_calls(tmp_path, mo
     )
     assert regenerated.exit_code == 0, regenerated.output
     assert "expected_surprising_report.md" in regenerated.output
+    assert json.loads(
+        (spec.output_root / "expected_surprising_summary.json").read_text()
+    ) == summarize_matrix(
+        spec, list(reversed(build_run_plans(spec))), result["runs"], bootstrap_replicates=2
+    )
 
 
 @pytest.mark.parametrize("profile", ["nsclc_clinical", "nsclc_depmap"])

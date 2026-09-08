@@ -127,6 +127,10 @@ checksums; task IDs are never guessed. Omitting `iteration_policy` from this
 protocol selects 25 iterations. Explicit budgets must allow the complete
 validation response window. `max_parallel` controls concurrent matrix cells;
 peers within a cell are called in order but cannot see one another's first drafts.
+The existing `--max-parallel` command-line override can lower concurrency during
+resume without changing the frozen scientific configuration. For example, use
+`--resume --max-parallel 2` when a shared server is under memory pressure. Record
+that operational change when interpreting resource use or elapsed time.
 
 Use `adapter: provider` with any supported provider configuration: `vllm_openai`,
 `codex_cli`, `gemini_vertex`, or `anthropic_vertex`. Server URLs and model names
@@ -152,6 +156,9 @@ Resume verifies code, dependencies, configuration, task bytes, and every reused
 prompt. It reconstructs the scientific state by replaying saved responses with
 the same seeds; it makes new provider calls only after the durable journal ends.
 An interrupted in-flight request without a saved response may need to be reissued.
+Reported tokens cannot include provider work that never returned a reply, so
+interrupted requests and unreported SDK retries can add resource use beyond the
+saved call totals.
 Interrupted transcripts are retained in separate numbered directories. Completed
 scientific runs, including scored technical failures, are reused after checksum
 verification; resume does not resample an unfavorable result. Provider-initialization
@@ -190,6 +197,10 @@ from ordinary F1. P considers all final accepted claims, including additional
 claims beyond the planted set. No accepted claims makes P unavailable. B is
 unavailable when one of its supported/excluded/ambiguous evidence classes is
 absent. Machine-readable Q and D keys remain for compatibility with Aim 1.
+
+The comparison table averages each run's scores separately. Its F1* column need
+not equal the harmonic mean of the displayed average R and P; stage failures
+also set the affected run's primary F1* to zero.
 
 These outcomes describe the **workflow's shared scientific decisions**, not an
 average of peer scores. A proposal contributes to recovery only if it enters the

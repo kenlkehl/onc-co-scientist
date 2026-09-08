@@ -106,7 +106,12 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
                     "difference_pp": 100 * (b - a),
                 }
             )
-        reports = [r["report"] for r in runs if r["report"] is not None]
+        # Seeded resampling and artifact order must not depend on the run schedule.
+        reports = [
+            r["report"]
+            for r in sorted(runs, key=lambda r: (r["pair_id"], r["version"], r["replicate"]))
+            if r["report"] is not None
+        ]
         # Never silently drop failed runs lacking a scientific trace from secondary scores.
         scientific = (
             paired_summary(reports, bootstrap_replicates=bootstrap_replicates, seed=seed)
@@ -259,6 +264,10 @@ def render_markdown(spec, summary):
             f"{c['agent_calls']} |"
         )
     lines += [
+        "",
+        "The table averages each run's R, P, and F1* separately. Its F1* column therefore "
+        "need not equal the harmonic mean of the displayed average R and P. "
+        "Unrecovered stage errors also set that run's primary F1* to zero.",
         "",
         "All modes share analysis limits, validation samples, deadlines, final confirmation, "
         "and scientific scoring. Persistent mode retains recent committed conversation. Sequential "
