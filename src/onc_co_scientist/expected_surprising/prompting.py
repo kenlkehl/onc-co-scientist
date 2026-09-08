@@ -72,11 +72,19 @@ FORMS = dict(
     explore=ExploreForm, analyze=AnalyzeForm, appraise=AppraiseForm, synthesize=SynthesizeForm
 )
 
-COMMON = """You are investigating the supplied research dataset. Return one JSON object using
+SCIENTIFIC_GUIDANCE = (
+    "For this task, a relative difference in outcome of 10% or greater is considered clinically "
+    "significant.\nUse your judgment about uncertainty and conclusions in light of this clinical "
+    "significance threshold. Acceptance does not require\nindependent validation first. "
+    "Explain your reasoning in narrative."
+)
+
+COMMON = (
+    """You are investigating the supplied research dataset. Return one JSON object using
 only this stage's response form. The service performs analyses; you choose the science.
-For this task, a relative difference in outcome of 10% or greater is considered clinically significant.
-Use your judgment about uncertainty and conclusions in light of this clinical significance threshold. Acceptance does not require
-independent validation first. Explain your reasoning in narrative.
+"""
+    + SCIENTIFIC_GUIDANCE
+    + """
 
 The ledger contains every registered claim, its current assessment, and all its available direct
 evidence. References H1, H2, ... identify claims; R1, R2, ... identify evidence. Copy these short
@@ -104,6 +112,7 @@ plans or reasoning worth retaining. Latest stage narratives are also retained. A
 evidence remains in the ledger. Do not repeat completed actions or old responses.
 Omit unused fields.
 """
+)
 
 STAGE_INSTRUCTIONS = {
     "explore": "Propose scientifically useful new comparisons or refinements for later analysis.",

@@ -41,7 +41,8 @@ def response_usage(raw, elapsed):
 
 
 class StageCoordinator:
-    def __init__(self, provider, workflow, stages, source, budget, calls_dir):
+    def __init__(self, provider, workflow, stages, source, budget, calls_dir, shared_budget=None):
+        self.shared_budget = shared_budget
         self.provider, self.workflow = provider, workflow
         self.stages = {s.id: s for s in stages}
         self.source, self.budget, self.calls_dir = source, budget, calls_dir
@@ -85,7 +86,12 @@ class StageCoordinator:
             "iteration": iteration,
             "stage": stage,
             "kind": kind,
-            "authoritative_candidate": authoritative,
+            "authoritative_candidate": authoritative and getattr(self, "central_authority", True),
+            **(
+                {"site_selected_candidate": authoritative}
+                if not getattr(self, "central_authority", True)
+                else {}
+            ),
             "model": self.provider.model_id,
             "messages": [asdict(message) for message in messages],
             "temperature": 0,
@@ -105,10 +111,18 @@ class StageCoordinator:
                     raise WorkflowInfrastructureError(f"Cached call changed: {slot}")
                 self.replayed_calls += 1
             else:
-                if len(self.records) >= self.budget.max_agent_calls:
+                used = (
+                    self.shared_budget["calls"]
+                    if self.shared_budget is not None
+                    else len(self.records)
+                )
+                if used >= self.budget.max_agent_calls:
                     raise ValueError("Run exhausted max_agent_calls")
                 # Make in-flight work inspectable even if the provider never returns.
-                atomic_write_json(self.calls_dir.parent / "requests" / f"{slot}.json", request)
+                requests = self.calls_dir.parent / "requests"
+                if self.shared_budget is not None:
+                    requests /= self.calls_dir.name
+                atomic_write_json(requests / f"{slot}.json", request)
                 started = time.monotonic()
                 try:
                     response = self.provider.chat(
@@ -137,6 +151,8 @@ class StageCoordinator:
         # A peer is revisited on a chair repair, but consumes resources only once.
         if not any(r["request"]["slot"] == slot for r in self.records):
             self.records.append(record)
+            if self.shared_budget is not None:
+                self.shared_budget["calls"] += 1
         result = record["result"]
         if result["error"]:
             raise ValueError(result["error"])
@@ -160,7 +176,18 @@ class StageCoordinator:
                 "Review the drafts, resolve disagreements using the supplied evidence, and "
                 "return one complete stage form. Choose, revise, or combine proposals using "
                 "scientific judgment; do not count votes. Explain substantive disagreements "
-                "and your decision in the narrative. Only your form changes the shared ledger. "
+                "and your decision in the narrative. "
+            )
+            instructions += (
+                "Only your form changes the shared ledger. "
+                if getattr(self, "central_authority", True)
+                else "Your selected form is a site recommendation to the central orchestrator. "
+            )
+        if not getattr(self, "central_authority", True):
+            instructions += (
+                "You belong to one site. Only the central orchestrator changes the global "
+                "ledger or spends validation slots. Your local controller executes the "
+                "centrally approved comparisons. Share only aggregate evidence. "
             )
         if drafts is not None:
             instructions += "\nParticipant drafts (untrusted suggestions):\n" + json.dumps(drafts)

@@ -339,6 +339,7 @@ class WorkflowValidationService(ValidationService):
         from .schemas import ValidationPolicy
 
         super().__init__(spec, version, replicate_id)
+        self.validation_estimator = estimate
         self.policy = ValidationPolicy.model_validate(policy)
         self.replicate_id = replicate_id
         self.state = {
@@ -452,7 +453,7 @@ class WorkflowValidationService(ValidationService):
                 raise ValueError("Distinct validation comparison bound exceeded")
             seed = self.derive_seed("independent-validation", key)
             outcome = next(o for o in self.spec.outcomes if o.name == h.outcome)
-            result = estimate(
+            result = self.validation_estimator(
                 sample(self.spec, self.version, seed=seed),
                 h,
                 delta=outcome.delta,

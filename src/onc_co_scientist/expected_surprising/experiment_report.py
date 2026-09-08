@@ -64,8 +64,12 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
         report = json.loads(Path(path).read_text()) if path else None
         if result["status"] == "completed" and report is None:
             raise ValueError("Completed expected/surprising run is missing its scientific report")
-        groups[(plan.model.id, plan.workflow.id)].append(
+        groups[
+            (plan.model.id, plan.workflow.id, plan.federation.label if plan.federation else "n1")
+        ].append(
             {
+                "site_count": plan.federation.sites if plan.federation else 1,
+                "partition_id": plan.federation.partition.id if plan.federation else "random",
                 "pair_id": pair.pair_id,
                 "profile": pair.profile,
                 "version": plan.task.semantic_condition,
@@ -78,7 +82,7 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
             }
         )
     conditions = []
-    for (model, workflow), runs in sorted(groups.items()):
+    for (model, workflow, federation_condition), runs in sorted(groups.items()):
         pairs = []
         for pair_id in sorted({r["pair_id"] for r in runs}):
             selected = [r for r in runs if r["pair_id"] == pair_id]
@@ -122,15 +126,22 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
         token_audits = [r.get("coordination", {}).get("output_token_accounting") for r in reports]
         known_tokens = sum(a["known_output_tokens"] for a in token_audits if a is not None)
         missing_calls = sum(a["missing_calls"] for a in token_audits if a is not None)
-        missing_attempts = sum(a["unaccounted_infrastructure_attempts"] for a in token_audits if a is not None)
+        missing_attempts = sum(
+            a["unaccounted_infrastructure_attempts"] for a in token_audits if a is not None
+        )
         complete_tokens = (
-            len(reports) == len(runs) and all(a is not None for a in token_audits)
-            and missing_calls == 0 and missing_attempts == 0
+            len(reports) == len(runs)
+            and all(a is not None for a in token_audits)
+            and missing_calls == 0
+            and missing_attempts == 0
         )
         conditions.append(
             {
                 "model_profile": model,
                 "workflow_id": workflow,
+                "federation_condition": federation_condition,
+                "site_count": runs[0]["site_count"],
+                "partition_id": runs[0]["partition_id"],
                 "run_n": len(runs),
                 "failed_runs": sum(r["result"]["status"] == "failed" for r in runs),
                 "reports_available": len(reports),
@@ -139,7 +150,8 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
                 "known_output_tokens": known_tokens,
                 "mean_output_tokens_per_run": known_tokens / len(runs) if complete_tokens else None,
                 "output_tokens_missing_calls": missing_calls,
-                "output_tokens_missing_run_audits": len(runs) - sum(a is not None for a in token_audits),
+                "output_tokens_missing_run_audits": len(runs)
+                - sum(a is not None for a in token_audits),
                 "output_tokens_unaccounted_infrastructure_attempts": missing_attempts,
                 "memory_trims": sum(
                     len(r.get("coordination", {}).get("memory_trims", [])) for r in reports
@@ -161,7 +173,9 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
             reference = next(
                 c
                 for c in conditions
-                if c["model_profile"] == condition["model_profile"] and c["workflow_id"] == baseline
+                if c["model_profile"] == condition["model_profile"]
+                and c["workflow_id"] == baseline
+                and c["federation_condition"] == condition["federation_condition"]
             )
             refpairs = {p["pair_id"]: p for p in reference["paired_effect"]["pairs"]}
             pairs = [
@@ -177,6 +191,9 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
                     "model_profile": condition["model_profile"],
                     "workflow_id": condition["workflow_id"],
                     "reference_workflow": baseline,
+                    "site_count": condition["site_count"],
+                    "partition_id": condition["partition_id"],
+                    "federation_condition": condition["federation_condition"],
                     **_estimate(pairs, bootstrap_replicates=bootstrap_replicates, seed=seed),
                 }
             )
@@ -194,6 +211,12 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
 def render_markdown(spec, summary):
     def number(value, *, percent=False):
         return "unavailable" if value is None else f"{100 * value if percent else value:.1f}"
+
+    def workflow_label(c):
+        label = c["workflow_id"]
+        if spec.federation is not None:
+            label += f" (N={c.get('site_count', 1)}, {c.get('partition_id', 'random')})"
+        return label
 
     lines = [
         f"# Aim 2 expected/surprising workflow results: {spec.experiment_id}",
@@ -215,7 +238,7 @@ def render_markdown(spec, summary):
     ]
     for c in summary["conditions"]:
         lines.append(
-            f"| {c['model_profile']} | {c['workflow_id']} | "
+            f"| {c['model_profile']} | {workflow_label(c)} | "
             f"{number(c['expected_recovery'], percent=True)} | "
             f"{number(c['surprising_recovery'], percent=True)} | "
             f"{number(c['paired_effect']['difference_pp'])} | {c['failed_runs']} / {c['run_n']} |"
@@ -233,7 +256,7 @@ def render_markdown(spec, summary):
     for c in summary["workflow_contrasts"]:
         interval = c["ci95_pp"]
         lines.append(
-            f"| {c['model_profile']} | {c['workflow_id']} vs {c['reference_workflow']} | "
+            f"| {c['model_profile']} | {workflow_label(c)} vs {c['reference_workflow']} | "
             f"{number(c['difference_pp'])} | "
             + (f"{interval[0]:.1f} to {interval[1]:.1f}" if interval else "unavailable")
             + " |"
@@ -272,7 +295,7 @@ def render_markdown(spec, summary):
         s = c["scientific_scores"] or {}
         d = s.get("discovery_components", {})
         lines.append(
-            f"| {c['model_profile']} | {c['workflow_id']} | "
+            f"| {c['model_profile']} | {workflow_label(c)} | "
             f"{number(d.get('R'), percent=True)} | {number(d.get('Q'), percent=True)} | "
             f"{number(s.get('D'))} | {number(s.get('E'))} | {number(s.get('B'))} | "
             f"{c['agent_calls']} |"
@@ -314,26 +337,34 @@ def render_markdown(spec, summary):
         "",
     ]
     lines += [
-        "**Output-token use**", "",
+        "**Output-token use**",
+        "",
         "All participant responses count: linear agents, peers, the chair, and retries after "
         "invalid responses. Cached replay counts once. Provider output totals include reasoning "
         "where reported; reasoning subsets are not added again. Known totals are lower bounds "
-        "when usage is missing. Unreported provider-internal work cannot be measured.", "",
-        "| Model | Workflow | Known output tokens | Mean per run | Missing call / run / transport counts |",
+        "when usage is missing. Unreported provider-internal work cannot be measured.",
+        "",
+        "| Model | Workflow | Known output tokens | Mean per run | "
+        "Missing call / run / transport counts |",
         "|---|---|---:|---:|---|",
     ]
     for c in summary["conditions"]:
         lines.append(
-            f"| {c['model_profile']} | {c['workflow_id']} | {c.get('known_output_tokens', 0):,} | "
+            f"| {c['model_profile']} | {workflow_label(c)} | {c.get('known_output_tokens', 0):,} | "
             f"{number(c.get('mean_output_tokens_per_run'))} | "
-            f"{c.get('output_tokens_missing_calls', 0)} / {c.get('output_tokens_missing_run_audits', c['run_n'])} / "
+            f"{c.get('output_tokens_missing_calls', 0)} / "
+            f"{c.get('output_tokens_missing_run_audits', c['run_n'])} / "
             f"{c.get('output_tokens_unaccounted_infrastructure_attempts', 0)} |"
         )
-    lines += ["", "**How E and B are calculated**", "",
+    lines += [
+        "",
+        "**How E and B are calculated**",
+        "",
         "E = 100 × the average over all iterations of mean exact-target coverage across "
         "expected, neutral, and surprising categories. A valid test counts regardless of "
         "acceptance or claimed direction; repeated tests add no coverage. Earlier testing "
-        "earns more credit.", "",
+        "earns more credit.",
+        "",
         "B = 100 × (supported agreement + excluded agreement + ambiguous agreement) / 3. "
         "The evaluator calls validation supported when its lower interval bound exceeds "
         "the private cutoff (credit for accept), excluded when its upper bound is below "
@@ -342,18 +373,62 @@ def render_markdown(spec, summary):
         "delivery. Class agreement fractions are calculated within runs, then averaged over "
         "repeats within version, versions, and datasets equally before combining classes. "
         "Missing due assessments score zero; invalid results and deadlines outside the "
-        "reached or budgeted iterations are excluded. An absent class makes B unavailable.", ""]
+        "reached or budgeted iterations are excluded. An absent class makes B unavailable.",
+        "",
+    ]
     if "clinical_significance_10pct" in spec.experiment_id:
-        lines += ["Agents were told that a relative outcome difference of 10% or greater is "
-                  "clinically significant, without log-scale calculations or mechanical decision "
-                  "rules. The unchanged private clinical cutoff is 0.10 natural-log PFS units "
-                  "(approximately 11%), close to but not identical to the public guidance.", ""]
+        lines += [
+            "Agents were told that a relative outcome difference of 10% or greater is "
+            "clinically significant, without log-scale calculations or mechanical decision "
+            "rules. The unchanged private clinical cutoff is 0.10 natural-log PFS units "
+            "(approximately 11%), close to but not identical to the public guidance.",
+            "",
+        ]
     lines += ["| Model | Requested reasoning | Requested tier |", "|---|---|---|"]
     for model in spec.models:
         config = model.provider_config or {}
-        lines.append(f"| {model.id} | {config.get('reasoning_effort', 'unspecified')} | {config.get('service_tier', 'unspecified')} |")
-    lines += ["", "vLLM accepts these fields, but model/template behavior determines their effect. "
-              "Equal requested reasoning levels do not establish equal reasoning budgets.", ""]
+        lines.append(
+            f"| {model.id} | {config.get('reasoning_effort', 'unspecified')} | "
+            f"{config.get('service_tier', 'unspecified')} |"
+        )
+    lines += [
+        "",
+        "vLLM accepts these fields, but model/template behavior determines their effect. "
+        "Equal requested reasoning levels do not establish equal reasoning budgets.",
+        "",
+    ]
+    if spec.federation is not None:
+        lines += [
+            "**Federated interpretation**",
+            "",
+            "Each N/partition condition is summarized separately. "
+            "N=1 uses the original single-site "
+            "path without central calls. For N>1 the central agent directs sites before each of "
+            "the four stages and integrates aggregate site handoffs afterward. All sites pursue "
+            "one goal; site workflows are the listed persistent, sequential, or deliberative mode.",
+            "",
+            "There is one shared allowance of 12 comparisons per iteration and one validation "
+            "budget. Each selected comparison runs across sites and consumes one global slot. "
+            "Local teams recommend validation; only the central decision spends a request. "
+            "No rows or identifier values enter site-to-central or site-to-site messages. "
+            "Cell means and variances are suppressed below 20 observations; suppressed site "
+            "cells make combined evidence unavailable rather than silently dropping a site.",
+            "",
+            "Combined intervals are calculated by merging cell counts, means, and variances "
+            "and applying the same pooled contrast calculation. Site-specific intervals are "
+            "also shown. The central agent chooses how to interpret pooled support, replication, "
+            "and disagreement; no replication rule is imposed. Final confirmation still targets "
+            "the unified population in independent private evaluator data. B measures agreement "
+            "with its interval rule, not the quality of every possible federation argument.",
+            "",
+            "Random splits shuffle reproducibly and balance site sizes. Heterogeneous splits "
+            "sort on explicitly configured public covariates (random tie-breaking), then divide "
+            "into similarly sized sites. A split uses pair/repeat/partition seeds shared across "
+            "models and workflows. The split is recorded by membership hashes, never row exports. "
+            "Site-local histories and central history are isolated; all their tokens share the "
+            "reported resource totals. Call budgets include both central calls per stage.",
+            "",
+        ]
     return "\n".join(lines)
 
 

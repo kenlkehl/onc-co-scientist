@@ -179,8 +179,18 @@ def paired_summary(reports: list[dict], *, bootstrap_replicates=2000, seed=0) ->
         raise ValueError("Cannot combine different workflow/scoring versions")
     if len({(r["model"], r["harness"]) for r in reports}) != 1:
         raise ValueError("Summarize one model and harness at a time")
-    if len({(r.get("model_profile"), r.get("workflow_id")) for r in reports}) != 1:
-        raise ValueError("Summarize one model profile and workflow at a time")
+    if (
+        len(
+            {
+                (r.get("model_profile"), r.get("workflow_id"), r.get("federation_condition", "n1"))
+                for r in reports
+            }
+        )
+        != 1
+    ):
+        raise ValueError(
+            "Summarize one model profile and workflow at a time, with one federation condition"
+        )
     if (
         len(
             {

@@ -123,6 +123,7 @@ def _provenance(spec, plan, fingerprint):
     return {
         "spec_fingerprint": fingerprint,
         "coordination_version": COORDINATION_VERSION,
+        **({"federation": plan.federation.model_dump()} if plan.federation else {}),
         "implementation": implementation_hashes(),
         "python": platform.python_version(),
         "dependencies": {
@@ -195,6 +196,7 @@ def run_cell(spec, plan, root, fingerprint, *, resume):
     config = dict(plan.model.provider_config)
     if config["kind"] == "codex_cli":
         config["audit_dir"] = str(run_dir / "provider_audit")
+        config["resume_audit"] = resume
     try:
         provider = get_provider(config)
     except Exception as exc:
@@ -216,14 +218,38 @@ def run_cell(spec, plan, root, fingerprint, *, resume):
         }
         atomic_write_json(run_path, result)
         return result
-    coordinator = StageCoordinator(
-        provider,
-        plan.workflow,
-        spec.stages,
-        spec.expected_surprising,
-        spec.budget,
-        run_dir / "calls",
-    )
+    if plan.federation is not None and plan.federation.sites > 1:
+        from .federation import FederatedCoordinator
+
+        central_provider = None
+        central_profile = spec.federation.orchestrator_model_profile
+        if central_profile and central_profile != plan.model.id:
+            central_config = dict(
+                next(m for m in spec.models if m.id == central_profile).provider_config
+            )
+            if central_config["kind"] == "codex_cli":
+                central_config["audit_dir"] = str(run_dir / "central_provider_audit")
+                central_config["resume_audit"] = resume
+            central_provider = get_provider(central_config)
+        coordinator = FederatedCoordinator(
+            provider,
+            plan.workflow,
+            spec.stages,
+            spec.expected_surprising,
+            spec.budget,
+            run_dir,
+            plan.federation,
+            central_provider=central_provider,
+        )
+    else:
+        coordinator = StageCoordinator(
+            provider,
+            plan.workflow,
+            spec.stages,
+            spec.expected_surprising,
+            spec.budget,
+            run_dir / "calls",
+        )
     # Preserve interrupted transcripts; rebuild into a new directory using the call journal.
     sequence = 1
     while (run_dir / f"science-{sequence:04d}").exists():
@@ -263,6 +289,15 @@ def run_cell(spec, plan, root, fingerprint, *, resume):
         model_profile=plan.model.id,
         workflow_id=plan.workflow.id,
         workflow_mode=plan.workflow.mode,
+        **(
+            {
+                "site_count": plan.federation.sites,
+                "partition_id": plan.federation.partition.id,
+                "federation_condition": plan.federation.label,
+            }
+            if plan.federation
+            else {}
+        ),
         coordination=audit,
         provenance_sha256=digest(provenance),
     )

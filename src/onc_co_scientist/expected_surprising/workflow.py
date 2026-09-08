@@ -90,6 +90,7 @@ def public_event(event):
 class WorkflowController:
     def __init__(self, spec, version, frame, policy, replicate_id):
         self.spec, self.version, self.frame = spec, version, frame
+        self.analysis_estimator = estimate
         self.outcomes = {o.name: o for o in spec.outcomes}
         self.service = WorkflowValidationService(spec, version, replicate_id, policy)
         self.state = {
@@ -384,7 +385,7 @@ class WorkflowController:
                     h,
                 )
             else:
-                result = estimate(
+                result = self.analysis_estimator(
                     self.frame,
                     h,
                     delta=self.outcomes[h.outcome].delta,
@@ -544,6 +545,8 @@ def run_workflow(
             if name not in {"patient_id", "cell_line_id"}
         },
     }
+    if stage_executor is not None and hasattr(stage_executor, "bind"):
+        stage_executor.bind(controller, task_context)
     history = [
         {
             "task": task,

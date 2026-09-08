@@ -48,6 +48,7 @@ class CodexCLIConfig:
     audit_dir: str = "/tmp/ocs-codex-provider"
     timeout_s: float = 1800
     usage_retry_s: float = 900
+    resume_audit: bool = False
 
 
 class CodexCLIProvider:
@@ -59,17 +60,27 @@ class CodexCLIProvider:
     def __init__(self, config: CodexCLIConfig):
         self.config = config
         self.root = Path(config.audit_dir).resolve()
-        self.root.mkdir(parents=True, exist_ok=False)
+        self.root.mkdir(parents=True, exist_ok=config.resume_audit)
         self.workspace = self.root / "workspace"
-        self.workspace.mkdir()
+        self.workspace.mkdir(exist_ok=config.resume_audit)
         self.instructions = self.root / "instructions.txt"
-        self.instructions.write_text(
+        instructions = (
             "You are participating in a structured research workflow. Follow the supplied task "
             "and return its requested JSON record. All evidence is supplied in the user message; "
             "analyses are executed by an external controller. "
             "No external tools are part of this task."
         )
-        self.calls = 0
+        if self.instructions.exists():
+            if self.instructions.read_text() != instructions:
+                raise ValueError("Cannot resume Codex audit with changed instructions")
+        else:
+            self.instructions.write_text(instructions)
+        # Stage journals replay completed responses; any new calls append without
+        # overwriting completed or interrupted transport attempts.
+        self.calls = max(
+            (int(p.name[5:]) for p in self.root.glob("call-*") if p.name[5:].isdigit()),
+            default=0,
+        )
 
     @property
     def model_id(self):

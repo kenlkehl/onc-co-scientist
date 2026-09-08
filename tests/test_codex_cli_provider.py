@@ -104,3 +104,22 @@ def test_unexpected_tools_do_not_silently_enter_controller_only_evaluation(tmp_p
     )
     with pytest.raises(RuntimeError, match="Unexpected tool use"):
         provider.chat([ChatMessage("user", "public history")])
+
+
+def test_resume_appends_audit_and_preserves_interrupted_calls(tmp_path, monkeypatch):
+    fake_cli(monkeypatch, ["ok", "ok"])
+    config = dict(model_id="gpt-5.6-terra", audit_dir=str(tmp_path / "audit"))
+    first = CodexCLIProvider(CodexCLIConfig(**config))
+    first.chat([ChatMessage("user", "first")])
+    original = (first.root / "call-0001/prompt.txt").read_bytes()
+    (first.root / "call-0002").mkdir()  # Interrupted before a response was journaled.
+    with pytest.raises(FileExistsError):
+        CodexCLIProvider(CodexCLIConfig(**config))
+    resumed = CodexCLIProvider(CodexCLIConfig(**config, resume_audit=True))
+    resumed.chat([ChatMessage("user", "next")])
+    assert resumed.calls == 3
+    assert (first.root / "call-0001/prompt.txt").read_bytes() == original
+    assert (first.root / "call-0003/prompt.txt").read_text() == "next"
+    resumed.instructions.write_text("changed")
+    with pytest.raises(ValueError, match="changed instructions"):
+        CodexCLIProvider(CodexCLIConfig(**config, resume_audit=True))

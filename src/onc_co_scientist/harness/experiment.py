@@ -15,6 +15,8 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..expected_surprising.federation_spec import FederationGrid
+
 AdapterKind = Literal["cli-json", "pi-rpc", "stub", "provider"]
 WorkflowMode = Literal["persistent", "sequential", "deliberative"]
 WorkspaceStrategy = Literal["reference", "copy"]
@@ -250,6 +252,7 @@ class ExperimentSpec(BaseModel):
     experiment_id: str = Field(min_length=1)
     description: str = ""
     output_root: Path = Path("runs/co_scientist")
+    federation: FederationGrid | None = None
     workspace_strategy: WorkspaceStrategy = "reference"
     tasks: list[TaskSpec] = Field(default_factory=list)
     clinical_benchmark: ClinicalBenchmarkSource | None = None
@@ -273,6 +276,13 @@ class ExperimentSpec(BaseModel):
             raise ValueError(
                 "Provide tasks, a clinical_benchmark, or an expected_surprising source."
             )
+        if self.federation is not None and self.expected_surprising is None:
+            raise ValueError("Site-count grids currently require expected_surprising")
+        if self.federation and self.federation.orchestrator_model_profile not in {
+            None,
+            *[m.id for m in self.models],
+        }:
+            raise ValueError("Unknown orchestrator_model_profile")
         if self.expected_surprising is not None:
             from ..expected_surprising.experiment import validate_experiment
 
@@ -289,7 +299,10 @@ class ExperimentSpec(BaseModel):
                 raise ValueError(f"Duplicate {label} IDs are not allowed.")
         for task in self.tasks:
             for workflow in self.workflows:
-                required = required_agent_calls(self, task, workflow)
+                required = max(
+                    required_agent_calls(self, task, workflow, cell)
+                    for cell in (self.federation.cells() if self.federation else [None])
+                )
                 if self.budget.max_agent_calls < required:
                     raise ValueError(
                         f"max_agent_calls={self.budget.max_agent_calls} is below the "
@@ -302,6 +315,8 @@ class ExperimentSpec(BaseModel):
     def fingerprint(self) -> str:
         payload = self.model_dump(mode="json", exclude_none=True)
         # Preserve fingerprints of frozen experiments predating public treatment roles.
+        if self.federation is None:
+            payload.pop("federation", None)
         for task in payload["tasks"]:
             if not task["treatment_columns"]:
                 task.pop("treatment_columns")
@@ -350,6 +365,7 @@ def required_agent_calls(
     spec: ExperimentSpec,
     task: TaskSpec,
     workflow: WorkflowSpec,
+    federation=None,
 ) -> int:
     """Return the exact healthy-run call count implied by a matrix cell."""
 
@@ -357,6 +373,12 @@ def required_agent_calls(
     if workflow.mode == "deliberative":
         calls_per_stage = workflow.agents_per_stage * workflow.deliberation_rounds + 1
     scientific_calls = spec.iteration_policy.iterations * len(spec.stages) * calls_per_stage
+    if federation is not None and federation.sites > 1:
+        return (
+            spec.iteration_policy.iterations
+            * len(spec.stages)
+            * (federation.sites * calls_per_stage + 2)
+        )
     if workflow.federated:
         scientific_calls *= len(task.site_workspaces)
         scientific_calls += 1  # one evaluator-blind central synthesis

@@ -123,9 +123,19 @@ class RunPlan:
     workflow: WorkflowSpec
     model: ModelSpec
     replicate: int
+    federation: Any = None
 
     def public_dict(self) -> dict[str, Any]:
         return {
+            **(
+                {
+                    "site_count": self.federation.sites,
+                    "partition_id": self.federation.partition.id,
+                    "federation_condition": self.federation.label,
+                }
+                if self.federation
+                else {}
+            ),
             "run_id": self.run_id,
             "task_id": self.task.id,
             "semantic_condition": self.task.semantic_condition,
@@ -159,15 +169,18 @@ def build_run_plans(spec: ExperimentSpec) -> list[RunPlan]:
                             f"r{replicate:03d}",
                         )
                     )
-                    plans.append(
-                        RunPlan(
-                            run_id=run_id,
-                            task=task,
-                            workflow=workflow,
-                            model=model,
-                            replicate=replicate,
+                    for cell in spec.federation.cells() if spec.federation else [None]:
+                        plans.append(
+                            RunPlan(
+                                run_id=run_id
+                                + (f"__{cell.label}" if cell and cell.sites > 1 else ""),
+                                task=task,
+                                workflow=workflow,
+                                model=model,
+                                replicate=replicate,
+                                federation=cell,
+                            )
                         )
-                    )
     return plans
 
 
@@ -258,9 +271,7 @@ class RunController:
         self.ledger = BudgetLedger(spec.budget)
         self.state_path = run_dir / "run_state.json"
         self.substrate_hashes = _substrate_hashes(plan)
-        self.implementation_sha256 = implementation_sha256 or _sha256_file(
-            Path(__file__).resolve()
-        )
+        self.implementation_sha256 = implementation_sha256 or _sha256_file(Path(__file__).resolve())
         self.compatible_resume_implementation_sha256s = frozenset(
             compatible_resume_implementation_sha256s
         ) | frozenset(_BUILTIN_RESUME_COMPATIBILITY)
@@ -314,8 +325,7 @@ class RunController:
                 for item in raw_migrations
                 if isinstance(item, dict)
                 and all(
-                    isinstance(key, str) and isinstance(value, str)
-                    for key, value in item.items()
+                    isinstance(key, str) and isinstance(value, str) for key, value in item.items()
                 )
             ]
         if prior_implementation != self.implementation_sha256:
@@ -350,9 +360,7 @@ class RunController:
             if isinstance(record, dict)
         }
         if len(self.artifacts) != len(self.completed_slots):
-            raise RuntimeError(
-                "Cannot resume: artifact and completed-call-slot counts disagree."
-            )
+            raise RuntimeError("Cannot resume: artifact and completed-call-slot counts disagree.")
         self.ledger.restore(
             agent_calls=int(raw_ledger.get("agent_calls", -1)),
             usage=dict(raw_ledger.get("usage", {})),
@@ -362,9 +370,7 @@ class RunController:
                 "Cannot resume: usage ledger would double-count or omit completed calls."
             )
         self.call_index = max(self.call_index, int(state.get("call_index", 0)))
-        self.previous_authoritative_handoff = str(
-            state.get("previous_authoritative_handoff", "")
-        )
+        self.previous_authoritative_handoff = str(state.get("previous_authoritative_handoff", ""))
         self.iterations_completed = int(state.get("iterations_completed", 0))
         terminal = state.get("terminal_iteration")
         self.terminal_iteration = int(terminal) if terminal is not None else None
@@ -498,8 +504,7 @@ class RunController:
             for key, value in metadata_expected.items():
                 if metadata.get(key) != value:
                     raise RuntimeError(
-                        f"Cannot adopt runtime success for {call_slot!r}: metadata {key} "
-                        "mismatch."
+                        f"Cannot adopt runtime success for {call_slot!r}: metadata {key} mismatch."
                     )
             if request.get("prompt") != prompt:
                 raise RuntimeError(
@@ -510,9 +515,10 @@ class RunController:
             marker_path = call_dir / "runtime_success.json"
             if durable_is_file(marker_path):
                 marker = durable_read_json(marker_path)
-                if marker.get("prompt_sha256") != hashlib.sha256(
-                    prompt.encode("utf-8")
-                ).hexdigest():
+                if (
+                    marker.get("prompt_sha256")
+                    != hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+                ):
                     raise RuntimeError(
                         f"Cannot adopt runtime success for {call_slot!r}: prompt hash mismatch."
                     )
@@ -639,8 +645,11 @@ class RunController:
             "",
             "TASK",
             self.plan.task.prompt,
-            *(["", render_treatment_roles(self.plan.task.treatment_columns)]
-              if self.plan.task.treatment_columns else []),
+            *(
+                ["", render_treatment_roles(self.plan.task.treatment_columns)]
+                if self.plan.task.treatment_columns
+                else []
+            ),
             "",
             (
                 f"ITERATION: {iteration_index} of "
@@ -773,9 +782,7 @@ class RunController:
             )
             request_id = request.request_id
             request_payload = request.model_dump(mode="json", exclude={"prompt"})
-            request_payload["prompt_sha256"] = hashlib.sha256(
-                prompt.encode("utf-8")
-            ).hexdigest()
+            request_payload["prompt_sha256"] = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
             self.recorder.emit("agent_request", request_payload)
             started = time.monotonic()
             try:
@@ -818,9 +825,7 @@ class RunController:
                 raise
         artifact = response.artifact
         if require_final_answer and artifact.final_answer is None:
-            exc = ValueError(
-                f"Synthesis call slot {call_slot!r} returned a null final_answer."
-            )
+            exc = ValueError(f"Synthesis call slot {call_slot!r} returned a null final_answer.")
             self.recorder.emit(
                 "artifact_contract_error",
                 {"request_id": request_id, "error": str(exc)},
@@ -962,9 +967,7 @@ class RunController:
                     session_id = persistent_session
                     context = ""
                 else:
-                    session_id = (
-                        f"{self.plan.run_id}:{scope_id}:i{iteration_index:03d}:{stage.id}"
-                    )
+                    session_id = f"{self.plan.run_id}:{scope_id}:i{iteration_index:03d}:{stage.id}"
                     context = previous.handoff if previous is not None else ""
                 workspace = self._session_workspace(source_workspace, session_id)
                 prompt = self._base_prompt(
@@ -977,9 +980,7 @@ class RunController:
                     require_final_answer=synthesis,
                     terminal=terminal,
                 )
-                call_slot = (
-                    f"{scope_id}:i{iteration_index:03d}:s{stage_index:02d}:linear"
-                )
+                call_slot = f"{scope_id}:i{iteration_index:03d}:s{stage_index:02d}:linear"
                 previous = self._call(
                     call_slot=call_slot,
                     stage_id=stage.id,
@@ -1036,8 +1037,7 @@ class RunController:
                                     "peer": peer_index,
                                     "handoff": artifact.handoff,
                                     "claims": [
-                                        claim.model_dump(mode="json")
-                                        for claim in artifact.claims
+                                        claim.model_dump(mode="json") for claim in artifact.claims
                                     ],
                                     "evidence": artifact.evidence,
                                     "concerns": artifact.concerns,
@@ -1048,8 +1048,7 @@ class RunController:
                             peer_context = (
                                 "Review the other scientists' structured artifacts below, then "
                                 "revise your own conclusion while retaining justified "
-                                "disagreement.\n"
-                                + json.dumps(peer_payload, indent=2)
+                                "disagreement.\n" + json.dumps(peer_payload, indent=2)
                             )
                         prompt = self._base_prompt(
                             stage=stage,
@@ -1073,8 +1072,7 @@ class RunController:
                                 canonical_stage=stage.id,
                                 role=stage.role,
                                 agent_id=(
-                                    f"{scope_id}:i{iteration_index:03d}:"
-                                    f"{stage.id}:peer{index:02d}"
+                                    f"{scope_id}:i{iteration_index:03d}:{stage.id}:peer{index:02d}"
                                 ),
                                 session_id=session_id,
                                 prompt=prompt,
@@ -1093,9 +1091,7 @@ class RunController:
                     {
                         "peer": index,
                         "handoff": artifact.handoff,
-                        "claims": [
-                            claim.model_dump(mode="json") for claim in artifact.claims
-                        ],
+                        "claims": [claim.model_dump(mode="json") for claim in artifact.claims],
                         "evidence": artifact.evidence,
                         "concerns": artifact.concerns,
                         "minority_report": artifact.minority_report,
@@ -1112,8 +1108,7 @@ class RunController:
                     ),
                 )
                 consensus_session_id = (
-                    f"{self.plan.run_id}:{scope_id}:i{iteration_index:03d}:"
-                    f"{stage.id}:chair"
+                    f"{self.plan.run_id}:{scope_id}:i{iteration_index:03d}:{stage.id}:chair"
                 )
                 consensus_workspace = self._session_workspace(
                     source_workspace, consensus_session_id
@@ -1129,17 +1124,13 @@ class RunController:
                     require_final_answer=require_final_answer,
                     terminal=terminal,
                 )
-                call_slot = (
-                    f"{scope_id}:i{iteration_index:03d}:s{stage_index:02d}:chair"
-                )
+                call_slot = f"{scope_id}:i{iteration_index:03d}:s{stage_index:02d}:chair"
                 consensus = self._call(
                     call_slot=call_slot,
                     stage_id=consensus_stage.id,
                     canonical_stage=stage.id,
                     role=consensus_stage.role,
-                    agent_id=(
-                        f"{scope_id}:i{iteration_index:03d}:{stage.id}:chair"
-                    ),
+                    agent_id=(f"{scope_id}:i{iteration_index:03d}:{stage.id}:chair"),
                     session_id=consensus_session_id,
                     prompt=prompt,
                     workspace=consensus_workspace,
@@ -1406,9 +1397,7 @@ def _run_one(
         scoped_runtimes=scoped_runtimes,
         resume=resume,
         implementation_sha256=implementation_sha256,
-        compatible_resume_implementation_sha256s=(
-            compatible_resume_implementation_sha256s
-        ),
+        compatible_resume_implementation_sha256s=(compatible_resume_implementation_sha256s),
     )
     try:
         result = controller.execute()
@@ -1491,9 +1480,7 @@ def _frozen_schedule(
         )
         rng.shuffle(block)
         ordered.extend(block)
-        blocks.append(
-            {"replicate": replicate, "run_ids": [plan.run_id for plan in block]}
-        )
+        blocks.append({"replicate": replicate, "run_ids": [plan.run_id for plan in block]})
     _atomic_json(
         schedule_path,
         {
@@ -1581,7 +1568,9 @@ def run_experiment(
         {
             **plan.public_dict(),
             "schedule_position": index,
-            "planned_agent_calls": required_agent_calls(spec, plan.task, plan.workflow),
+            "planned_agent_calls": required_agent_calls(
+                spec, plan.task, plan.workflow, plan.federation
+            ),
             "iterations": spec.iteration_policy.iterations,
         }
         for index, plan in enumerate(plans, start=1)

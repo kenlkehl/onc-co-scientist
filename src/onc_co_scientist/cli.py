@@ -384,7 +384,8 @@ def harness_validate_experiment(
         f"[green]Valid experiment[/green] {spec.experiment_id}: "
         f"{len(spec.tasks)} task(s) × {len(spec.workflows)} workflow(s) × "
         f"{len(spec.models)} model profile(s) × {spec.replicates} replicate(s) "
-        f"= {len(plans)} run(s)"
+        + (f"× {len(spec.federation.cells())} site/partition condition(s) " if spec.federation else "")
+        + f"= {len(plans)} run(s)"
     )
 
 

@@ -84,9 +84,10 @@ A remaining context-limit error is recorded as a technical failure.
 
 Aggregate token, tool, and dollar caps are rejected for this protocol because
 the providers do not offer consistent enforcement. The generic artifact runner
-keeps its existing resource controls. Federation and additional safeguard arms
-are rejected for the paired protocol until they have their own scientific design;
-they remain available in the generic runner.
+keeps its existing resource controls. The paired protocol supports the independent
+`federation` site-count/partition grid described in [Federated workflows](EXPECTED_SURPRISING_FEDERATION.md).
+The legacy `workflow.federated` switch (which only performs final central synthesis)
+and additional safeguard arms remain separate generic-runner features.
 
 ## Configure and run
 
