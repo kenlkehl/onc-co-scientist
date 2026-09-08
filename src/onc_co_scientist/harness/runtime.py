@@ -711,4 +711,6 @@ def create_runtime(model: ModelSpec) -> AgentRuntime:
         return PiRpcRuntime(model)
     if model.adapter == "cli-json":
         return CliJsonRuntime(model)
-    return StubRuntime(model)
+    if model.adapter == "stub":
+        return StubRuntime(model)
+    raise ValueError("Provider profiles use the expected/surprising scientific controller")

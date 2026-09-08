@@ -4,7 +4,9 @@ The pre-integration checkpoint is `7bcdd63`. The implementation connects the
 existing experiment matrix to the expected/surprising scientific controller.
 See the [workflow guide](../../../docs/EXPECTED_SURPRISING_AIM2.md).
 
-**Automated checks:** 173 tests passed, with no failures, errors, or skips.
+**Automated checks:** 174 distinct tests passed, with no failures, errors, or skips
+(173 in the main suite, plus one new runtime-guard regression within a 39-test
+follow-up run).
 This covers all three modes, both paired versions, full 25-iteration clinical
 and cell-line runs, bounded conversation history, interrupted-run replay,
 chair-only scientific authority, independent first-round drafts, repairs,
@@ -42,6 +44,13 @@ tested. The second showed how repeating whole ledger snapshots would exhaust
 persistent context; the auditable bounded-history policy was added and tested.
 Only these development smoke processes were stopped. The other task's full
 clinical campaigns were not modified.
+
+The same frozen implementation is also running on Gemma
+`RedHatAI/Gemma-4-31B-IT-FP8-Dynamic` at `camus:8002`, under
+`data/expected_surprising_aim2/smoke_20260907_gemma`. This second 12-run matrix
+checks the other deployment while Qwen produces unusually long responses: two
+initial Qwen calls used their entire 125,000-token allowance and returned no final
+text. Those replies were retained and passed through the normal repair policy.
 
 Once complete, the live batch is audited with:
 

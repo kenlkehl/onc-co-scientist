@@ -18,9 +18,19 @@ from onc_co_scientist.harness.runtime import (
     SubgroupPredicate,
     _runtime_environment,
     build_pi_command,
+    create_runtime,
     parse_agent_artifact,
     run_subprocess_in_group,
 )
+
+
+def test_provider_profile_cannot_silently_use_stub_runtime():
+    profile = ModelSpec(
+        id="provider", model_id="model", adapter="provider",
+        provider_config={"kind": "vllm_openai", "model_id": "model"},
+    )
+    with pytest.raises(ValueError, match="scientific controller"):
+        create_runtime(profile)
 
 
 def test_runtime_inherits_vllm_transport_failover_controls(
