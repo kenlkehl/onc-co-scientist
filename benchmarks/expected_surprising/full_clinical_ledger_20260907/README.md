@@ -24,3 +24,13 @@ Each output directory contains `manifest.json`, `config.yaml`, `execution.json`,
 [Prompt refactor and verification](../workflow_v3_2/README.md) · [Response examples](../../../docs/EXPECTED_SURPRISING_PROMPTING.md)
 
 [Byte-level source audit](source_provenance.json): the frozen code matches the implementation commit apart from one blank line in `schemas.py`; its parsed Python AST is identical. Subsequent edits in the shared checkout cannot change these frozen runs.
+
+## Completed results and Terra extension
+
+[Full clinical comparison](RESULTS.md) now includes the 60 completed Luna/Sol/Astra runs and all 20 finished Gemma runs. Gemma completed 1,979 of 2,000 stages; 10 runs had unrecovered stage errors. The report retains the original failure penalties and explains why primary F1* differs from the harmonic mean of the displayed R and P.
+
+On September 8 at 10:19 UTC, a further 20 runs were launched for `gpt-5.6-terra`, with medium reasoning, explicit normal tier (`service_tier="default"`), and five concurrent sessions. Source and input hashes exactly match the original frozen Codex batch. [Terra launch record](terra_launch.json) · [Terra progress](/data1/ken/onc-co-scientist/data/expected_surprising_ledger/full_runs/20260908T103000Z_terra/STATUS.md). The directory identifier is a label; `launch.json` and `execution.json` record actual start times.
+
+A thread heartbeat checks Terra every 15 minutes and will refresh the report and notify on completion or failure. The reproducible updater is `scripts/expected_surprising/update_full_clinical_comparison.py`, run with the original frozen Codex `source/src` on `PYTHONPATH` and `/tmp/ocs-es-refactor-venv/bin/python`. It includes only endpoints for which all assigned runs have finished and reports exist; pending endpoints remain explicitly listed. It preserves the E/B definitions and Astra diagnosis and refreshes the previously shared Codex report link as well as this tracked report.
+
+[Official Codex service-tier configuration](https://learn.chatgpt.com/docs/config-file/config-reference) documents the explicit tier override; Terra's archived command confirms `service_tier="default"` and `model_reasoning_effort="medium"`.

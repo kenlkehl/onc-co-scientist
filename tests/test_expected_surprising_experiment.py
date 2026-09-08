@@ -289,6 +289,11 @@ def test_errors_consume_calls_and_corrupt_cache_stops_replay(tmp_path):
     assert provider.calls == 1
     assert coordinator.audit()["provider_error_calls"] == 1
     assert coordinator.audit()["usage"]["input_tokens"] is None
+    assert coordinator.audit()["output_token_accounting"] == {
+        "known_output_tokens": 0,
+        "missing_calls": 1,
+        "unaccounted_infrastructure_attempts": 0,
+    }
     resumed = StageCoordinator(*arguments)
     with pytest.raises(ValueError, match="Request timed out"):
         resumed.respond("prompt", iteration=1, stage="explore", attempt=1)
@@ -434,3 +439,23 @@ def test_config_defaults_pair_hashes_and_rejected_unsupported_settings(tmp_path)
         handle.write(b"altered")
     with pytest.raises(ValueError, match="checksum mismatch"):
         load_experiment_spec(path)
+
+
+def test_output_tokens_include_retries_without_double_counting_cached_calls(tmp_path):
+    class Counted:
+        model_id = 'fixture'
+        def chat(self, *_args, **_kwargs):
+            return ChatResponse(text='{}', model_id=self.model_id, raw={'usage': {'prompt_tokens': 100, 'completion_tokens': 45}})
+    coordinator = StageCoordinator(
+        Counted(), WorkflowSpec(id='sequential', mode='sequential'), default_stages(),
+        SimpleNamespace(max_tokens_per_call=100, max_retries_per_stage=2, persistent_history_chars=None),
+        ResourceBudget(max_agent_calls=5), tmp_path/'calls',
+    )
+    coordinator.respond('first', iteration=1, stage='explore', attempt=1)
+    coordinator.reject()
+    coordinator.respond('repair', iteration=1, stage='explore', attempt=2)
+    coordinator.respond('repair', iteration=1, stage='explore', attempt=2)
+    audit = coordinator.audit()
+    assert audit['agent_calls'] == 2
+    assert audit['usage']['output_tokens'] == 90
+    assert audit['output_token_accounting'] == {'known_output_tokens': 90, 'missing_calls': 0, 'unaccounted_infrastructure_attempts': 0}

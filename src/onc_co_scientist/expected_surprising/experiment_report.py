@@ -119,6 +119,14 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
             else None
         )
         calls = sum(r["result"].get("agent_calls", 0) for r in runs)
+        token_audits = [r.get("coordination", {}).get("output_token_accounting") for r in reports]
+        known_tokens = sum(a["known_output_tokens"] for a in token_audits if a is not None)
+        missing_calls = sum(a["missing_calls"] for a in token_audits if a is not None)
+        missing_attempts = sum(a["unaccounted_infrastructure_attempts"] for a in token_audits if a is not None)
+        complete_tokens = (
+            len(reports) == len(runs) and all(a is not None for a in token_audits)
+            and missing_calls == 0 and missing_attempts == 0
+        )
         conditions.append(
             {
                 "model_profile": model,
@@ -127,6 +135,12 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
                 "failed_runs": sum(r["result"]["status"] == "failed" for r in runs),
                 "reports_available": len(reports),
                 "agent_calls": calls,
+                "output_tokens": known_tokens if complete_tokens else None,
+                "known_output_tokens": known_tokens,
+                "mean_output_tokens_per_run": known_tokens / len(runs) if complete_tokens else None,
+                "output_tokens_missing_calls": missing_calls,
+                "output_tokens_missing_run_audits": len(runs) - sum(a is not None for a in token_audits),
+                "output_tokens_unaccounted_infrastructure_attempts": missing_attempts,
                 "memory_trims": sum(
                     len(r.get("coordination", {}).get("memory_trims", [])) for r in reports
                 ),
@@ -299,6 +313,47 @@ def render_markdown(spec, summary):
         "assigned run lacks a scientific trace; the primary outcome still includes failures.",
         "",
     ]
+    lines += [
+        "**Output-token use**", "",
+        "All participant responses count: linear agents, peers, the chair, and retries after "
+        "invalid responses. Cached replay counts once. Provider output totals include reasoning "
+        "where reported; reasoning subsets are not added again. Known totals are lower bounds "
+        "when usage is missing. Unreported provider-internal work cannot be measured.", "",
+        "| Model | Workflow | Known output tokens | Mean per run | Missing call / run / transport counts |",
+        "|---|---|---:|---:|---|",
+    ]
+    for c in summary["conditions"]:
+        lines.append(
+            f"| {c['model_profile']} | {c['workflow_id']} | {c.get('known_output_tokens', 0):,} | "
+            f"{number(c.get('mean_output_tokens_per_run'))} | "
+            f"{c.get('output_tokens_missing_calls', 0)} / {c.get('output_tokens_missing_run_audits', c['run_n'])} / "
+            f"{c.get('output_tokens_unaccounted_infrastructure_attempts', 0)} |"
+        )
+    lines += ["", "**How E and B are calculated**", "",
+        "E = 100 × the average over all iterations of mean exact-target coverage across "
+        "expected, neutral, and surprising categories. A valid test counts regardless of "
+        "acceptance or claimed direction; repeated tests add no coverage. Earlier testing "
+        "earns more credit.", "",
+        "B = 100 × (supported agreement + excluded agreement + ambiguous agreement) / 3. "
+        "The evaluator calls validation supported when its lower interval bound exceeds "
+        "the private cutoff (credit for accept), excluded when its upper bound is below "
+        "the cutoff (credit for reject), and ambiguous otherwise (credit for unresolved). "
+        "Intervals are oriented to the claim. The assessment is scored two iterations after "
+        "delivery. Class agreement fractions are calculated within runs, then averaged over "
+        "repeats within version, versions, and datasets equally before combining classes. "
+        "Missing due assessments score zero; invalid results and deadlines outside the "
+        "reached or budgeted iterations are excluded. An absent class makes B unavailable.", ""]
+    if "clinical_significance_10pct" in spec.experiment_id:
+        lines += ["Agents were told that a relative outcome difference of 10% or greater is "
+                  "clinically significant, without log-scale calculations or mechanical decision "
+                  "rules. The unchanged private clinical cutoff is 0.10 natural-log PFS units "
+                  "(approximately 11%), close to but not identical to the public guidance.", ""]
+    lines += ["| Model | Requested reasoning | Requested tier |", "|---|---|---|"]
+    for model in spec.models:
+        config = model.provider_config or {}
+        lines.append(f"| {model.id} | {config.get('reasoning_effort', 'unspecified')} | {config.get('service_tier', 'unspecified')} |")
+    lines += ["", "vLLM accepts these fields, but model/template behavior determines their effect. "
+              "Equal requested reasoning levels do not establish equal reasoning budgets.", ""]
     return "\n".join(lines)
 
 

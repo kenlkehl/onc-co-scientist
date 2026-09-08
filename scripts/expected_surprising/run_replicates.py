@@ -291,17 +291,65 @@ def write_results(out, manifest, summaries, results):
         "fraction of final accepted claims that were tested and independently confirmed, including "
         "additional discoveries. R and P range from 0 to 1.",
         "",
-        "F1* = 200 × R × P / (R + P), on a 0–100 scale. The asterisk marks category-balanced "
-        "recall and confirmation-based precision, rather than one ordinary confusion matrix.",
+        "Within each run, F1* = 200 × R × P / (R + P), on a 0–100 scale. The asterisk marks "
+        "category-balanced recall and confirmation-based precision, rather than one ordinary "
+        "confusion matrix. An unrecovered stage error sets that run's primary F1* and focal "
+        "recovery to zero under the existing failure rule; descriptive R and P are retained. "
+        "The table averages run scores, so its F1* cannot be reconstructed from the displayed "
+        "mean R and P, especially when runs incur this failure penalty.",
         "",
-        "Coverage E rewards broad and early testing. Response to evidence B gives equal weight "
-        "to agreement with each of the three private interval rules at the two-iteration "
-        "reassessment checkpoint. It is unavailable if any evidence class has no scorable example. "
-        "Both scores range from 0 to 100.",
+        "**Coverage E: how broadly and how early did the agent test the embedded discoveries?** "
+        "At the end of each iteration, calculate the fraction of expected, neutral, and surprising "
+        "targets tested so far. Average those three fractions, then average across all 25 iterations:",
         "",
-        "Agents judged effects without prescribed minima. Final confirmation used the private "
-        "clinical cutoff of 0.10 natural-log PFS units. Agents did not need to request validation "
-        "before accepting claims. The two-iteration checkpoint did not cap investigation.",
+        "**E = 100 × average over iterations of [(expected coverage + neutral coverage + "
+        "surprising coverage) / 3].**",
+        "",
+        "A target counts after a valid test of its exact comparison, regardless of the claimed "
+        "direction or whether the agent accepts it. Repeated tests give no extra credit. "
+        "Testing every target in iteration 1 gives E = 100; first testing them all in iteration "
+        "25 gives E = 4. The denominator stays at the configured iteration budget even if a run "
+        "ends early, carrying its achieved coverage forward. Near matches are reported separately.",
+        "",
+        "**Response to evidence B: how often did the agent's later decision agree with the "
+        "evaluator's private interval rule?** For each independent validation result delivered "
+        "in iteration t, score the assessment at synthesis in iteration t + 2. Agreement earns "
+        "1; disagreement or a missing due assessment earns 0. Both agent-requested and automatic "
+        "validation count, including comparisons outside the embedded targets.",
+        "",
+        "| Private evidence class | Interval rule | Decision that earns credit |",
+        "|---|---|---|",
+        "| Supported | Lower bound > private cutoff | Accept |",
+        "| Excluded | Upper bound < private cutoff | Reject |",
+        "| Ambiguous | Interval includes or touches private cutoff | Unresolved |",
+        "",
+        "Intervals are oriented to the claim's direction. Here the private cutoff is 0.10 "
+        "natural-log PFS units. Excluded means the interval rules out an effect at least that "
+        "large; it does not necessarily rule out any association. Ambiguous means uncertain "
+        "relative to that cutoff, not necessarily uncertain about the effect's sign.",
+        "",
+        "**B = 100 × (supported agreement + excluded agreement + ambiguous agreement) / 3.**",
+        "",
+        "Calculate each agreement fraction within a run, average available run fractions within "
+        "each dataset version, then average versions equally (and base datasets equally when "
+        "there is more than one). Finally average the three evidence classes equally. Thus B "
+        "is not the fraction of all events correct or a simple average of run-level B scores. "
+        "Runs without examples of a class do not contribute to that class's mean; if a class "
+        "has no examples at the reporting level, B is unavailable. Invalid results, deadlines "
+        "past the iteration budget, and checkpoints not reached because a run was interrupted "
+        "are excluded. E and B both range from 0 to 100.",
+        "",
+        (
+            "Agents were told that a relative difference in outcome of 10% or greater is "
+            "clinically significant. No log-scale calculation or mechanical decision rule was "
+            "given to agents. The evaluator remains unchanged at 0.10 natural-log PFS units "
+            "(approximately 11%); the public 10% guidance and private cutoff are close but "
+            "not identical. Acceptance did not require validation first."
+            if manifest["config"].get("clinical_significance_guidance")
+            else "Agents judged effects without prescribed minima. Final confirmation used the private "
+            "clinical cutoff of 0.10 natural-log PFS units. Agents did not need to request validation "
+            "before accepting claims. The two-iteration checkpoint did not cap investigation."
+        ),
         "",
         "Repeated runs were averaged within each version, then versions equally. B was averaged "
         "within evidence class before combining classes. This experiment contains only one base "
@@ -318,6 +366,21 @@ def write_results(out, manifest, summaries, results):
             "these controls differ from the vLLM temperature and max-completion-token settings. "
             "Native CLI events and effective command arguments are archived under codex_calls.",
         ]
+    diagnostic = out / "B_DIAGNOSTIC.md"
+    text += ["", "| Model | Requested reasoning | Requested tier | Runs with all stages successful |", "|---|---|---|---:|"]
+    for endpoint in manifest["config"]["endpoints"]:
+        provider = endpoint["provider"]
+        completed = [r for r in results if r.get("endpoint") == endpoint["label"]]
+        text.append(
+            f"| {endpoint['label']} | {provider.get('reasoning_effort', 'Server default')} | "
+            f"{provider.get('service_tier', 'Server default')} | "
+            f"{sum(r.get('protocol_complete', False) for r in completed)}/{len(completed)} |"
+        )
+    text += ["", "vLLM accepts the requested controls, but its model/template determines their effect; "
+             "a successful request does not establish that reasoning budgets match Codex. "
+             "The local servers have no verified Priority service tier."]
+    if diagnostic.exists():
+        text += ["", diagnostic.read_text().strip()]
     (out / "RESULTS.md").write_text("\n".join(text) + "\n")
 
 

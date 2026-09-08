@@ -1,6 +1,8 @@
 # Simpler prompts for the expected/surprising task
 
-The `appraisal-3.2.0` workflow uses `ledger-1.0.0` prompts and `stage-forms-1.0.0` responses. It moves record keeping into the controller while leaving scientific choices with the model. The numerical datasets, validation schedules and budgets, effect-size judgment instructions, and scoring formulas remain unchanged.
+The `appraisal-3.2.0` workflow uses `ledger-1.0.0` prompts and `stage-forms-1.0.0` responses. It moves record keeping into the controller while leaving scientific choices with the model. The numerical datasets, validation schedules and budgets, and scoring formulas remain unchanged.
+
+For the September 8 six-model clinical rerun, the shared prompt tells every backend: “For this task, a relative difference in outcome of 10% or greater is considered clinically significant.” Agents still judge uncertainty and conclusions; the instructions give no log-scale calculation or mechanical decision rule. This supersedes the earlier absence of a prescribed effect size. Frozen source hashes and the batch's `clinical_significance_guidance` setting distinguish this experiment from earlier runs.
 
 A subsequent budget update sets fresh full tasks to 25 iterations for both clinical and cell-line data. It does not alter these prompt forms, validation schedules, or scoring formulas. Existing packages retain their recorded budgets; current packaging instructions are in the [guide](EXPECTED_SURPRISING_GUIDE.md#running-and-inspecting-an-evaluation).
 
@@ -73,7 +75,7 @@ Synthesis uses the same small assessment object, without analysis or validation-
 }
 ```
 
-An agent can also accept based on discovery evidence alone. These examples do not prescribe when to accept, the effect size required, or whether to request validation.
+An agent can also accept based on discovery evidence alone. These examples do not prescribe when to accept or whether to request validation. The shared prompt supplies the 10% clinical-significance guidance described above.
 
 ## Evidence and memory
 

@@ -296,6 +296,13 @@ class StageCoordinator:
             "usage_missing_calls": sum(
                 u["input_tokens"] is None or u["output_tokens"] is None for u in usage
             ),
+            "output_token_accounting": {
+                "known_output_tokens": sum(u["output_tokens"] or 0 for u in usage),
+                "missing_calls": sum(u["output_tokens"] is None for u in usage),
+                "unaccounted_infrastructure_attempts": sum(
+                    max(0, (u["infrastructure_attempts"] or 1) - 1) for u in usage
+                ),
+            },
             "provider_error_calls": sum(bool(r["result"]["error"]) for r in self.records),
             "draft_errors": list(self.draft_errors.values()),
             "provider_infrastructure_attempts": (

@@ -74,7 +74,8 @@ FORMS = dict(
 
 COMMON = """You are investigating the supplied research dataset. Return one JSON object using
 only this stage's response form. The service performs analyses; you choose the science.
-Use your judgment about effect size, uncertainty, and conclusions. Acceptance does not require
+For this task, a relative difference in outcome of 10% or greater is considered clinically significant.
+Use your judgment about uncertainty and conclusions in light of this clinical significance threshold. Acceptance does not require
 independent validation first. Explain your reasoning in narrative.
 
 The ledger contains every registered claim, its current assessment, and all its available direct

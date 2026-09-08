@@ -30,6 +30,10 @@ class MeteredProvider:
 
     def __init__(self, config, path, label):
         self.provider = get_provider(config)
+        self.requested_settings = {
+            key + "_requested": config[key]
+            for key in ("reasoning_effort", "service_tier") if key in config
+        }
         self.path, self.label, self.calls = path, label, 0
 
     @property
@@ -40,6 +44,7 @@ class MeteredProvider:
         start = time.monotonic()
         self.calls += 1
         record = {
+            **self.requested_settings,
             "call": self.calls,
             "started_at": now(),
             "requested_max_tokens": kwargs.get("max_tokens"),

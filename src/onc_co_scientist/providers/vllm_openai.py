@@ -18,6 +18,8 @@ class VLLMConfig:
     base_url: str = "http://localhost:8000/v1"
     api_key: str = "EMPTY"  # vLLM accepts any non-empty string by default
     timeout_s: float = 120.0
+    reasoning_effort: str | None = None
+    service_tier: str | None = None
 
 
 class VLLMProvider:
@@ -57,11 +59,17 @@ class VLLMProvider:
         if system:
             api_messages.append({"role": "system", "content": system})
         api_messages.extend({"role": m.role, "content": m.content} for m in messages)
+        options = {}
+        if self._config.reasoning_effort is not None:
+            options["reasoning_effort"] = self._config.reasoning_effort
+        if self._config.service_tier is not None:
+            options["service_tier"] = self._config.service_tier
         response = self._client.chat.completions.create(
             model=self._config.model_id,
             messages=api_messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            **options,
         )
         text = response.choices[0].message.content or ""
         return ChatResponse(text=text, model_id=self._config.model_id, raw=response)

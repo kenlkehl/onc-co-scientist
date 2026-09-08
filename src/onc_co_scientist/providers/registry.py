@@ -47,6 +47,8 @@ def get_provider(config: ProviderConfig) -> LLMProvider:
                 base_url=config.get("base_url", "http://localhost:8000/v1"),
                 api_key=config.get("api_key", "EMPTY"),
                 timeout_s=float(config.get("timeout_s", 120.0)),
+                reasoning_effort=config.get("reasoning_effort"),
+                service_tier=config.get("service_tier"),
             )
         )
     raise ValueError(
