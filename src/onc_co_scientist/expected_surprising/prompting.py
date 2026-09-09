@@ -94,6 +94,8 @@ Proposal direction is the claim (+1 positive, -1 negative); anticipated_directio
 expectation
 of the raw exposed-minus-comparator contrast before seeing evidence (-1, 0 uncertain, +1).
 initial_status is your assessment at registration. These initial judgments are recorded once.
+If a proposal repeats an existing claim, the controller preserves that claim's current assessment;
+use assessments to change a scientific conclusion.
 
 For each claim in assessments_due, return one assessment with claim,
 status (accept/reject/unresolved),
@@ -102,6 +104,9 @@ their current assessment. Assess the original claim even when proposing a refine
 By omitting evidence in an assessment, you assess all evidence displayed on that claim's card;
 the controller attaches those references. To specify a subset or related evidence, provide evidence
 with short R references; include the evidence listed in assessments_due for that claim.
+An unchanged assessment or an investigation-only change can use evidence: [];
+changing accept/reject/unresolved requires available evidence. Bookkeeping does not satisfy a due
+evidence assessment.
 For a refinement, parent identifies the earlier claim; omitted motivating_evidence attaches the
 parent's displayed evidence. These automatic links record evidence supplied for your assessment
 or refinement, not proof that you discussed or understood every result.

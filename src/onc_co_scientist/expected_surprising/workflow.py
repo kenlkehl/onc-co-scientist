@@ -107,6 +107,7 @@ class WorkflowController:
             "accepted_ids": [],
             "exploration": [],
             "completed_stages": [],
+            "bookkeeping": [],
         }
 
     def required(self, iteration, stage):
@@ -221,10 +222,25 @@ class WorkflowController:
                 if rid not in direct
                 and (family(value["hypothesis"]) == family(h) or rid in motivations)
             ]
+            key = claim_key(h)
+            initial_status = record.assessments[h.id]
+            if key in s["current"] and initial_status != s["current"][key]["status"]:
+                initial_status = s["current"][key]["status"]
+                s["bookkeeping"].append(
+                    {
+                        "kind": "duplicate_claim_preserved_assessment",
+                        "hypothesis_id": h.id,
+                        "requested_status": record.assessments[h.id],
+                        "preserved_status": initial_status,
+                        "iteration": record.iteration,
+                        "stage": record.stage,
+                        "sequence": sequence,
+                    }
+                )
             expectation = InitialExpectation(
                 hypothesis_id=h.id,
                 anticipated_direction=record.anticipated_directions[h.id],
-                assessment=record.assessments[h.id],
+                assessment=initial_status,
                 iteration=record.iteration,
                 stage=record.stage,
                 sequence=sequence,
@@ -233,13 +249,8 @@ class WorkflowController:
                 pre_evidence=not direct,
             )
             s["expectations"][h.id] = expectation.model_dump()
-            key = claim_key(h)
-            if key in s["current"] and record.assessments[h.id] != s["current"][key]["status"]:
-                raise ValueError("A renamed canonical claim must retain its current assessment")
             s["hypotheses"][h.id] = h
-            s["current"].setdefault(
-                key, {"status": record.assessments[h.id], "investigation": "active"}
-            )
+            s["current"].setdefault(key, {"status": initial_status, "investigation": "active"})
             s["registrations"].append(
                 {
                     "hypothesis": h.model_dump(),
@@ -254,9 +265,7 @@ class WorkflowController:
                     "expectation": expectation.model_dump(),
                 }
             )
-            self._first_acceptance(
-                h, record.assessments[h.id], record.iteration, record.stage, sequence
-            )
+            self._first_acceptance(h, initial_status, record.iteration, record.stage, sequence)
 
     def _assess(self, record, sequence, available):
         s = self.state
@@ -265,13 +274,28 @@ class WorkflowController:
             if a.hypothesis_id not in s["hypotheses"]:
                 raise ValueError("Unknown assessed hypothesis")
             self._available(a.result_ids, available)
-            if not a.result_ids:
-                raise ValueError("Post-registration assessments require available result IDs")
             h = s["hypotheses"][a.hypothesis_id]
             key = claim_key(h)
             if key in seen:
                 raise ValueError("Assess a canonical claim once per stage")
             seen[key] = a
+            if not a.result_ids:
+                if a.status != s["current"][key]["status"]:
+                    raise ValueError(
+                        "Changing a scientific assessment requires available result IDs"
+                    )
+                # A no-op or investigation-only edit is not an evidence response.
+                s["bookkeeping"].append(
+                    {
+                        "kind": "investigation_only",
+                        **a.model_dump(),
+                        "iteration": record.iteration,
+                        "stage": record.stage,
+                        "sequence": sequence,
+                    }
+                )
+                s["current"][key]["investigation"] = a.investigation
+                continue
             entry = AssessmentRecord(
                 **a.model_dump(), iteration=record.iteration, stage=record.stage, sequence=sequence
             ).model_dump()
@@ -502,10 +526,13 @@ def run_workflow(
     policy=None,
     replicate_id=None,
     stage_executor=None,
+    stage_failure_policy="zero_run",
 ):
     from .events import behavioral_summary, response_summary
 
     require_current_pair(spec)
+    if stage_failure_policy not in {"zero_run", "retain_scientific_scores"}:
+        raise ValueError("Unknown stage failure policy")
     task = json.loads((public / "task.json").read_text())
     versions = WorkflowVersions.model_validate(task["versions"]).model_dump()
     iterations = task["iterations"] if iterations is None else iterations
@@ -748,7 +775,7 @@ def run_workflow(
         discoveries,
         s["tests"],
         confirmation,
-        failed=bool(exhausted),
+        failed=bool(exhausted) and stage_failure_policy == "zero_run",
         repaired=bool(errors),
     )
     confirmation["confirmed_recovery"] = {
@@ -761,8 +788,13 @@ def run_workflow(
             for m in discovery["confirmed_matches"]
         )
     )
+    for scope in ("exact", "exact_or_near"):
+        discovery[scope]["failure_penalized_D"] = (
+            0.0 if exhausted else discovery[scope]["diagnostic_D"]
+        )
     confirmation.update(
-        primary_recovery=0 if exhausted else primary,
+        primary_recovery=0 if exhausted and stage_failure_policy == "zero_run" else primary,
+        failure_penalized_primary_recovery=0 if exhausted else primary,
         first_attempt_primary_recovery=0 if errors else primary,
         confirmed_matches=discovery["confirmed_matches"],
     )
@@ -791,10 +823,13 @@ def run_workflow(
             p.name: sha256(p) for p in sorted(public.iterdir()) if p.is_file()
         },
         "retry_policy": {
-            "version": "1.0.0",
+            "version": "1.1.0",
             "max_retries_per_stage": max_retries_per_stage,
             "atomic_stage": True,
-            "primary_failure_rule": "unrecovered_stage_error",
+            "primary_failure_rule": "unrecovered_stage_error"
+            if stage_failure_policy == "zero_run"
+            else "retain_scientific_scores_report_execution_failures_separately",
+            "stage_failure_policy": stage_failure_policy,
         },
         "attempt_errors": errors,
         "protocol_errors": exhausted,
@@ -827,6 +862,7 @@ def run_workflow(
                 "first_acceptances",
                 "completed_stages",
                 "current",
+                "bookkeeping",
             )
         },
         "final_accepted_ids": [h.id for h in accepted],

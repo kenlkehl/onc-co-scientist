@@ -315,6 +315,7 @@ def workflow_discovery(
         }
         scores[label] = discovery_performance(rates, q)
         scores[label]["diagnostic_D"] = scores[label]["D"]
+        scores[label]["failure_penalized_D"] = 0.0 if failed else scores[label]["D"]
         if failed:
             scores[label]["D"] = 0.0
         scores[label]["first_attempt_D"] = 0.0 if repaired else scores[label]["D"]

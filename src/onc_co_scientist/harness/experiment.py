@@ -241,6 +241,8 @@ class ExpectedSurprisingSource(BaseModel):
     max_tokens_per_call: int = Field(default=125000, ge=1)
     max_retries_per_stage: int = Field(default=2, ge=0, le=10)
     persistent_history_chars: int | None = Field(default=120000, ge=1)
+    peer_failure_policy: Literal["require_all", "chair_with_available"] = "require_all"
+    stage_failure_policy: Literal["zero_run", "retain_scientific_scores"] = "zero_run"
 
 
 class ExperimentSpec(BaseModel):

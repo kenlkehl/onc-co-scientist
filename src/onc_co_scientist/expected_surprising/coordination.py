@@ -17,7 +17,7 @@ from .prompting import FORMS
 from .rollout import json_response
 from .workflow import WorkflowInfrastructureError
 
-COORDINATION_VERSION = "1.0.0"
+COORDINATION_VERSION = "1.1.0"
 
 
 def digest(value):
@@ -37,6 +37,7 @@ def response_usage(raw, elapsed):
         "output_tokens": usage.get("completion_tokens", usage.get("output_tokens")),
         "duration_seconds": elapsed,
         "infrastructure_attempts": metrics.get("infrastructure_attempts"),
+        "recovered_error_count": metrics.get("recovered_error_count", 0),
     }
 
 
@@ -53,6 +54,7 @@ class StageCoordinator:
         self.committed_stages = []
         self.draft_errors = {}
         self.memory_trims = []
+        self.peer_fallbacks = {}
 
     def _bounded_history(self, key):
         limit = self.source.persistent_history_chars
@@ -231,6 +233,7 @@ class StageCoordinator:
                     session = f"{key}-peer{peer + 1}"
                     others = [d for d in previous_round if d["peer"] != peer + 1]
                     feedback = ""
+                    form = None
                     for repair in range(1, self.source.max_retries_per_stage + 2):
                         user = ChatMessage(
                             role="user", content=self.initial_prompts[key] + feedback
@@ -265,6 +268,19 @@ class StageCoordinator:
                                 "retrying": repair <= self.source.max_retries_per_stage,
                             }
                             if repair > self.source.max_retries_per_stage:
+                                if (
+                                    getattr(self.source, "peer_failure_policy", "require_all")
+                                    == "chair_with_available"
+                                ):
+                                    self.peer_fallbacks[(key, round_index, peer + 1)] = {
+                                        "iteration": iteration,
+                                        "stage": stage,
+                                        "round": round_index,
+                                        "peer": peer + 1,
+                                        "attempts": repair,
+                                        "error": f"{type(exc).__name__}: {exc}",
+                                    }
+                                    break
                                 raise ValueError(
                                     f"Peer {peer + 1} exhausted draft repairs"
                                 ) from exc
@@ -273,8 +289,19 @@ class StageCoordinator:
                                 + str(exc)
                                 + "\nReturn a corrected complete form. The ledger is unchanged."
                             )
-                    drafts.append({"peer": peer + 1, "form": form.model_dump(by_alias=True)})
-                    peer_history[peer].extend([user, ChatMessage("assistant", draft.text)])
+                    if form is None:
+                        drafts.append(
+                            {
+                                "peer": peer + 1,
+                                "unavailable": True,
+                                "notice": "Peer exhausted retries. No valid draft is available. "
+                                "Proceed using available drafts and the supplied ledger; "
+                                "do not infer agreement from this missing participant.",
+                            }
+                        )
+                    else:
+                        drafts.append({"peer": peer + 1, "form": form.model_dump(by_alias=True)})
+                        peer_history[peer].extend([user, ChatMessage("assistant", draft.text)])
             messages = [self._system(stage, "chair", drafts), current]
             response = self._call(
                 f"{key}-chair-a{attempt}",
@@ -331,7 +358,13 @@ class StageCoordinator:
                 ),
             },
             "provider_error_calls": sum(bool(r["result"]["error"]) for r in self.records),
+            "recovered_provider_warnings": sum(
+                u.get("recovered_error_count", 0) or 0 for u in usage
+            ),
             "draft_errors": list(self.draft_errors.values()),
+            "peer_failure_policy": getattr(self.source, "peer_failure_policy", "require_all"),
+            "peer_fallbacks": list(self.peer_fallbacks.values()),
+            "degraded_stages": sorted({key[0] for key in self.peer_fallbacks}),
             "provider_infrastructure_attempts": (
                 sum(u["infrastructure_attempts"] for u in usage)
                 if all(u["infrastructure_attempts"] is not None for u in usage)

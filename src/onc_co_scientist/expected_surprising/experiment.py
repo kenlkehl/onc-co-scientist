@@ -274,6 +274,7 @@ def run_cell(spec, plan, root, fingerprint, *, resume):
         stage_executor=coordinator,
         max_tokens_per_call=spec.expected_surprising.max_tokens_per_call,
         max_retries_per_stage=spec.expected_surprising.max_retries_per_stage,
+        stage_failure_policy=spec.expected_surprising.stage_failure_policy,
     )
     audit = coordinator.audit()
     if audit["draft_errors"]:
@@ -312,6 +313,8 @@ def run_cell(spec, plan, root, fingerprint, *, resume):
         "call_attempts": audit["agent_calls"],
         "usage": audit["usage"],
         "call_failures": report["attempt_errors"] + audit["draft_errors"],
+        "degraded_stages": audit.get("degraded_stages", []),
+        "stage_failure_policy": spec.expected_surprising.stage_failure_policy,
         "timeout_count": sum("Timeout" in e["error"] for e in report["attempt_errors"]),
         "iteration_policy": spec.iteration_policy.model_dump(),
         "iterations_completed": sum(

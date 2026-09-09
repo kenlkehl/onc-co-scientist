@@ -75,7 +75,12 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
                 "version": plan.task.semantic_condition,
                 "replicate": plan.replicate,
                 "primary": report["confirmation"]["primary_recovery"]
-                if result["status"] == "completed"
+                if report is not None
+                and (
+                    result["status"] == "completed"
+                    or report.get("retry_policy", {}).get("stage_failure_policy")
+                    == "retain_scientific_scores"
+                )
                 else 0,
                 "report": report,
                 "result": result,
@@ -200,7 +205,12 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
     return {
         "conditions": conditions,
         "workflow_contrasts": contrasts,
-        "primary_failure_rule": "Assigned failed runs contribute zero focal recovery",
+        "primary_failure_rule": (
+            "Scientific recovery is retained after stage failures; "
+            "execution failures are reported separately"
+            if spec.expected_surprising.stage_failure_policy == "retain_scientific_scores"
+            else "Assigned failed runs contribute zero focal recovery"
+        ),
         "contrast": (
             "(surprising minus expected) in workflow minus the same difference in persistent"
         ),
@@ -228,8 +238,10 @@ def render_markdown(spec, summary):
         "not a new dataset.",
         "",
         "The primary outcome is whether the workflow recovered the focal planted finding and "
-        "the evaluator confirmed it independently. Failed assigned runs count as zero recovery. "
-        "Expected and surprising percentages below show absolute performance. Their difference "
+        "the evaluator confirmed it independently. "
+        + summary["primary_failure_rule"]
+        + ". "
+        + "Expected and surprising percentages below show absolute performance. Their difference "
         "is surprising minus expected, in percentage points.",
         "",
         "| Model | Workflow | Expected recovery % | Surprising recovery % | "
@@ -279,8 +291,12 @@ def render_markdown(spec, summary):
         "No accepted claims means P is unavailable.",
         "- **F1\\* — discovery performance:** the harmonic mean of R and P on a 0–100 scale. "
         "The asterisk distinguishes it from ordinary F1: R balances planted-finding "
-        "categories, while P can include additional valid claims. Unrecovered stage errors "
-        "set this primary discovery score to zero.",
+        "categories, while P can include additional valid claims. "
+        + (
+            "Execution failures are reported separately; discoveries remain scored."
+            if spec.expected_surprising.stage_failure_policy == "retain_scientific_scores"
+            else "Unrecovered stage errors set this primary discovery score to zero."
+        ),
         "- **E — exploration coverage:** how broadly and how early the workflow tested "
         "planted findings across the full iteration budget, on a 0–100 scale.",
         "- **B — evidence responsiveness:** balanced accuracy of responses to supportive, "
@@ -304,7 +320,11 @@ def render_markdown(spec, summary):
         "",
         "The table averages each run's R, P, and F1* separately. Its F1* column therefore "
         "need not equal the harmonic mean of the displayed average R and P. "
-        "Unrecovered stage errors also set that run's primary F1* to zero.",
+        + (
+            "Execution failure counts accompany the scientific scores."
+            if spec.expected_surprising.stage_failure_policy == "retain_scientific_scores"
+            else "Unrecovered stage errors also set that run's primary F1* to zero."
+        ),
         "",
         "All modes share analysis limits, validation samples, deadlines, final confirmation, "
         "and scientific scoring. Persistent mode retains recent committed conversation. Sequential "
