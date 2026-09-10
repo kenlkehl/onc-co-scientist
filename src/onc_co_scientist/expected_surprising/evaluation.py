@@ -72,6 +72,15 @@ class ValidationService:
         self.results = {}
         self.iterations = set()
 
+    def sample_frame(self, seed):
+        return sample(self.spec, self.version, seed=seed)
+
+    def mean_frame(self, seed, n):
+        frame = base_frame(self.spec.profile, n, seed, version=self.spec.generation_version)
+        for name, values in conditional_means(self.spec, frame, self.version).items():
+            frame[name] = values
+        return frame
+
     def request(self, h: Hypothesis, iteration: int, request_id: str):
         if request_id in self.results:
             old_h, old_iteration, result = self.results[request_id]
@@ -89,7 +98,7 @@ class ValidationService:
         seed = int(
             np.random.SeedSequence([self.seed, self.spec.seed, 302, index]).generate_state(1)[0]
         )
-        frame = sample(self.spec, self.version, seed=seed)
+        frame = self.sample_frame(seed)
         result = estimate(frame, h, delta=outcome.delta, alpha=0.05 / 10, result_id=request_id)
         self.results[request_id] = (h.model_copy(deep=True), iteration, result)
         self.iterations.add(iteration)
@@ -101,7 +110,7 @@ class ValidationService:
         if not claims:
             return {"primary_recovery": 0, "results": [], "confirmed_matches": [], "additional": []}
         seed = int(np.random.SeedSequence([self.seed, self.spec.seed, 915]).generate_state(1)[0])
-        frame = sample(self.spec, self.version, seed=seed)
+        frame = self.sample_frame(seed)
         outcomes = {o.name: o for o in self.spec.outcomes}
         results = [
             estimate(
@@ -130,11 +139,7 @@ class ValidationService:
             if h.id not in target_claim_ids
         ]
         if additional:
-            reference = base_frame(
-                self.spec.profile, 100000, seed + 1, version=self.spec.generation_version
-            )
-            for name, values in conditional_means(self.spec, reference, self.version).items():
-                reference[name] = values
+            reference = self.mean_frame(seed + 1, 100000)
             by_id = {h.id: h for h in claims}
             for item in additional:
                 h = by_id[item["hypothesis_id"]]
@@ -454,7 +459,7 @@ class WorkflowValidationService(ValidationService):
             seed = self.derive_seed("independent-validation", key)
             outcome = next(o for o in self.spec.outcomes if o.name == h.outcome)
             result = self.validation_estimator(
-                sample(self.spec, self.version, seed=seed),
+                self.sample_frame(seed),
                 h,
                 delta=outcome.delta,
                 alpha=0.05 / self.policy.max_comparisons,

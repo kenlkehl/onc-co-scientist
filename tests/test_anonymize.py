@@ -17,7 +17,9 @@ from onc_co_scientist.harness.task_spec import build_task
 from onc_co_scientist.synthetic.anonymize import (
     anonymize_bundle,
     build_column_mapping,
+    build_value_mapping,
     extend_outcome_mapping,
+    mask_frame,
 )
 from onc_co_scientist.synthetic.generator import GeneratorConfig, generate_dataset
 from onc_co_scientist.synthetic.io import (
@@ -126,11 +128,14 @@ def test_anonymize_bundle_preserves_data_values():
     bundle = generate_dataset(_small_buried_config())
     anon, mapping = anonymize_bundle(bundle, seed=0)
 
-    # Renaming must not touch the underlying values; reverse-map and compare.
+    # Reverse both private maps to recover exactly the original data.
     inverse = {v: k for k, v in mapping.items()}
-    for col in anon.frame.columns:
-        original_name = inverse.get(col, col)
-        assert anon.frame[col].tolist() == bundle.frame[original_name].tolist(), col
+    values = build_value_mapping(bundle.frame, seed=0)
+    inverse_values = {
+        k: {v: original for original, v in levels.items()} for k, levels in values.items()
+    }
+    restored = mask_frame(anon.frame.rename(columns=inverse), {}, inverse_values)
+    pd.testing.assert_frame_equal(restored, bundle.frame)
 
 
 def test_write_bundle_pair_layout(tmp_path):
@@ -194,17 +199,27 @@ def test_anonymize_seed_changes_assignments():
     assert set(mapping_a.values()) == set(mapping_b.values())
 
 
-@pytest.mark.parametrize("profile", [
-    "depmap", "nsclc_depmap", "crc_depmap", "breast_depmap", "prostate_depmap", "aml_depmap",
-])
+@pytest.mark.parametrize(
+    "profile",
+    [
+        "depmap",
+        "nsclc_depmap",
+        "crc_depmap",
+        "breast_depmap",
+        "prostate_depmap",
+        "aml_depmap",
+    ],
+)
 def test_depmap_masks_outcomes_and_preserves_private_manifest_and_values(profile):
     bundle = generate_dataset(_small_buried_config(cancer_type=profile))
     anon, mapping = anonymize_bundle(bundle, seed=42)
     assert mapping == anonymize_bundle(bundle, seed=42)[1]
     assert mapping != anonymize_bundle(bundle, seed=43)[1]
     features = build_column_mapping(
-        list(bundle.frame.columns), bundle.manifest.outcome_columns,
-        id_columns=tuple(bundle.manifest.id_columns), seed=42,
+        list(bundle.frame.columns),
+        bundle.manifest.outcome_columns,
+        id_columns=tuple(bundle.manifest.id_columns),
+        seed=42,
     )
     assert all(mapping[key] == value for key, value in features.items())
     expected_outcomes = [mapping[name] for name in bundle.manifest.outcome_columns]
@@ -223,9 +238,15 @@ def test_depmap_masks_outcomes_and_preserves_private_manifest_and_values(profile
     for outcome in bundle.manifest.outcome_columns:
         assert outcome not in anon.public_description
     assert "### Dependency outcomes" in anon.public_description
-    pd.testing.assert_frame_equal(
-        bundle.frame, anon.frame.rename(columns={v: k for k, v in mapping.items()})
+    values = build_value_mapping(
+        bundle.frame, id_columns=tuple(bundle.manifest.id_columns), seed=42
     )
+    restored = mask_frame(
+        anon.frame.rename(columns={v: k for k, v in mapping.items()}),
+        {},
+        {c: {v: k for k, v in levels.items()} for c, levels in values.items()},
+    )
+    pd.testing.assert_frame_equal(bundle.frame, restored)
     assert extend_outcome_mapping(mapping, bundle.manifest.outcome_columns, seed=99) == mapping
 
 

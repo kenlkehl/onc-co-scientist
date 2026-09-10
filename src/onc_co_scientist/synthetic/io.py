@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from .anonymize import anonymize_bundle
+from .anonymize import anonymize_bundle, build_value_mapping
 from .generator import DatasetBundle
 from .schemas import DatasetManifest
 
@@ -123,7 +123,9 @@ def write_bundle_pair(
     ``(named_dir, anonymized_dir)``.
 
     Both bundles share the same generated values and buried-finding ground truth.
-    Predictor names differ; DepMap dependency outcome names are also masked.
+    Predictor names and text categorical values differ; numeric values are unchanged.
+    DepMap dependency outcome names are also masked. Private value_mapping.json
+    records column-scoped categorical aliases in addition to column_mapping.json.
     """
     out_path = Path(out_dir)
     named_dir = out_path / NAMED_SUBDIR
@@ -135,5 +137,16 @@ def write_bundle_pair(
     write_bundle(anon_bundle, anonymized_dir)
     (anonymized_dir / COLUMN_MAPPING_FILENAME).write_text(
         json.dumps(mapping, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (anonymized_dir / "value_mapping.json").write_text(
+        json.dumps(
+            build_value_mapping(
+                bundle.frame, id_columns=tuple(bundle.manifest.id_columns), seed=anon_seed
+            ),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
     )
     return named_dir, anonymized_dir

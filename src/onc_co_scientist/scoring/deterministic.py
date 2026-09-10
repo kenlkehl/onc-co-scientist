@@ -15,11 +15,17 @@ import pandas as pd
 from scipy import stats
 
 from ..harness.structured import Predicate, StructuredFinding, _satisfies
+from ..synthetic.anonymize import remap_value
 from ..synthetic.schemas import AssociationForm, AssociationSpec, DatasetManifest
 
 
 def canonical_name(name: str | None, mapping: dict[str, str] | None) -> str | None:
     return {v: k for k, v in (mapping or {}).items()}.get(name, name)
+
+
+def canonical_value(value, column, value_mapping):
+    levels = (value_mapping or {}).get(column, {})
+    return remap_value(value, {v: k for k, v in levels.items()})
 
 
 def normalize_predicates(predicates: list[Predicate]) -> list[Predicate]:
@@ -158,6 +164,8 @@ def evaluate_finding(
     evaluation_df: pd.DataFrame,
     column_mapping: dict[str, str] | None = None,
     min_cell_n: int = 10,
+    *,
+    value_mapping: dict[str, dict[str, str]] | None = None,
 ) -> dict:
     """Truth-free Welch confirmation of the candidate's own outcome and contrast."""
     f = (
@@ -171,7 +179,13 @@ def evaluate_finding(
             "outcome": canonical_name(f.outcome, column_mapping),
             "exposure": canonical_name(f.exposure, column_mapping),
             "subgroup": [
-                {**p.model_dump(), "column": canonical_name(p.column, column_mapping)}
+                {
+                    **p.model_dump(),
+                    "column": canonical_name(p.column, column_mapping),
+                    "value": canonical_value(
+                        p.value, canonical_name(p.column, column_mapping), value_mapping
+                    ),
+                }
                 for p in f.subgroup
             ],
         }
@@ -286,6 +300,8 @@ def score_finding(
     evaluation_df: pd.DataFrame,
     column_mapping: dict[str, str] | None = None,
     config: dict | None = None,
+    *,
+    value_mapping: dict[str, dict[str, str]] | None = None,
 ) -> dict:
     cfg = {
         "precision_min": 0.90,
@@ -303,7 +319,11 @@ def score_finding(
         )
         candidate = [
             Predicate(
-                column=canonical_name(p.column, column_mapping), operator=p.operator, value=p.value
+                column=canonical_name(p.column, column_mapping),
+                operator=p.operator,
+                value=canonical_value(
+                    p.value, canonical_name(p.column, column_mapping), value_mapping
+                ),
             )
             for p in f.subgroup
         ]
@@ -317,7 +337,9 @@ def score_finding(
         fp, fn = int((~truth_mask & proposed_mask).sum()), int((truth_mask & ~proposed_mask).sum())
         precision = tp / (tp + fp) if tp + fp else 0.0
         recall = tp / (tp + fn) if tp + fn else 0.0
-        evidence = evaluate_finding(f, evaluation_df, column_mapping, cfg["min_cell_n"])
+        evidence = evaluate_finding(
+            f, evaluation_df, column_mapping, cfg["min_cell_n"], value_mapping=value_mapping
+        )
         treatments = [v for v in spec.variables if v in manifest.treatment_columns]
         if len(treatments) > 1:
             raise ValueError("This scorer requires one prespecified treatment exposure.")
@@ -384,6 +406,6 @@ def score_finding(
         }
 
 
-def compute_evidence(finding, manifest, evaluation_df, column_mapping=None):
+def compute_evidence(finding, manifest, evaluation_df, column_mapping=None, *, value_mapping=None):
     """Compatibility alias; manifest is not read by this truth-free helper."""
-    return evaluate_finding(finding, evaluation_df, column_mapping)
+    return evaluate_finding(finding, evaluation_df, column_mapping, value_mapping=value_mapping)

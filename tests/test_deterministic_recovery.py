@@ -369,3 +369,17 @@ def test_v2_identity_and_confirmation_are_distinct(scenario, contrast, masked):
     assert not score_transcript(
         manifest, Transcript.model_validate(payload), df, column_mapping=mapping
     )["primary_recovered"]
+
+
+def test_masked_categorical_predicates_keep_numerical_evidence():
+    frame = pd.DataFrame({'y': [5.] * 20 + [1.] * 20,
+                          'histology': ['adeno'] * 40,
+                          't': [1] * 20 + [0] * 20})
+    named = dict(outcome='y', exposure='t', contrast='treatment_effect', direction=1,
+                 subgroup=[dict(column='histology', operator='eq', value='adeno')])
+    masked = dict(outcome='y', exposure='feature_1', contrast='treatment_effect', direction=1,
+                  subgroup=[dict(column='feature_2', operator='eq', value='level_002')])
+    assert evaluate_finding(named, frame) == evaluate_finding(
+        masked, frame, {'t': 'feature_1', 'histology': 'feature_2'},
+        value_mapping={'histology': {'adeno': 'level_002'}},
+    )

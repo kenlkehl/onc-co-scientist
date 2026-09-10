@@ -3,6 +3,8 @@
 The anonymized variant preserves rows, clinical outcome names, and identifier
 columns while renaming predictors to deterministic ``feature_NNN`` identifiers.
 DepMap dependency outcomes are also masked, using ``outcome_NNN`` identifiers.
+Text categorical levels use seeded, column-scoped ``level_NNN`` aliases; numeric
+values and missingness are preserved.
 The same generated bundle can therefore be served in two parallel
 forms — one with real clinical names, one stripped of any semantic prior — so
 the eval can compare an agent's behaviour with and without domain anchoring.
@@ -18,6 +20,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 import numpy as np
+import pandas as pd
 
 from .generator import DatasetBundle, GeneratorConfig
 from .schemas import AssociationSpec, DatasetManifest, SubgroupSpec
@@ -51,6 +54,68 @@ def build_column_mapping(
     return {original: f"{prefix}{(i + 1):0{needed_width}d}" for i, original in enumerate(order)}
 
 
+def build_value_mapping(
+    frame: pd.DataFrame,
+    *,
+    id_columns=DEFAULT_ID_COLUMNS,
+    seed: int = 0,
+) -> dict[str, dict[str, str]]:
+    """Seeded, column-scoped aliases for every observed text level.
+
+    Numeric values and missingness are preserved, including in mixed object columns.
+    Categorical dtype declarations include unused levels so future samples remain valid.
+    Identifiers are deliberately excluded from semantic masking.
+    """
+    result = {}
+    for column in frame:
+        if column in id_columns:
+            continue
+        series = frame[column]
+        values = (
+            series.cat.categories
+            if isinstance(series.dtype, pd.CategoricalDtype)
+            else series.dropna().unique()
+        )
+        levels = sorted(v for v in values if isinstance(v, str))
+        if not levels:
+            continue
+        # A separate stream avoids coupling aliases to other columns' cardinalities.
+        import hashlib
+
+        key = int.from_bytes(hashlib.sha256(column.encode()).digest()[:4], "little")
+        np.random.default_rng(np.random.SeedSequence([seed, key])).shuffle(levels)
+        result[column] = {v: f"level_{i:03d}" for i, v in enumerate(levels, 1)}
+    return result
+
+
+def remap_value(value, levels):
+    if isinstance(value, str):
+        return levels.get(value, value)
+    if isinstance(value, list):
+        return [remap_value(v, levels) for v in value]
+    if isinstance(value, dict):
+        return {k: remap_value(v, levels) for k, v in value.items()}
+    return value
+
+
+def mask_frame(frame, columns, values):
+    """Apply reversible aliases without changing rows, numeric values or missingness."""
+    result = frame.copy(deep=True)
+    for column, levels in values.items():
+        if column not in result:
+            raise ValueError(f"Missing masked column: {column}")
+        observed = {v for v in result[column].dropna().unique() if isinstance(v, str)}
+        if observed - levels.keys():
+            raise ValueError(f"Unmapped text levels in {column}: {observed - levels.keys()}")
+        if isinstance(result[column].dtype, pd.CategoricalDtype):
+            result[column] = result[column].cat.rename_categories(
+                lambda v, levels=levels: remap_value(v, levels)
+            )
+        else:
+            result[column] = result[column].map(lambda v, levels=levels: remap_value(v, levels))
+    return result.rename(columns=columns)
+
+
 def extend_outcome_mapping(
     mapping: dict[str, str], outcome_columns: list[str], *, seed: int = 0
 ) -> dict[str, str]:
@@ -64,24 +129,26 @@ def extend_outcome_mapping(
     return extended
 
 
-def _rename_predicate(predicate: dict[str, object], mapping: dict[str, str]) -> dict[str, object]:
-    return {mapping.get(k, k): v for k, v in predicate.items()}
+def _rename_predicate(
+    predicate: dict[str, object], mapping: dict[str, str], values
+) -> dict[str, object]:
+    return {mapping.get(k, k): remap_value(v, values.get(k, {})) for k, v in predicate.items()}
 
 
-def _rename_association(spec: AssociationSpec, mapping: dict[str, str]) -> AssociationSpec:
+def _rename_association(spec: AssociationSpec, mapping: dict[str, str], values) -> AssociationSpec:
     new = spec.model_copy(deep=True)
     new.variables = [mapping.get(v, v) for v in spec.variables]
     new.outcome = mapping.get(spec.outcome, spec.outcome)
     if spec.subgroup is not None:
         new.subgroup = SubgroupSpec(
             name=spec.subgroup.name,
-            predicate=_rename_predicate(spec.subgroup.predicate, mapping),
+            predicate=_rename_predicate(spec.subgroup.predicate, mapping, values),
             description=spec.subgroup.description,
         )
     return new
 
 
-def _rename_manifest(manifest: DatasetManifest, mapping: dict[str, str]) -> DatasetManifest:
+def _rename_manifest(manifest: DatasetManifest, mapping: dict[str, str], values) -> DatasetManifest:
     return DatasetManifest(
         dataset_id=manifest.dataset_id,
         seed=manifest.seed,
@@ -93,7 +160,7 @@ def _rename_manifest(manifest: DatasetManifest, mapping: dict[str, str]) -> Data
         treatment_columns=[mapping.get(c, c) for c in manifest.treatment_columns],
         outcome_columns=[mapping.get(c, c) for c in manifest.outcome_columns],
         covariate_columns=[mapping.get(c, c) for c in manifest.covariate_columns],
-        associations=[_rename_association(a, mapping) for a in manifest.associations],
+        associations=[_rename_association(a, mapping, values) for a in manifest.associations],
         generator_version=manifest.generator_version,
         notes=manifest.notes,
     )
@@ -119,7 +186,8 @@ def masked_depmap_description(
         "from a CRISPR knockout dependency screen with CCLE-style molecular "
         "annotations. Cell-line feature names have been replaced with opaque "
         "labels (`feature_001`, `feature_002`, ...); dependency outcomes use "
-        "opaque labels (`outcome_001`, `outcome_002`, ...). Each dependency "
+        "opaque labels (`outcome_001`, `outcome_002`, ...). Text categorical "
+        "levels use opaque level_NNN labels. Each dependency "
         "outcome measures the effect of knocking out a different gene. More negative "
         "dependency scores indicate stronger dependency after knockout.\n\n"
         "## Columns\n\n"
@@ -151,7 +219,7 @@ def _anonymized_description(
         "from electronic health records aggregated by a commercial healthcare "
         "data vendor. Patient features have been de-identified to opaque "
         "labels (`feature_001`, `feature_002`, …); clinical outcomes retain "
-        "their original names.\n\n"
+        "their original names. Text categorical levels use opaque level_NNN labels.\n\n"
         "## Columns\n\n"
         "### Identifiers and features\n"
         f"{bullet}\n\n"
@@ -190,8 +258,9 @@ def anonymize_bundle(
     )
     if bundle.manifest.dataset_kind == "crispr_depmap":
         mapping = extend_outcome_mapping(mapping, bundle.manifest.outcome_columns, seed=seed)
-    new_frame = bundle.frame.rename(columns=mapping)
-    new_manifest = _rename_manifest(bundle.manifest, mapping)
+    values = build_value_mapping(bundle.frame, id_columns=active_id_columns, seed=seed)
+    new_frame = mask_frame(bundle.frame, mapping, values)
+    new_manifest = _rename_manifest(bundle.manifest, mapping, values)
     new_description = _anonymized_description(
         bundle.config,
         list(new_frame.columns),

@@ -527,6 +527,7 @@ def run_workflow(
     replicate_id=None,
     stage_executor=None,
     stage_failure_policy="zero_run",
+    masking=None,
 ):
     require_current_pair(spec)
     if stage_failure_policy not in {"zero_run", "retain_scientific_scores"}:
@@ -554,6 +555,15 @@ def run_workflow(
     out.mkdir(parents=True)
     frame = pd.read_parquet(public / "dataset.parquet")
     controller = WorkflowController(spec, version, frame, policy, replicate_id or run_id)
+    if masking is not None:
+        from .masking import MaskedValidationService, SemanticMask
+
+        semantic_mask = SemanticMask(masking)
+        controller.spec = semantic_mask.spec(spec)
+        controller.outcomes = {o.name: o for o in controller.spec.outcomes}
+        controller.service = MaskedValidationService(
+            spec, version, replicate_id or run_id, policy, semantic_mask
+        )
     compact = versions["prompt"] == "ledger-1.0.0"
     from .prompting import build_prompt, references, repair_message, translate
 

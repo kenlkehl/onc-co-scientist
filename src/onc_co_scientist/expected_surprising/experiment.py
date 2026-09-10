@@ -275,6 +275,7 @@ def run_cell(spec, plan, root, fingerprint, *, resume):
         max_tokens_per_call=spec.expected_surprising.max_tokens_per_call,
         max_retries_per_stage=spec.expected_surprising.max_retries_per_stage,
         stage_failure_policy=spec.expected_surprising.stage_failure_policy,
+        masking=packaged.get("masking"),
     )
     audit = coordinator.audit()
     if audit["draft_errors"]:
