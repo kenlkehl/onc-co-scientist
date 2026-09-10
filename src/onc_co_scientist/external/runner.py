@@ -56,8 +56,8 @@ class BiomniRunner:
                 raise
 
 
-def task_prompt(rounds):
-    return f"""Investigate diverse, scientifically meaningful comparisons in
+def task_prompt(rounds, *, masked=False):
+    prompt = f"""Investigate diverse, scientifically meaningful comparisons in
 /public/dataset.parquet.
 Use previous results to allocate investigation. Broad exploration and focused follow-up are both
 useful. The public dictionary and task metadata are in /public. Clinical log_pfs_months is natural
@@ -100,6 +100,24 @@ Native data access means recorded initial expectations are not certified as blin
 Proposal schema: {json.dumps(Proposal.model_json_schema())}
 Judgment schema: {json.dumps(Judgment.model_json_schema())}
 """
+    if masked:
+        prompt = prompt.replace(
+            "Research signatures and markers\n"
+            "are constructed assays with no assigned clinical or biological role.",
+            "Predictor names and text categorical values use opaque labels. "
+            "Levels are nominal, not ordered numbers. Numeric values, outcome scales, "
+            "and missingness are preserved.",
+        )
+    return prompt
+
+
+def task_masking(task):
+    package = json.loads((task.private_evaluation_path.parent / "workflow.json").read_text())
+    if package.get("masking"):
+        from ..expected_surprising.masking import SemanticMask
+
+        return SemanticMask(package["masking"])
+    return None
 
 
 def imported_tasks(spec):
@@ -297,6 +315,15 @@ def run_cell(spec, task, pair, policy, replicate, digest, *, resume=False, runne
         policy,
         f"replicate-{replicate:03d}",
     )
+    masking = task_masking(task)
+    if masking:
+        from ..expected_surprising.masking import MaskedValidationService
+
+        controller.spec = masking.spec(pair)
+        controller.outcomes = {o.name: o for o in controller.spec.outcomes}
+        controller.service = MaskedValidationService(
+            pair, task.semantic_condition, f"replicate-{replicate:03d}", policy, masking
+        )
     gateway = ExchangeGateway(controller, spec.rounds)
     broker = RunBroker(spec, gateway, root, secrets.token_hex(32))
     journal = root / "exchanges.jsonl"
@@ -332,7 +359,7 @@ def run_cell(spec, task, pair, policy, replicate, digest, *, resume=False, runne
             "temperature": spec.temperature,
             "request_timeout": spec.request_timeout,
             "tool_timeout": spec.tool_timeout,
-            "prompt": task_prompt(spec.rounds),
+            "prompt": task_prompt(spec.rounds, masked=masking is not None),
             "run_id": run_id,
             "resume": native_resume,
         },
@@ -380,7 +407,11 @@ def run_cell(spec, task, pair, policy, replicate, digest, *, resume=False, runne
         context_guard_tokens=spec.context_guard_tokens,
         min_completion_tokens=spec.min_completion_tokens,
         reasoning_history_policy="audit_only",
+        dataset_view="masked" if masking else "named",
     )
+    assignment = json.loads((task.private_evaluation_path.parent / "assignment.json").read_text())
+    origin = assignment[task.semantic_condition]
+    report["source_dataset_sha256"] = origin.get("source_sha256", origin["sha256"])
     report.pop("successful_stages", None)
     report.pop("expected_stages", None)
     report["retry_policy"] = {

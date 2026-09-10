@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from ..expected_surprising.generation import sample
 from ..expected_surprising.schemas import ValidationPolicy
-from .runner import BiomniRunner, preflight, provenance, run_cell, validate_inputs
+from .runner import BiomniRunner, preflight, provenance, run_cell, task_masking, validate_inputs
 from .transport import fingerprint, write_json
 
 
@@ -52,6 +52,9 @@ def run_smoke(spec, *, full_length=False):
         public = smoke_root / "inputs" / task.id
         public.mkdir(parents=True)
         frame = sample(pair, task.semantic_condition, seed=987654321 + index, n=rows)
+        masking = task_masking(task)
+        if masking:
+            frame = masking.frame(frame)
         frame.to_parquet(public / "dataset.parquet", index=False)
         for name in ("task.json", "data_dictionary.json"):
             value = json.loads((task.public_workspace / name).read_text())

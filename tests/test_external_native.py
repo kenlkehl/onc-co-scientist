@@ -428,7 +428,16 @@ def test_resume_never_replays_uncheckpointed_native_work(gateway, tmp_path):
     gateway.controller.frame.to_parquet(public / "dataset.parquet")
     write_json(public / "task.json", {})
     write_json(public / "data_dictionary.json", {})
-    task = SimpleNamespace(id="opaque", semantic_condition="expected", public_workspace=public)
+    private = tmp_path / "private"
+    private.mkdir()
+    write_json(private / "workflow.json", {})
+    write_json(private / "assignment.json", {"expected": {"sha256": "source"}})
+    task = SimpleNamespace(
+        id="opaque",
+        semantic_condition="expected",
+        public_workspace=public,
+        private_evaluation_path=private / "pair.json",
+    )
     spec = ExternalSpec(input_root=tmp_path, output_root=tmp_path / "out", rounds=6)
     run = spec.output_root / "runs" / "opaque__biomni_native__r001"
     write_json(run / "run.json", {"status": "running", "fingerprint": "frozen"})
@@ -451,7 +460,10 @@ def test_resume_never_replays_uncheckpointed_native_work(gateway, tmp_path):
         )
 
 
-def test_native_run_writes_scores_token_curve_and_verifies_resume(gateway, tmp_path, monkeypatch):
+@pytest.mark.parametrize("masked", [False, True])
+def test_native_run_writes_scores_token_curve_and_verifies_resume(
+    gateway, tmp_path, monkeypatch, masked
+):
     from types import SimpleNamespace
 
     from onc_co_scientist.external.runner import run_cell, write_reports
@@ -464,12 +476,46 @@ def test_native_run_writes_scores_token_curve_and_verifies_resume(gateway, tmp_p
     gateway.controller.frame.to_parquet(public / "dataset.parquet")
     write_json(public / "task.json", {})
     write_json(public / "data_dictionary.json", {})
-    task = SimpleNamespace(id="opaque", semantic_condition="expected", public_workspace=public)
+    private = tmp_path / "private"
+    private.mkdir()
+    write_json(private / "workflow.json", {})
+    write_json(private / "assignment.json", {"expected": {"sha256": "source"}})
+    task = SimpleNamespace(
+        id="opaque",
+        semantic_condition="expected",
+        public_workspace=public,
+        private_evaluation_path=private / "pair.json",
+    )
     spec = ExternalSpec(input_root=tmp_path, output_root=tmp_path / "out", rounds=6)
+
+    if masked:
+        from onc_co_scientist.expected_surprising.masking import MASKING_VERSION, SemanticMask
+        from onc_co_scientist.synthetic.anonymize import build_column_mapping, build_value_mapping
+
+        frame = gateway.controller.frame
+        mapping = SemanticMask(
+            {
+                "version": MASKING_VERSION,
+                "columns": build_column_mapping(
+                    list(frame), [o.name for o in gateway.controller.spec.outcomes]
+                ),
+                "values": build_value_mapping(frame, seed=7),
+            }
+        )
+        mapping.frame(frame).to_parquet(public / "dataset.parquet")
+        write_json(private / "workflow.json", {"masking": mapping.payload})
 
     class ScriptedNative:
         def run(self, spec, public, scratch, config_path, broker):
             g = broker.gateway
+            if masked:
+                from onc_co_scientist.expected_surprising.masking import MaskedValidationService
+
+                assert isinstance(g.controller.service, MaskedValidationService)
+                assert all(c in g.controller.frame for c in mapping.columns.values())
+                prompt = json.loads(config_path.read_text())["prompt"]
+                assert "opaque labels" in prompt
+                assert "Research signatures and markers" not in prompt
             counter = 0
 
             def send(action, payload=None):
@@ -509,6 +555,7 @@ def test_native_run_writes_scores_token_curve_and_verifies_resume(gateway, tmp_p
     report = json.loads((root / "report.json").read_text())
     assert len(report["exploration_by_tokens"]) == 6
     assert report["clock"] == "reporting_round"
+    assert report["dataset_view"] == ("masked" if masked else "named")
     assert report["scores"]["discovery"]["exact"]["Q"] is None
     write_reports(spec.output_root, [result])
     assert (spec.output_root / "summary.csv").exists()

@@ -22,6 +22,7 @@ def compare_reports(roots, out):
         raise ValueError("No run reports found")
     rows, groups = [], defaultdict(list)
     hashes = defaultdict(set)
+    source_hashes = defaultdict(set)
     for path in sorted(paths):
         report = json.loads(path.read_text())
         if report.get("versions", {}).get("scoring") != "profile-3.0.0":
@@ -39,6 +40,8 @@ def compare_reports(roots, out):
             "resources": report.get("resource_policy", "benchmark-controller"),
             "clock": report.get("clock", "workflow_iteration"),
             "completion_policy": report.get("completion_policy", "unspecified"),
+            "dataset_view": report.get("dataset_view", "named"),
+            "source_dataset_sha256": report.get("source_dataset_sha256", report["dataset_sha256"]),
             "failed": bool(report["protocol_errors"]),
             "R": discovery["R"],
             "P": discovery["Q"],
@@ -48,7 +51,8 @@ def compare_reports(roots, out):
             "input_tokens": usage.get("input_tokens"),
             "output_tokens": usage.get("output_tokens"),
         }
-        hashes[(row["pair_id"], row["version"])].add(row["dataset_sha256"])
+        hashes[(row["pair_id"], row["version"], row["dataset_view"])].add(row["dataset_sha256"])
+        source_hashes[(row["pair_id"], row["version"])].add(row["source_dataset_sha256"])
         rows.append(row)
         groups[
             tuple(
@@ -61,6 +65,7 @@ def compare_reports(roots, out):
                     "resources",
                     "clock",
                     "completion_policy",
+                    "dataset_view",
                 )
             )
         ].append(row)
@@ -68,8 +73,19 @@ def compare_reports(roots, out):
         raise ValueError(
             "Dataset bytes differ for the same pair/version; compare as distinct studies"
         )
+    if any(len(values) > 1 for values in source_hashes.values()):
+        raise ValueError("Source dataset bytes differ between named/masked conditions")
     summaries = []
-    keys = ("pair_id", "version", "model", "workflow", "resources", "clock", "completion_policy")
+    keys = (
+        "pair_id",
+        "version",
+        "model",
+        "workflow",
+        "resources",
+        "clock",
+        "completion_policy",
+        "dataset_view",
+    )
     for key, members in sorted(groups.items()):
         summary = {
             **dict(zip(keys, key, strict=True)),
@@ -102,9 +118,10 @@ def compare_reports(roots, out):
         "",
         result["interpretation"],
         "",
-        "| Model | Workflow | Version | Resources | Clock | Completion policy | Runs | Failures | "
+        "| Model | Workflow | Version | Resources | Clock | Completion policy | "
+        "Dataset view | Runs | Failures | "
         "R | P | F1* | E | B |",
-        "|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        "|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in summaries:
         values = [
@@ -116,6 +133,7 @@ def compare_reports(roots, out):
                 "resources",
                 "clock",
                 "completion_policy",
+                "dataset_view",
                 "runs",
                 "failures",
             )

@@ -197,3 +197,30 @@ the Biomni environment. Install it in the test environment to exercise that test
 uv pip install --python .venv/bin/python cloudpickle
 .venv/bin/python -m pytest tests/test_external_native.py
 ```
+
+## Masked follow-up
+
+`configs/biomni.nsclc.masked.yaml` runs ten expected and ten surprising masked
+replicates with the same local endpoint and adaptive token budget. The GCS
+`masked_expected.parquet` and `masked_surprising.parquet` files were checked
+against the deterministic masking transformation of the original 50,000-row
+inputs, then copied byte-for-byte into the private/public benchmark package.
+The private mapping transforms hypotheses, independent samples, confirmation,
+and reference targets; validation seeds are derived in the original coordinates.
+Neither mapping nor original predictor names are passed to Biomni. Full-length
+excluded pilot rows are also masked before reaching the worker.
+
+The follow-up runs from an isolated worktree while the named campaign retains
+its frozen source. Once all 20 named cells are terminal and its process exits,
+`python -m onc_co_scientist.external.followup` fast-forwards the original checkout,
+runs both masked full-length pilots, then the 20 masked cells. It preserves failed
+cells and stops if the pilot gate fails. Its status is in `followup_status.json`.
+
+After both campaigns terminate, it verifies report and artifact checksums and
+writes `biomni_report.md`, `biomni_report.json`, and comparison CSV/JSON/Markdown.
+Named/masked conditions remain separate; their underlying source hashes must
+match. All scientific sections, curves and available diagnostic metrics are kept
+in JSON, with scalar means and available-run denominators in Markdown. Missing
+metrics and unpriced local dollar cost remain null. The reports are uploaded to
+`gs://kehl-lab-caia/onc-co-scientist-data/reports/biomni-named-masked-20260910/`.
+No custom-harness result files were present in the supplied GCS directory.
