@@ -1,0 +1,13 @@
+# Recommended generation restart
+
+The user authorized erasing all 120 unmasked Gemma/Qwen run directories and restarting them after committing and pushing the corrected defaults. Codex and masked results are preserved. Automatic Codex monitoring remains off.
+
+The shared provider recognizes Qwen3.8 and Gemma4 identifiers. Qwen thinking uses temperature 1.0, top-p .95, top-k 20, min-p 0, presence penalty 0 and repetition penalty 1. Qwen non-thinking fallback uses .7/.8/20/0/1.5/1. Gemma uses temperature 1.0, top-p .95 and top-k 64 in either mode. Both explicitly send enable_thinking=true normally. Only the final permitted attempt following two consecutive output-limit truncations of that exact stage/participant/round may send false. Ordinary schema, scientific, transport, or parsing errors cannot trigger it; a different stage starts fresh. Token-limit failures retain usage. JSON-object constraints are enabled for these local clinical profiles, and scientific validation is unchanged.
+
+Sources: https://huggingface.co/Qwen/Qwen3.8-27B#best-practices and https://huggingface.co/google/gemma-4-31B-it#best-practices . The provider records effective settings and truncation counts in durable requests. Medium reasoning/default tier, 25 iterations, original scientific seeds/budgets and 10 replicates per paired version/workflow remain.
+
+`prepare_local_model_restart.py --source-grid SOURCE --out NEW` prepares only local vLLM components from either a masked or unmasked grid. It copies the source data verbatim, so masking is preserved, and freezes current source and explicit profile settings. It does not modify or resume the source run. The ordinary masked-grid preparation path also enables these settings. Existing frozen masked code does not change automatically: prepare a fresh local-model replacement root when restarting it. No masked job is launched by this task.
+
+New unmasked root: data/expected_surprising_ledger/full_runs/20260910_vllm_recommended . Its selection contains 120 IDs. New reports use that root plus the existing 240 selected Codex outcomes. Old unmasked vLLM traces in 20260910_vllm_repair are deleted by request; aggregate usage/status snapshots are retained as overhead. The earlier September 8 vLLM traces were already deleted. Never fall back to old scores. Live checks are diagnostics, not experimental results.
+
+Live validation: both endpoints returned schema-valid JSON in normal thinking and simulated two-truncation fallback modes. Gemma returned a separate nonempty reasoning field only with thinking enabled; Qwen reported reasoning tokens only when enabled. Full raw responses and requested sampling options are saved locally in live-check artifacts, separate from the experimental cohort.

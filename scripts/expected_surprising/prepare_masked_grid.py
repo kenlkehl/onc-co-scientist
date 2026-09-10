@@ -46,6 +46,11 @@ def main():
         peer_failure_policy="chair_with_available",
         stage_failure_policy="retain_scientific_scores",
     )
+    for model in raw["models"]:
+        provider = model.get("provider_config") or {}
+        if provider.get("kind") == "vllm_openai":
+            provider.update(sampling_profile="auto", json_object_output=True,
+                            disable_thinking_on_final_retry=True)
     (out / "config.yaml").write_text(yaml.safe_dump(raw, sort_keys=False))
     policy = dict(
         wait_for_vllm_control=str(args.wait_for_vllm_control.resolve()),

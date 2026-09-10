@@ -83,6 +83,15 @@ class StageCoordinator:
 
     def _call(self, slot, messages, *, session, authoritative, iteration, stage, kind, attempt=1):
         final_retry = attempt > 1 and attempt == self.source.max_retries_per_stage + 1
+        # Count consecutive truncations of this exact participant/stage/round.
+        # Recorded errors survive cached replay; unrelated format errors reset it.
+        truncations = 0
+        prefix = slot.rsplit("-a", 1)[0]
+        for previous in range(attempt - 1, 0, -1):
+            old = next((r for r in self.records if r["request"]["slot"] == f"{prefix}-a{previous}"), None)
+            if old is None or not str(old["result"].get("error", "")).startswith("Output token limit reached"):
+                break
+            truncations += 1
         request = {
             "slot": slot,
             "session_id": session,
@@ -102,6 +111,10 @@ class StageCoordinator:
             "final_retry": final_retry,
         }
         path = self.calls_dir / f"{slot}.json"
+        if hasattr(self.provider, "generation_options"):
+            request["generation_options"] = self.provider.generation_options(final_retry=final_retry, truncation_failures=truncations)
+            request["temperature"] = request["generation_options"].get("temperature", 0)
+            request["consecutive_truncations"] = truncations
         try:
             if path.exists():
                 try:
@@ -131,10 +144,12 @@ class StageCoordinator:
                 try:
                     chat = getattr(self.provider, "chat_for_retry", self.provider.chat)
                     options = {"final_retry": final_retry} if hasattr(self.provider, "chat_for_retry") else {}
+                    if hasattr(self.provider, "generation_options"):
+                        options["truncation_failures"] = truncations
                     response = chat(
                         messages[1:],
                         system=messages[0].content,
-                        temperature=0,
+                        temperature=request["temperature"],
                         max_tokens=self.source.max_tokens_per_call,
                         **options,
                     )
@@ -142,7 +157,7 @@ class StageCoordinator:
                         "text": response.text,
                         "model_id": response.model_id,
                         "usage": response_usage(response.raw, time.monotonic() - started),
-                        "error": None,
+                        "error": response.raw.get("adapter_error") if isinstance(response.raw, dict) else None,
                     }
                 except Exception as exc:
                     result = {

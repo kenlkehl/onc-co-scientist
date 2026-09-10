@@ -20,7 +20,13 @@ class VLLMConfig:
     timeout_s: float = 120.0
     reasoning_effort: str | None = None
     service_tier: str | None = None
-    disable_thinking_on_final_retry: bool = False
+    disable_thinking_on_final_retry: bool = True
+    sampling_profile: str | None = "auto"
+    json_object_output: bool = False
+
+    def __post_init__(self):
+        if self.sampling_profile not in (None, "auto", "qwen3_8", "gemma4"):
+            raise ValueError("Unknown vLLM sampling profile")
 
 
 class VLLMProvider:
@@ -48,6 +54,33 @@ class VLLMProvider:
     def model_id(self) -> str:
         return self._config.model_id
 
+    def generation_options(self, *, final_retry=False, truncation_failures=0):
+        """Explicit options for execution and the durable request audit."""
+        disabled = final_retry and truncation_failures >= 2 and self._config.disable_thinking_on_final_retry
+        profile = self._config.sampling_profile
+        if profile == "auto":
+            name = self.model_id.lower()
+            profile = "gemma4" if "gemma-4" in name or "gemma4" in name else "qwen3_8" if "qwen3.8" in name else None
+        options = {}
+        extra = {}
+        if profile == "gemma4":
+            options.update(temperature=1.0, top_p=0.95)
+            extra.update(top_k=64)
+            extra["chat_template_kwargs"] = {"enable_thinking": not disabled}
+        elif profile == "qwen3_8":
+            options.update(temperature=0.7 if disabled else 1.0,
+                           top_p=0.8 if disabled else 0.95,
+                           presence_penalty=1.5 if disabled else 0.0)
+            extra.update(top_k=20, min_p=0.0, repetition_penalty=1.0)
+            extra["chat_template_kwargs"] = {"enable_thinking": not disabled}
+        elif disabled:
+            extra["chat_template_kwargs"] = {"enable_thinking": False}
+        if extra:
+            options["extra_body"] = extra
+        if self._config.json_object_output:
+            options["response_format"] = {"type": "json_object"}
+        return options
+
     def chat(
         self,
         messages: list[ChatMessage],
@@ -56,6 +89,7 @@ class VLLMProvider:
         max_tokens: int = 1024,
         system: str | None = None,
         disable_thinking: bool = False,
+        generation_options: dict | None = None,
     ) -> ChatResponse:  # pragma: no cover - requires network
         api_messages: list[dict[str, str]] = []
         if system:
@@ -68,19 +102,28 @@ class VLLMProvider:
             options["reasoning_effort"] = self._config.reasoning_effort
         if self._config.service_tier is not None:
             options["service_tier"] = self._config.service_tier
+        options.update(generation_options if generation_options is not None else self.generation_options())
+        effective_temperature = options.pop("temperature", temperature)
         response = self._client.chat.completions.create(
             model=self._config.model_id,
             messages=api_messages,
-            temperature=temperature,
+            temperature=effective_temperature,
             max_tokens=max_tokens,
             **options,
         )
         text = response.choices[0].message.content or ""
-        return ChatResponse(text=text, model_id=self._config.model_id, raw=response)
+        raw = response.model_dump() if hasattr(response, "model_dump") else response
+        if isinstance(raw, dict):
+            raw["generation_options"] = {"temperature": effective_temperature, **options}
+            if response.choices[0].finish_reason == "length":
+                raw["adapter_error"] = "Output token limit reached; incomplete generation rejected"
+                text = ""
+        return ChatResponse(text=text, model_id=self._config.model_id, raw=raw)
 
-    def chat_for_retry(self, messages, *, final_retry=False, **kwargs):
+    def chat_for_retry(self, messages, *, final_retry=False, truncation_failures=0, **kwargs):
         return self.chat(
             messages,
-            disable_thinking=final_retry and self._config.disable_thinking_on_final_retry,
+            disable_thinking=final_retry and truncation_failures >= 2 and self._config.disable_thinking_on_final_retry,
+            generation_options=self.generation_options(final_retry=final_retry, truncation_failures=truncation_failures),
             **kwargs,
         )

@@ -16,7 +16,7 @@ REPO=Path(__file__).resolve().parents[2]
 OUT=Path(__file__).resolve().parent
 OLD=REPO/'data/expected_surprising_ledger/full_runs/20260908_clinical10pct_workflows'
 NEW=REPO/'data/expected_surprising_ledger/full_runs/20260909_codex_repair'
-VLLM=REPO/'data/expected_surprising_ledger/full_runs/20260910_vllm_repair'
+VLLM=REPO/'data/expected_surprising_ledger/full_runs/20260910_vllm_recommended'
 vllm_ids=set(json.loads((VLLM/'selection.json').read_text()))
 REPORT=REPO/'clinical_workflow_living_report_2026-09-09.md'
 plans=json.loads((OLD/'plan.json').read_text())
@@ -57,10 +57,14 @@ def tokens(folder,report):
 
 def update():
     groups=defaultdict(list)
+    gemma_paused=VLLM.name=='20260910_vllm_repair' and (REPO/'outputs/qwen_generation_repair_20260910/gemma_pause.json').exists()
+    qwen_paused=VLLM.name=='20260910_vllm_repair' and (REPO/'outputs/qwen_generation_repair_20260910/pause.json').exists()
     def inspect(p):
         rid=p['run_id'];root=VLLM if rid in vllm_ids else NEW if rid in selected else OLD;folder=root/'runs'/rid
         result,report=saved_report(folder)
         state=result['status'] if result else 'active' if folder.exists() else 'queued'
+        if qwen_paused and p['model_profile']=='qwen_3_8_27b' and result is None:state='paused'
+        if gemma_paused and p['model_profile']=='gemma_4_31b' and result is None:state='paused'
         return {'run_id':rid,'model':p['model_profile'],'workflow':p['workflow_id'],'version':p['semantic_condition'],'generation':'vllm_replacement' if rid in vllm_ids else 'replacement' if rid in selected else 'original','state':state,'folder':str(folder),'result':result,'report':report,'tokens':tokens(folder,report)}
     with ThreadPoolExecutor(max_workers=8) as pool:
         records=list(pool.map(inspect,plans))
@@ -69,22 +73,23 @@ def update():
     finished=totals['completed']+totals['failed'];stamp=now.astimezone(ZoneInfo('America/New_York')).strftime('%Y-%m-%d %I:%M:%S %p EDT')
     replacement_finished=sum(r['generation']=='replacement' and r['result'] is not None for r in records)
     known=sum(r['tokens']['known'] for r in records);missing=sum(r['tokens']['missing'] for r in records)
-    lines=['# Living clinical workflow report — September 9, 2026','',f'Updated **{stamp}**. The selected comparison contains **{finished}/360 finished runs** ({totals["completed"]} completed all stages; {totals["failed"]} finished with errors), **{totals["active"]} active**, and **{totals["queued"]} queued**. **{replacement_finished}/104 Codex replacements have finished.**','',
+    lines=['# Living clinical workflow report — September 9, 2026','',f'Updated **{stamp}**. The selected comparison contains **{finished}/360 finished runs** ({totals["completed"]} completed all stages; {totals["failed"]} finished with errors), **{totals["active"]} active**, and **{totals["queued"]} queued**, and **{totals["paused"]} paused**. **{replacement_finished}/104 Codex replacements have finished.**','',
     'This report follows the takeover of the six-model experiment. Each model has three workflows, two versions of the same clinical dataset, and ten separate runs per version: 20 runs per model/workflow. All models request medium reasoning and standard/default service. Each run has 25 iterations; the two-iteration rule is a deadline for reassessing evidence, not a limit on the run.', '',
     '## What changed','',
+    ('**Qwen and Gemma batches are paused by user request.** Scheduled Codex monitoring is disabled. Generation settings are under review; saved results are preserved.' if gemma_paused else '**Qwen batch paused by user request.** Gemma continues unchanged; automatic Codex monitoring is disabled. Candidate Qwen sampling/JSON fixes are diagnostic only and have not been applied to this frozen batch.' if qwen_paused else ''),'',
     '- **104 Codex cells restart from the beginning:** 22 finished cells had native proof that the adapter discarded a completed response; 82 were still active or queued at the pause. Original traces remain saved. The 136 other finished Codex cells are retained, including four failures unrelated to this adapter defect. A replacement is chosen by its fixed run identity, never by whether its new score improves.',
     '- **Adapter:** a successful terminal completion after reconnect warnings is accepted, with its output tokens retained. Genuine terminal failures still fail. This fix is in the new frozen build; the old records are unchanged.',
     '- **Bookkeeping:** repeating a claim preserves its current scientific assessment. An unchanged assessment or investigation-only edit can proceed without evidence. These edits do not earn evidence-response credit, satisfy required reassessments, or change a scientific conclusion without evidence.',
     '- **Peer failure:** each peer retains its existing retry budget. If a peer still fails, the chair receives an explicit missing-draft notice and proceeds with available drafts and the ledger. The run records which stages used fewer peers. Chair output must still pass scientific checks; persistence or provenance errors still stop execution.',
     '- **Stage failure:** new runs retain discovery scores from their actual scientific record. Failed stages roll back, consume their attempts, and remain execution failures. The former whole-run zero penalty is retained as a separate diagnostic.',
-    '- **vLLM restart September 10:** all 120 Qwen/Gemma runs start fresh with the repaired bookkeeping and failure policies. Old run directories were deleted at user request; aggregate cost/status records remain. Explicit reasoning boundaries are parsed before stage validation. Retry prompts include errors and rejected-response excerpts. Qwen requests thinking disabled on the final retry only; normal calls remain medium. Fallback requests are visible in call journals.', '',
+    '- **vLLM restart September 10:** all 120 Qwen/Gemma runs start fresh with the repaired bookkeeping and failure policies. Old run directories were deleted at user request; aggregate cost/status records remain. Explicit reasoning boundaries are parsed before stage validation. Retry prompts include errors and rejected-response excerpts. Both models explicitly enable thinking with recommended sampling; only two consecutive truncations permit disabling it on the final retry. Normal calls request medium reasoning. Fallback requests are visible in call journals.', '',
     'The comparison still includes 136 retained original Codex runs and 104 repaired Codex runs. The new vLLM parsing/retry changes are separately versioned. Earlier Gemma threshold interpretation errors remain a scientific issue to assess, not a reason to change the hidden evaluator.', '',
     '## Progress by condition','',
-    '| Model | Workflow | Retained original | Replacement | Queued | Active | All stages completed | Finished with errors |','|---|---|---:|---:|---:|---:|---:|---:|']
+    '| Model | Workflow | Retained original | Replacement | Queued | Active | Paused | All stages completed | Finished with errors |','|---|---|---:|---:|---:|---:|---:|---:|---:|']
     metrics=[]
     for (model,workflow),items in sorted(groups.items()):
         c=Counter(i['state'] for i in items);n=sum(i['generation']!='original' for i in items)
-        lines.append(f'| {names[model]} | {workflow} | {20-n} | {n} | {c["queued"]} | {c["active"]} | {c["completed"]} | {c["failed"]} |')
+        lines.append(f'| {names[model]} | {workflow} | {20-n} | {n} | {c["queued"]} | {c["active"]} | {c["paused"]} | {c["completed"]} | {c["failed"]} |')
         terminal=[i for i in items if i['result'] is not None];rs=[i['report'] for i in terminal if i['report'] is not None]
         complete=len(rs)==len(terminal) and bool(rs)
         comp={cl:_hierarchy(rs,lambda r,cl=cl:r['responsiveness']['components'][cl]['accuracy']) for cl in EVIDENCE_CLASSES}
@@ -129,6 +134,10 @@ def update():
         prior=read(retirement/'pre_deletion_metrics.json')
         retired_tokens=sum(r['tokens']['known'] for r in prior['runs'] if r['run_id'] in vllm_ids)
         lines+=['',f'**Deleted vLLM run overhead:** {retired_tokens:,} observed output tokens in the last pre-deletion snapshot; this is a lower bound because in-flight calls may not have returned. Old vLLM traces were deleted by request. These tokens are excluded from the fresh comparison.']
+    erased=REPO/'outputs/local_generation_restart_20260910/erased_runs.json'
+    if erased.exists():
+        prior=read(erased)
+        lines+=['',f'**Additional erased unmasked-run overhead:** {sum(r["observed_output_tokens"] for r in prior):,} observed output tokens in the September 10 batch replaced by recommended-sampling runs. Excluded from current performance and token totals; interrupted unreturned calls remain unknown.']
     smoke_new=retirement/'live_smoke_retries/results.json'
     if smoke_new.exists():
         smoke_total=sum(r.get('audit',{}).get('output_token_accounting',{}).get('known_output_tokens',0) for r in read(smoke_new))
@@ -145,7 +154,7 @@ def update():
     'These are preliminary results on one clinical dataset pair. They do not establish general model rankings or a causal benefit/harm of deliberation. Retained old-code runs and repaired-code runs must remain distinguishable in subsequent analyses.', '',
     '## Artifacts and progress logs','',
     f'- [Codex replacement progress log]({NEW}/control/progress.log)',
-    f'- [Fresh vLLM progress log]({VLLM}/control/progress.log)',
+    f'- [Fresh local-model progress log]({VLLM}/control/progress.log)',
     f'- [Combined progress log]({OUT}/progress.log)',
     f'- [Replacement selection and native evidence]({OUT}/selection_audit.json)',
     f'- [Pause-time snapshot]({OUT}/snapshot.json)',
