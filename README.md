@@ -1,5 +1,7 @@
 # onc-co-scientist
 
+**Native Biomni evaluation:** [setup, protocol, and scoring](docs/BIOMNI_NATIVE.md).
+
 **Named/masked task:** [How it works](docs/NAMED_MASKED_GUIDE.md) explains generation and masking, actual paired rows, agent tools and endpoints, the research protocols, and identity versus held-out confirmation scoring.
 
 **Expected/surprising task:** [How it works](docs/EXPECTED_SURPRISING_GUIDE.md) covers dataset generation, actual clinical and cell-line rows, paired discoveries, the agent's tools and analysis loop, LLM endpoints, and the scoring rubric. The commands in that guide use the current paired-discovery reference harness. Most of the instructions below describe the earlier named/masked workflow.

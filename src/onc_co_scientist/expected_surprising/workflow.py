@@ -377,7 +377,7 @@ class WorkflowController:
             )
         return {**result.model_dump(), "source": source, "cached": not fresh}
 
-    def apply(self, record):
+    def apply(self, record, *, deliver_scheduled=True):
         s = self.state
         iteration, stage = record.iteration, record.stage
         sequence = len(s["completed_stages"]) + 1
@@ -460,7 +460,7 @@ class WorkflowController:
                 sequence=sequence,
             )
             results.append(self._deliver(h, result, iteration, sequence, "voluntary", fresh))
-        if stage == "appraise":
+        if stage == "appraise" and deliver_scheduled:
             for opportunity in self.service.due(iteration):
                 h = s["hypotheses"][opportunity["hypothesis_id"]]
                 result, fresh = self.service.deliver(h, iteration, "automatic", sequence=sequence)
@@ -528,8 +528,6 @@ def run_workflow(
     stage_executor=None,
     stage_failure_policy="zero_run",
 ):
-    from .events import behavioral_summary, response_summary
-
     require_current_pair(spec)
     if stage_failure_policy not in {"zero_run", "retain_scientific_scores"}:
         raise ValueError("Unknown stage failure policy")
@@ -761,6 +759,43 @@ def run_workflow(
                 event = {"controller_delivery": True, "results": deliveries}
                 history.append(public_event(event))
                 log("controller_delivery", event)
+    return finalize_workflow(
+        controller,
+        public,
+        out,
+        model_id=provider.model_id,
+        run_id=run_id,
+        iterations=iterations,
+        versions=versions,
+        max_tokens_per_call=max_tokens_per_call,
+        max_retries_per_stage=max_retries_per_stage,
+        stage_failure_policy=stage_failure_policy,
+        errors=errors,
+        exhausted=exhausted,
+        recovered=recovered,
+    )
+
+
+def finalize_workflow(
+    controller,
+    public,
+    out,
+    *,
+    model_id,
+    run_id,
+    iterations,
+    versions,
+    max_tokens_per_call=125000,
+    max_retries_per_stage=2,
+    stage_failure_policy="zero_run",
+    errors=(),
+    exhausted=(),
+    recovered=(),
+):
+    """Score committed scientific state independently of the agent execution engine."""
+    from .events import behavioral_summary, response_summary
+
+    spec, version, policy = controller.spec, controller.version, controller.service.policy
     s = controller.state
     # Assessments are authoritative, including when the final synthesis has a contract error.
     unique = {}
@@ -813,7 +848,7 @@ def run_workflow(
         "profile": spec.profile,
         "version": version,
         "harness": "appraisal_stage",
-        "model": provider.model_id,
+        "model": model_id,
         "versions": versions,
         "iterations": iterations,
         "max_tokens_per_call": max_tokens_per_call,

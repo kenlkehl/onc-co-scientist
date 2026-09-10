@@ -241,3 +241,53 @@ def repackage_command(source: Path, out: Path):
 
 if __name__ == "__main__":
     app()
+
+
+@app.command("external-preflight")
+def external_preflight(config: Path, offline: bool = False):
+    """Check a native co-scientist configuration without running scientific analysis."""
+    from ..external.config import load_spec
+    from ..external.runner import preflight
+
+    typer.echo(json.dumps(preflight(load_spec(config), live=not offline), indent=2))
+
+
+@app.command("external-run")
+def external_run(config: Path, resume: bool = False, full_length_smoke: bool = False):
+    """Run the frozen native co-scientist matrix after its excluded smoke gate."""
+    from ..external.config import load_spec
+    from ..external.runner import run_experiment
+
+    spec = load_spec(config)
+    if full_length_smoke:
+        from ..external.smoke import run_smoke
+
+        gate = run_smoke(spec, full_length=True)
+        typer.echo(json.dumps(gate, indent=2))
+        if gate["status"] != "passed":
+            raise typer.Exit(code=1)
+    results = run_experiment(spec, resume=resume)
+    typer.echo(json.dumps(results, indent=2))
+
+
+@app.command("external-smoke")
+def external_smoke(config: Path, full_length: bool = False):
+    """Exercise Biomni on excluded synthetic data and write a configuration-bound gate."""
+    from ..external.config import load_spec
+    from ..external.smoke import run_smoke
+
+    gate = run_smoke(load_spec(config), full_length=full_length)
+    typer.echo(json.dumps(gate, indent=2))
+    if gate["status"] != "passed":
+        raise typer.Exit(code=1)
+
+
+@app.command("external-compare")
+def external_compare(
+    root: Path, out: Path, baseline: Annotated[list[Path] | None, typer.Option("--baseline")] = None
+):
+    """Compare native and existing profile-3.0.0 reports on identical dataset bytes."""
+    from ..external.comparison import compare_reports
+
+    result = compare_reports([root, *(baseline or [])], out)
+    typer.echo(f"Compared {len(result['runs'])} runs in {len(result['conditions'])} conditions")
