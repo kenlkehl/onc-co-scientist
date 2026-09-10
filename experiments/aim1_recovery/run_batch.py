@@ -69,7 +69,7 @@ def run_one(job: dict, args) -> dict:
     runner = StructuredRunner(
         workspace,
         base_url=args.base_url or "",
-        provider="gemini-vertex" if args.backend == "gemini-vertex" else "endpoint",
+        provider=args.backend,
         project_id=getattr(args, "project_id", None),
         location=getattr(args, "location", None),
         model=args.model,
@@ -101,7 +101,10 @@ def run_one(job: dict, args) -> dict:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--plan", type=Path, required=True)
-    p.add_argument("--backend", choices=["work", "endpoint", "gemini-vertex"], required=True)
+    p.add_argument(
+        "--backend", choices=["work", "endpoint", "gemini-vertex", "anthropic-vertex"],
+        required=True,
+    )
     p.add_argument("--base-url")
     p.add_argument("--project-id")
     p.add_argument("--location")

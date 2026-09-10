@@ -1,5 +1,7 @@
 # How the named/masked task works
 
+Claude Opus 5 is available through the same structured runner using `--backend anthropic-vertex`; see [setup and commands](CLAUDE_VERTEX.md).
+
 This task asks whether recognizable biomedical variable names help or hinder an agent's discovery of an association in a research dataset. We generate a dataset containing a prespecified subgroup association, then present it in two forms. The **named** form uses names such as `kras_g12c` and `treatment_sotorasib`. The **masked** form replaces those names with labels such as `feature_016` and `feature_018`. Every data value, including every outcome, stays the same.
 
 Agents analyze one form in independent research sessions. They propose hypotheses, run analyses, and use the results to guide further exploration. The evaluator checks whether their submitted hypotheses recover the embedded discovery, how early they do so, and whether the submitted comparison is supported in held-out data.

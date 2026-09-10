@@ -1,8 +1,7 @@
 """LLM provider abstraction used by internal steps (synthetic generation, hypothesis matching).
 
-Providers are NOT used to run the agentic benchmark loop itself - that is
-performed by the user's external harness of choice. They are used only for
-internal LLM-assisted work inside this package.
+Providers support internal LLM-assisted steps and the expected/surprising research
+controller. Native transport clients also serve the structured research runner.
 """
 
 from .base import ChatMessage, ChatResponse, LLMProvider

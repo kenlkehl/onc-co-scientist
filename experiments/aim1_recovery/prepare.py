@@ -53,6 +53,12 @@ def prepare(
     service_tier: str | None = "standard",
     tasks: tuple[str, ...] | None = None,
 ) -> dict:
+    if backend == "anthropic-vertex":
+        from onc_co_scientist.providers.anthropic_vertex import AnthropicVertexConfig
+
+        AnthropicVertexConfig(model_id=model, reasoning_effort=reasoning_effort)
+        if service_tier is not None:
+            raise ValueError("Claude Vertex requires --service-tier unspecified")
     if (out / "plan.json").exists():
         raise ValueError(
             "An experiment already exists here; use its frozen plan or a new directory."
@@ -305,6 +311,24 @@ def prepare(
                 ],
             },
         )
+        if backend == "anthropic-vertex":
+            instructions = instructions.replace(
+                "using the submission command below", "using the submit_iteration tool"
+            ).replace(
+                f"Submit: `{python.absolute()} "
+                "-m onc_co_scientist.harness.structured_runner submit "
+                "--workspace . --record iteration_record.json`",
+                "Submit: call submit_iteration with {\"iteration\": YOUR_RECORD}.",
+            ).replace(
+                f"Finish: `{python.absolute()} "
+                "-m onc_co_scientist.harness.structured_runner finalize "
+                "--workspace .`",
+                "Finish: the controller validates and finalizes the submitted iterations.",
+            )
+            instructions += (
+                "\nUse execute_python for all Python analyses. Use sys.executable for child "
+                "Python processes; save and read files relative to /workspace.\n"
+            )
         (ws / "agent_instructions.md").write_text(instructions)
         job["workspace"] = str(ws.resolve())
         job["data_sha256"] = digest(ws / "dataset.parquet")
@@ -398,7 +422,10 @@ def main() -> None:
     parser.add_argument("--clinical-repeats", type=int, default=20)
     parser.add_argument("--depmap-repeats", type=int, default=25)
     parser.add_argument("--model", default="gpt-5.6-luna")
-    parser.add_argument("--backend", choices=["work", "endpoint", "gemini-vertex"], default="work")
+    parser.add_argument(
+        "--backend", choices=["work", "endpoint", "gemini-vertex", "anthropic-vertex"],
+        default="work",
+    )
     parser.add_argument(
         "--reasoning-effort", default="medium", help="Use unspecified to omit for local endpoints"
     )

@@ -1,5 +1,7 @@
 # How the expected/surprising task works
 
+For Claude Opus 5 through Vertex, including named/masked twins of the workflow grid, see [setup and commands](CLAUDE_VERTEX.md).
+
 For the alternative formulation that changes variable names while preserving every data value, see [How the named/masked task works](NAMED_MASKED_GUIDE.md).
 
 This task measures which discoveries an agent pursues in a synthetic research dataset and how it responds when its analyses support or challenge its expectations. Each dataset contains six embedded discoveries. The agent proposes hypotheses, requests analyses, appraises the results, and uses those results to decide what to investigate next. Its final discoveries and the course of its investigation are scored using Python rules.

@@ -31,12 +31,7 @@ def get_provider(config: ProviderConfig) -> LLMProvider:
         )
     if kind == "anthropic_vertex":
         return AnthropicVertexProvider(
-            AnthropicVertexConfig(
-                model_id=config.get("model_id", "claude-sonnet-4-6"),
-                region=config.get("region"),
-                project_id=config.get("project_id"),
-                max_retries=int(config.get("max_retries", 2)),
-            )
+            AnthropicVertexConfig(**{key: value for key, value in config.items() if key != "kind"})
         )
     if kind == "vllm_openai":
         if "model_id" not in config:

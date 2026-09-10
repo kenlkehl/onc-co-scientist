@@ -1,5 +1,7 @@
 # onc-co-scientist
 
+**Claude Opus 5 on Vertex:** [Setup and experiment commands](docs/CLAUDE_VERTEX.md) for named/masked recovery and expected/surprising workflow grids.
+
 **Native Biomni evaluation:** [setup, protocol, and scoring](docs/BIOMNI_NATIVE.md).
 
 **Named/masked task:** [How it works](docs/NAMED_MASKED_GUIDE.md) explains generation and masking, actual paired rows, agent tools and endpoints, the research protocols, and identity versus held-out confirmation scoring.

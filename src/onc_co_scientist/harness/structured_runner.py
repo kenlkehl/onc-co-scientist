@@ -89,11 +89,12 @@ class StructuredRunner:
         harness_id: str = "structured-runner@1",
     ) -> None:
         self.workspace = Path(workspace).resolve()
-        if provider not in {"endpoint", "gemini-vertex"}:
+        if provider not in {"endpoint", "gemini-vertex", "anthropic-vertex"}:
             raise ValueError(f"Unknown endpoint provider: {provider}")
-        if provider == "gemini-vertex" and service_tier:
-            raise ValueError("Gemini does not support OpenAI service tiers")
+        if provider in {"gemini-vertex", "anthropic-vertex"} and service_tier:
+            raise ValueError("Vertex providers do not support OpenAI service tiers")
         self.provider = provider
+        self._anthropic = None
         self._gemini = None
         if provider == "gemini-vertex":
             from ..providers.gemini_vertex import GeminiVertexClient, GeminiVertexConfig
@@ -102,6 +103,13 @@ class StructuredRunner:
                 timeout_s=timeout, reasoning_effort=reasoning_effort,
             ))
             base_url = self._gemini.base_url
+        if provider == "anthropic-vertex":
+            from ..providers.anthropic_vertex import AnthropicVertexClient, AnthropicVertexConfig
+            self._anthropic = AnthropicVertexClient(AnthropicVertexConfig(
+                model_id=model, project_id=project_id, region=location,
+                timeout_s=timeout, reasoning_effort=reasoning_effort,
+            ))
+            base_url = self._anthropic.base_url
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
@@ -138,8 +146,9 @@ class StructuredRunner:
             body["reasoning_effort"] = self.reasoning_effort
         if self.service_tier:
             body["service_tier"] = self.service_tier
-        if self._gemini is not None:
-            result = self._gemini.complete(**body)
+        native = self._anthropic or self._gemini
+        if native is not None:
+            result = native.complete(**body)
             self._log(body, result)
             return result
         data = json.dumps(body).encode()
@@ -316,6 +325,8 @@ class StructuredRunner:
                 raise RuntimeError("endpoint response omitted completion token usage")
             tokens += int(usage["completion_tokens"])
             self._tokens_used = tokens
+            if result.get("adapter_error"):
+                raise RuntimeError(result["adapter_error"])
             choice = (result.get("choices") or [{}])[0]
             message = choice.get("message") or {}
             messages.append(message)
@@ -500,7 +511,10 @@ def main() -> int:
     run = sub.add_parser("run")
     run.add_argument("--workspace", required=True)
     run.add_argument("--base-url", default="")
-    run.add_argument("--provider", choices=["endpoint", "gemini-vertex"], default="endpoint")
+    run.add_argument(
+        "--provider", choices=["endpoint", "gemini-vertex", "anthropic-vertex"],
+        default="endpoint",
+    )
     run.add_argument("--project-id")
     run.add_argument("--location")
     run.add_argument("--model", required=True)
