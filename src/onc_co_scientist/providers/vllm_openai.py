@@ -20,6 +20,7 @@ class VLLMConfig:
     timeout_s: float = 120.0
     reasoning_effort: str | None = None
     service_tier: str | None = None
+    disable_thinking_on_final_retry: bool = False
 
 
 class VLLMProvider:
@@ -54,12 +55,15 @@ class VLLMProvider:
         temperature: float = 0.0,
         max_tokens: int = 1024,
         system: str | None = None,
+        disable_thinking: bool = False,
     ) -> ChatResponse:  # pragma: no cover - requires network
         api_messages: list[dict[str, str]] = []
         if system:
             api_messages.append({"role": "system", "content": system})
         api_messages.extend({"role": m.role, "content": m.content} for m in messages)
         options = {}
+        if disable_thinking:
+            options["extra_body"] = {"chat_template_kwargs": {"enable_thinking": False}}
         if self._config.reasoning_effort is not None:
             options["reasoning_effort"] = self._config.reasoning_effort
         if self._config.service_tier is not None:
@@ -73,3 +77,10 @@ class VLLMProvider:
         )
         text = response.choices[0].message.content or ""
         return ChatResponse(text=text, model_id=self._config.model_id, raw=response)
+
+    def chat_for_retry(self, messages, *, final_retry=False, **kwargs):
+        return self.chat(
+            messages,
+            disable_thinking=final_retry and self._config.disable_thinking_on_final_retry,
+            **kwargs,
+        )

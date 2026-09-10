@@ -735,12 +735,14 @@ def run_workflow(
                         else "Stage exhausted; continue with committed state.",
                     }
                     repair_feedback = {
+                        "rejected_response_excerpt": response_text[-6000:],
                         "error": repair_message(controller, error["error"])
                         if compact
                         else error["error"],
                         "instruction": (
                             "Nothing in the failed attempt was committed. Return a corrected "
                             "complete form for this stage. The ledger is unchanged."
+                            " Return exactly one JSON object, with no thinking tags or commentary outside JSON."
                         ),
                     }
                     history.append(feedback)

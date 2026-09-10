@@ -49,6 +49,7 @@ def get_provider(config: ProviderConfig) -> LLMProvider:
                 timeout_s=float(config.get("timeout_s", 120.0)),
                 reasoning_effort=config.get("reasoning_effort"),
                 service_tier=config.get("service_tier"),
+                disable_thinking_on_final_retry=config.get("disable_thinking_on_final_retry", False),
             )
         )
     raise ValueError(

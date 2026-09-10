@@ -45,6 +45,17 @@ def now() -> str:
 
 def json_response(text: str) -> dict:
     cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip())
+    # Some reasoning servers leak their reasoning channel into content, even
+    # omitting the opening tag. Never select an arbitrary JSON object: only an
+    # explicit, standalone closing reasoning boundary identifies a final answer.
+    try:
+        value = json.loads(cleaned)
+    except json.JSONDecodeError:
+        boundaries = list(re.finditer(r"(?m)^\s*</(?:think|thinking)>\s*$", cleaned))
+        if not boundaries:
+            raise
+        cleaned = cleaned[boundaries[-1].end():].strip()
+        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned)
     value = json.loads(cleaned)
     if not isinstance(value, dict):
         raise ValueError("Model response must be a JSON object")

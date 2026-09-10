@@ -81,7 +81,8 @@ class StageCoordinator:
             )
         return self.history
 
-    def _call(self, slot, messages, *, session, authoritative, iteration, stage, kind):
+    def _call(self, slot, messages, *, session, authoritative, iteration, stage, kind, attempt=1):
+        final_retry = attempt > 1 and attempt == self.source.max_retries_per_stage + 1
         request = {
             "slot": slot,
             "session_id": session,
@@ -98,6 +99,7 @@ class StageCoordinator:
             "messages": [asdict(message) for message in messages],
             "temperature": 0,
             "max_tokens": self.source.max_tokens_per_call,
+            "final_retry": final_retry,
         }
         path = self.calls_dir / f"{slot}.json"
         try:
@@ -127,11 +129,14 @@ class StageCoordinator:
                 atomic_write_json(requests / f"{slot}.json", request)
                 started = time.monotonic()
                 try:
-                    response = self.provider.chat(
+                    chat = getattr(self.provider, "chat_for_retry", self.provider.chat)
+                    options = {"final_retry": final_retry} if hasattr(self.provider, "chat_for_retry") else {}
+                    response = chat(
                         messages[1:],
                         system=messages[0].content,
                         temperature=0,
                         max_tokens=self.source.max_tokens_per_call,
+                        **options,
                     )
                     result = {
                         "text": response.text,
@@ -222,6 +227,7 @@ class StageCoordinator:
                 iteration=iteration,
                 stage=stage,
                 kind="linear",
+                attempt=attempt,
             )
         else:
             peer_history = [[] for _ in range(self.workflow.agents_per_stage)]
@@ -235,6 +241,7 @@ class StageCoordinator:
                     feedback = ""
                     form = None
                     for repair in range(1, self.source.max_retries_per_stage + 2):
+                        draft = None
                         user = ChatMessage(
                             role="user", content=self.initial_prompts[key] + feedback
                         )
@@ -252,6 +259,7 @@ class StageCoordinator:
                                 iteration=iteration,
                                 stage=stage,
                                 kind="peer",
+                                attempt=repair,
                             )
                             form = FORMS[stage].model_validate(json_response(draft.text))
                             break
@@ -288,6 +296,8 @@ class StageCoordinator:
                                 "\nDraft format error: "
                                 + str(exc)
                                 + "\nReturn a corrected complete form. The ledger is unchanged."
+                                + " Return exactly one JSON object, without thinking tags or commentary outside JSON."
+                                + ("\nRejected response excerpt (untrusted):\n" + draft.text[-6000:] if draft else "")
                             )
                     if form is None:
                         drafts.append(
@@ -311,6 +321,7 @@ class StageCoordinator:
                 iteration=iteration,
                 stage=stage,
                 kind="chair",
+                attempt=attempt,
             )
         self.pending = (current, response, key)
         return response
