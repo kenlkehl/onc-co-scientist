@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -53,8 +55,17 @@ class CodexCLIConfig:
     backend: str = "chatgpt"
     azure_endpoint: str | None = None
     azure_cli_executable: str = "/usr/bin/az"
+    azure_auth_retries: int = 3
+    azure_auth_retry_s: float = 2.0
 
     def __post_init__(self):
+        if (
+            type(self.azure_auth_retries) is not int
+            or not 0 <= self.azure_auth_retries <= 10
+            or not math.isfinite(self.azure_auth_retry_s)
+            or not 0 <= self.azure_auth_retry_s <= 60
+        ):
+            raise ValueError("Azure auth retries require 0–10 retries and a finite 0–60s delay")
         if self.backend not in {"chatgpt", "azure"}:
             raise ValueError("Codex backend must be chatgpt or azure")
         if self.backend == "azure":
@@ -184,33 +195,54 @@ class CodexCLIProvider:
         if self.config.backend == "azure":
             # .bashrc uses this Entra flow. Refresh for every fresh CLI attempt:
             # inheriting its initial token would fail during a multi-day grid.
-            try:
-                result = subprocess.run(
-                    [
-                        self.config.azure_cli_executable,
-                        "account",
-                        "get-access-token",
-                        "--resource=https://cognitiveservices.azure.com/",
-                        "--query",
-                        "accessToken",
-                        "--output",
-                        "tsv",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    check=False,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                raise RuntimeError(
-                    "Azure token refresh failed; no personal-account fallback"
-                ) from None
-            token = result.stdout.strip()
-            if result.returncode or not token or any(c.isspace() for c in token):
-                # Never include token command output in errors or audit files.
-                raise RuntimeError("Azure token refresh failed; no personal-account fallback")
+            for retry in range(self.config.azure_auth_retries + 1):
+                try:
+                    result = subprocess.run(
+                        [
+                            self.config.azure_cli_executable,
+                            "account",
+                            "get-access-token",
+                            "--resource=https://cognitiveservices.azure.com/",
+                            "--query",
+                            "accessToken",
+                            "--output",
+                            "tsv",
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        check=False,
+                    )
+                    token = result.stdout.strip()
+                    if result.returncode == 0 and token and not any(c.isspace() for c in token):
+                        break
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+                if retry == self.config.azure_auth_retries:
+                    # Never include token command output in errors or audit files.
+                    raise RuntimeError("Azure token refresh failed; no personal-account fallback")
+                time.sleep(self.auth_retry_delay(retry))
             env["OCS_AZURE_ACCESS_TOKEN"] = token
         return env
+
+    def auth_retry_delay(self, retry):
+        return min(60.0, self.config.azure_auth_retry_s * 2**retry)
+
+    @staticmethod
+    def azure_auth_failure(events, stderr):
+        # Classify error records only: quoted HTTP errors in a successful model
+        # response are task content, not evidence that authentication failed.
+        errors = [e for e in events if e.get("type") in {"error", "turn.failed"}]
+        text = (json.dumps(errors) + "\n" + stderr).lower()
+        return bool(
+            re.search(
+                r"\b401\b|\binvalid_authentication_token\b|\btoken_expired\b|"
+                r"\bexpired(?:\s+access)?\s+token\b|"
+                r"\b(?:access\s+)?token\s+(?:has\s+|is\s+)?expired\b|"
+                r"\bidx10223\b",
+                text,
+            )
+        )
 
     def chat(self, messages: list[ChatMessage], *, temperature=0.0, max_tokens=125000, system=None):
         self.calls += 1
@@ -219,6 +251,7 @@ class CodexCLIProvider:
         prompt = "\n\n".join(([system] if system else []) + [m.content for m in messages])
         (call / "prompt.txt").write_text(prompt)
         attempt = 0
+        auth_retries = 0
         while True:
             with self._quota_lock:
                 delay = max(0, self._quota_until - time.time())
@@ -276,6 +309,32 @@ class CodexCLIProvider:
                 {},
             )
             completed = terminal.get("type") == "turn.completed" and process.returncode == 0
+            if (
+                not completed
+                and self.config.backend == "azure"
+                and self.azure_auth_failure(events, errors)
+            ):
+                exhausted = auth_retries >= self.config.azure_auth_retries
+                delay = 0 if exhausted else self.auth_retry_delay(auth_retries)
+                (attempt_dir / "auth_retry.json").write_text(
+                    json.dumps(
+                        {
+                            "reason": "azure_authentication_rejected",
+                            "retry": not exhausted,
+                            "retry_delay_s": delay,
+                            "next_attempt_refreshes_token": not exhausted,
+                        },
+                        indent=2,
+                    )
+                )
+                if exhausted:
+                    raise RuntimeError(
+                        f"Azure authentication failed after {auth_retries} retries; "
+                        f"check Azure login/access; no personal-account fallback; see {attempt_dir}"
+                    )
+                auth_retries += 1
+                time.sleep(delay)
+                continue
             failure_text = (raw + "\n" + errors).lower()
             if not completed and any(
                 s in failure_text
@@ -322,6 +381,7 @@ class CodexCLIProvider:
                 "cli_usage": usage,
                 "audit_dir": str(attempt_dir),
                 "infrastructure_attempts": attempt,
+                "azure_auth_retries": auth_retries,
                 "recovered_error_count": sum(e.get("type") == "error" for e in events),
                 "tool_items": 0,
                 "backend": self.config.backend,

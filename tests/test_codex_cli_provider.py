@@ -47,6 +47,7 @@ def fake_cli(monkeypatch, outcomes):
             if isinstance(outcome, dict):
                 self.returncode = outcome.get("returncode", 0)
                 events = outcome["events"]
+                self.kwargs["stderr"].write(outcome.get("stderr", ""))
             self.kwargs["stdout"].write("\n".join(map(json.dumps, events)) + "\n")
             if isinstance(outcome, dict) and not outcome.get("write_final", True):
                 return
@@ -251,6 +252,8 @@ def test_azure_refreshes_every_attempt_without_personal_auth_or_logged_credentia
 
 def test_azure_refresh_failure_never_starts_codex(tmp_path, monkeypatch):
     calls = fake_cli(monkeypatch, [])
+    delays = []
+    monkeypatch.setattr("onc_co_scientist.providers.codex_cli.time.sleep", delays.append)
     monkeypatch.setattr(
         "onc_co_scientist.providers.codex_cli.subprocess.run",
         lambda *a, **k: SimpleNamespace(returncode=1, stdout="secret", stderr="secret"),
@@ -266,3 +269,121 @@ def test_azure_refresh_failure_never_starts_codex(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="no personal-account fallback") as error:
         p.chat([ChatMessage("user", "test")])
     assert "secret" not in str(error.value) and not calls
+    assert delays == [2, 4, 8]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        dict(events=[dict(type="turn.failed", error={"message": "Access token has expired"})]),
+        dict(events=[dict(type="error", message="HTTP status 401 Unauthorized")]),
+        dict(events=[], stderr="HTTP 401 Unauthorized"),
+    ],
+)
+def test_azure_auth_failure_refreshes_and_replays_same_stage(tmp_path, monkeypatch, failure):
+    calls = fake_cli(monkeypatch, [{**failure, "returncode": 1}, "ok"])
+    tokens = iter(["expired-credential", "renewed-credential"])
+    delays = []
+    monkeypatch.setattr("onc_co_scientist.providers.codex_cli.time.sleep", delays.append)
+    monkeypatch.setattr(
+        "onc_co_scientist.providers.codex_cli.subprocess.run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout=next(tokens)),
+    )
+    p = CodexCLIProvider(
+        CodexCLIConfig(
+            model_id="gpt-5.6-sol",
+            backend="azure",
+            azure_endpoint="https://example.openai.azure.com/openai/v1",
+            audit_dir=str(tmp_path / "azure"),
+        )
+    )
+    response = p.chat([ChatMessage("user", "unchanged public history")])
+    assert p.calls == 1 and len(calls) == 2 and delays == [2]
+    assert calls[0].prompt == calls[1].prompt == "unchanged public history"
+    assert calls[1].kwargs["env"]["OCS_AZURE_ACCESS_TOKEN"] == "renewed-credential"
+    assert response.raw["metrics"]["azure_auth_retries"] == 1
+    assert response.raw["metrics"]["infrastructure_attempts"] == 2
+    assert json.loads((p.root / "call-0001/attempt-0001/auth_retry.json").read_text())["retry"]
+    for path in p.root.rglob("*"):
+        if path.is_file():
+            assert "credential" not in path.read_text()
+
+
+def test_azure_repeated_auth_failure_stops_after_bounded_backoff(tmp_path, monkeypatch):
+    failure = dict(returncode=1, events=[dict(type="error", message="401 Unauthorized")])
+    calls = fake_cli(monkeypatch, [failure] * 4)
+    delays = []
+    monkeypatch.setattr("onc_co_scientist.providers.codex_cli.time.sleep", delays.append)
+    monkeypatch.setattr(
+        "onc_co_scientist.providers.codex_cli.subprocess.run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout="token"),
+    )
+    p = CodexCLIProvider(
+        CodexCLIConfig(
+            model_id="gpt-5.6-sol",
+            backend="azure",
+            azure_endpoint="https://example.openai.azure.com/openai/v1",
+            audit_dir=str(tmp_path / "azure"),
+        )
+    )
+    with pytest.raises(RuntimeError, match="after 3 retries"):
+        p.chat([ChatMessage("user", "history")])
+    assert len(calls) == 4 and p.calls == 1 and delays == [2, 4, 8]
+    assert not json.loads((p.root / "call-0001/attempt-0004/auth_retry.json").read_text())["retry"]
+
+
+def test_transient_token_acquisition_failure_recovers_without_an_extra_model_call(
+    tmp_path, monkeypatch
+):
+    calls = fake_cli(monkeypatch, ["ok"])
+    tokens = iter(
+        [
+            SimpleNamespace(returncode=1, stdout="secret"),
+            SimpleNamespace(returncode=0, stdout="fresh"),
+        ]
+    )
+    delays = []
+    monkeypatch.setattr("onc_co_scientist.providers.codex_cli.time.sleep", delays.append)
+    monkeypatch.setattr(
+        "onc_co_scientist.providers.codex_cli.subprocess.run", lambda *a, **k: next(tokens)
+    )
+    p = CodexCLIProvider(
+        CodexCLIConfig(
+            model_id="gpt-5.6-sol",
+            backend="azure",
+            azure_endpoint="https://example.openai.azure.com/openai/v1",
+            audit_dir=str(tmp_path / "azure"),
+        )
+    )
+    p.chat([ChatMessage("user", "history")])
+    assert delays == [2] and len(calls) == 1
+    assert calls[0].kwargs["env"]["OCS_AZURE_ACCESS_TOKEN"] == "fresh"
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        dict(returncode=1, events=[dict(type="error", message="403 PermissionDenied")]),
+        dict(events=[dict(type="error", message="401 Unauthorized"), dict(type="turn.completed")]),
+    ],
+)
+def test_azure_does_not_retry_permissions_or_successful_recovery(tmp_path, monkeypatch, outcome):
+    calls = fake_cli(monkeypatch, [outcome])
+    monkeypatch.setattr(
+        "onc_co_scientist.providers.codex_cli.subprocess.run",
+        lambda *a, **k: SimpleNamespace(returncode=0, stdout="token"),
+    )
+    p = CodexCLIProvider(
+        CodexCLIConfig(
+            model_id="gpt-5.6-sol",
+            backend="azure",
+            azure_endpoint="https://example.openai.azure.com/openai/v1",
+            audit_dir=str(tmp_path / "azure"),
+        )
+    )
+    if outcome.get("returncode"):
+        with pytest.raises(RuntimeError, match="exited 1"):
+            p.chat([ChatMessage("user", "history")])
+    else:
+        assert p.chat([ChatMessage("user", "history")]).raw["metrics"]["azure_auth_retries"] == 0
+    assert len(calls) == 1

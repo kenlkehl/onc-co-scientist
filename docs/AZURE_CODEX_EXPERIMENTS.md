@@ -4,7 +4,12 @@ The Codex CLI transport accepts `backend: azure` and an `azure_endpoint` ending 
 `/openai/v1`. The provider uses the Responses API with a custom provider that does
 not require OpenAI account authentication. It refreshes an Entra access token using
 `az account get-access-token --resource=https://cognitiveservices.azure.com/`
-before every CLI attempt. Azure login failures stop the request; there is no fallback
+before every CLI attempt. Transient token acquisition failures and rejected or expired
+access tokens receive three retries with 2, 4 and 8 seconds of backoff by default
+(`azure_auth_retries` and `azure_auth_retry_s`). An authentication rejection reruns
+the exact same stage with another token acquisition and its own audited CLI attempt;
+it does not consume a scientific-stage retry. Successful completions are not replayed.
+Persistent authentication failures stop the request; there is no fallback
 to a personal account. Credentials stay in subprocess memory and are not written
 to config, command audit files, or exception messages.
 
