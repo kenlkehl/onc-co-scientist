@@ -63,6 +63,7 @@ class CodexCLIConfig:
     azure_auth_retry_s: float = 2.0
     azure_pacing_dir: str = "/tmp/ocs-azure-pacing"
     azure_tokens_per_minute: int = 333000
+    azure_output_reserve_tokens: int = 8192
     azure_request_interval_s: float = 10.0
     azure_rate_limit_base_s: float = 60.0
     azure_rate_limit_cap_s: float = 900.0
@@ -71,6 +72,8 @@ class CodexCLIConfig:
         if (
             type(self.azure_tokens_per_minute) is not int
             or self.azure_tokens_per_minute <= 0
+            or type(self.azure_output_reserve_tokens) is not int
+            or self.azure_output_reserve_tokens <= 0
             or any(
                 not math.isfinite(v) or v < 0
                 for v in (
@@ -196,8 +199,20 @@ class AzureRequestLease:
             )
         )
 
-    def succeeded(self):
+    def output_reservation(self, max_tokens):
+        # Admission estimate only: never changes the scientific output ceiling.
+        observed = self.state.get("recent_output_tokens", [])
+        learned = math.ceil(max(observed, default=0) * 1.5) + 1024
+        return min(max_tokens, max(self.config.azure_output_reserve_tokens, learned))
+
+    def succeeded(self, usage=None):
         self.state["consecutive_rate_limits"] = 0
+        output = (usage or {}).get("output_tokens")
+        if type(output) is int and output >= 0:
+            self.state["recent_output_tokens"] = [
+                *self.state.get("recent_output_tokens", []),
+                output,
+            ][-20:]
         self.save()
 
 
@@ -359,11 +374,20 @@ class CodexCLIProvider:
         with (root / f"{key}.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             lease = AzureRequestLease(self.config, root / f"{key}.json", attempt_dir)
-            # Conservative input estimate plus the unchanged output-token ceiling
-            # and CLI overhead. A single oversized estimate is admitted alone;
-            # genuine service throttling then applies its shared cooldown.
-            estimate = math.ceil(len(prompt.encode()) / 3) + max_tokens + 8000
+            output_reserve = lease.output_reservation(max_tokens)
+            estimate = math.ceil(len(prompt.encode()) / 3) + output_reserve + 8000
             lease.admit(estimate)
+            (attempt_dir / "reservation_estimate.json").write_text(
+                json.dumps(
+                    dict(
+                        output_reserve_tokens=output_reserve,
+                        scientific_output_ceiling=max_tokens,
+                        input_estimate_tokens=math.ceil(len(prompt.encode()) / 3),
+                        cli_overhead_tokens=8000,
+                    ),
+                    indent=2,
+                )
+            )
             yield lease
 
     @staticmethod
@@ -520,9 +544,9 @@ class CodexCLIProvider:
                     raise RuntimeError(
                         f"Unexpected tool use in controller-only task; see {attempt_dir}"
                     )
-                if lease is not None:
-                    lease.succeeded()
                 usage = terminal.get("usage") or {}
+                if lease is not None:
+                    lease.succeeded(usage)
                 if not final_path.exists():
                     raise RuntimeError(f"Codex returned no final message; see {attempt_dir}")
                 response = final_path.read_text()

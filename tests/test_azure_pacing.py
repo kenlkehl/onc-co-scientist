@@ -137,3 +137,36 @@ with p.request_slot(p.root, "prompt", 1):
             if process is not None and process.poll() is None:
                 process.kill()
                 process.wait()
+
+
+def test_adaptive_reserve_learns_large_outputs_and_keeps_scientific_ceiling(tmp_path, monkeypatch):
+    now = clock(monkeypatch)
+    p = cli.CodexCLIProvider(configuration(tmp_path))
+    for name in ("one", "two"):
+        d = tmp_path / name
+        d.mkdir()
+        with p.request_slot(d, "x" * 120000, 125000) as lease:
+            assert lease.output_reservation(125000) == 8192
+            lease.succeeded({"output_tokens": 2000})
+    # Both 56,192-token reservations fit in the minute, instead of one 173,000.
+    assert now[0] == 1010
+    receipt = json.loads((tmp_path / "two/reservation_estimate.json").read_text())
+    assert receipt["scientific_output_ceiling"] == 125000
+    assert receipt["output_reserve_tokens"] == 8192
+    with p.request_slot(tmp_path, "short", 125000) as lease:
+        lease.succeeded({"output_tokens": 20000})
+    other = cli.CodexCLIProvider(configuration(tmp_path / "other"))
+    # Share deployment admission state, even with a separate provider audit root.
+    from dataclasses import replace
+
+    other.config = replace(other.config, azure_pacing_dir=p.config.azure_pacing_dir)
+    with other.request_slot(tmp_path, "short", 125000) as lease:
+        assert lease.output_reservation(125000) == 31024
+        assert lease.output_reservation(500) == 500
+    assert any("limit_tokens=125000" in arg for arg in p.command(tmp_path / "out", 125000))
+
+
+@pytest.mark.parametrize("value", [0, -1, 1.5, True])
+def test_invalid_output_reserve(tmp_path, value):
+    with pytest.raises(ValueError):
+        configuration(tmp_path, azure_output_reserve_tokens=value)

@@ -199,6 +199,10 @@ def worker(plan_path, model):
         if model not in policy["released_models"]:
             raise ValueError("Model has been held since deadline preparation")
         transport = azure / "source/src/onc_co_scientist/providers/codex_cli.py"
+        if plan.get("transport_path"):
+            transport = Path(plan["transport_path"])
+            if sha(transport) != plan["transport_sha256"]:
+                raise ValueError("Frozen transport override changed")
         metadata = dict(
             at=now(),
             backend="azure",
@@ -211,7 +215,10 @@ def worker(plan_path, model):
             interrupted_requests="May be reissued; uncommitted usage is unknown",
         )
         if plan.get("recovery_reason"):
-            metadata.update(reason=plan["recovery_reason"], marker_name="azure_rate_recovery.json")
+            metadata.update(
+                reason=plan["recovery_reason"],
+                marker_name=plan.get("marker_name", "azure_rate_recovery.json"),
+            )
         factory = install_transport(experiment, transport, plan["endpoint"], metadata)
         factory(
             dict(
@@ -271,7 +278,12 @@ def worker(plan_path, model):
                     read(initial_marker) if initial_marker.exists() else metadata
                 )
                 if plan.get("recovery_reason"):
-                    result["azure_rate_recovery"] = metadata
+                    recovery_marker = run_dir / "azure_rate_recovery.json"
+                    result["azure_rate_recovery"] = (
+                        read(recovery_marker) if recovery_marker.exists() else metadata
+                    )
+                    if plan.get("marker_name"):
+                        result["transport_update"] = metadata
                 write(run_dir / "run.json", result)
             return result
 

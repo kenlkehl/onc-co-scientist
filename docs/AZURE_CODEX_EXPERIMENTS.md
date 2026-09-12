@@ -99,8 +99,13 @@ control directory. Ambiguous dispatches and failed resume workers require inspec
 
 The Sol, Terra and Luna Azure deployments each expose 333,000 tokens per minute.
 The transport serializes requests per endpoint/deployment across worker processes,
-reserves a conservative prompt estimate plus the unchanged output budget against
+reserves a conservative prompt estimate plus an adaptive output allowance against
 90% of that rolling minute quota, and spaces admissions by at least ten seconds.
+The output allowance starts at 8,192 tokens and rises to 1.5 times the largest
+of the last 20 observed outputs plus 1,024 tokens when needed. It is capped at
+the request output ceiling. This admission estimate does not change the model's
+125,000-token scientific output budget. Successful usage observations are shared
+across worker processes for the same deployment.
 One oversized estimate is admitted alone; actual service throttling remains the
 final authority. These local limits cannot account for unrelated Azure clients.
 
