@@ -70,3 +70,27 @@ the launcher intentionally does not auto-replay an ambiguous dispatch.
 After switching, retain separate provider provenance and exclude all connection
 checks from scientific results. Azure and personal-account usage must be reported
 separately even when the named model and scientific configuration match.
+
+## Deadline for the initial active runs
+
+The user subsequently authorized a cutover at **2026-09-12 13:49:02 UTC** if any
+of the initial 30 runs remain unfinished. `deadline_azure_federation.py` implements
+that change through an explicitly recorded transport override. Before the deadline
+it does nothing unless the original drivers finish naturally. At the deadline it
+verifies the original driver PID, start time and exact command, freezes those
+drivers and their descendants, and terminates only those processes. Separate
+process sessions are included through parentage; unrelated Codex sessions are untouched.
+
+The resume workers load the **original frozen scientific source and configuration**
+and validate the existing provenance. They install the Azure transport from the
+separately verified Azure bundle as the provider factory, recording its path, hash,
+deadline plan and original audit-call boundary. This override is explicitly separate
+from the unchanged scientific provenance; completed responses are replayed from the
+same validated journals, and new responses use Azure. Incomplete in-flight requests
+may be reissued and their uncommitted personal-account usage remains unknown.
+Existing completed results are retained; resumed results are labeled mixed transport.
+
+The workers resume only the original 30 identities, retaining 10 workers per model.
+The 690 reserved identities remain queued until these finish. Driver execution records
+before the cutover and all original audit files are preserved under the deadline
+control directory. Ambiguous dispatches and failed resume workers require inspection.

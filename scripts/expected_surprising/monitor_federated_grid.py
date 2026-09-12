@@ -142,6 +142,12 @@ def refresh(root, cache=None, *, audits=None, publish=True, audit_stamp=None):
             f"[Transition record]({root / 'azure_transition.json'}) · "
             f"[Azure bundle]({azure_root / 'README.md'})",
         ]
+        if transition.get("deadline"):
+            lines += [
+                "",
+                f"**Personal-account cutoff: {transition['deadline']}.** "
+                "Unfinished initial runs resume on Azure using their saved call journals.",
+            ]
     temporary = root / "LIVE_PROGRESS.md.tmp"
     temporary.write_text("\n".join(lines) + "\n")
     temporary.replace(root / "LIVE_PROGRESS.md")
