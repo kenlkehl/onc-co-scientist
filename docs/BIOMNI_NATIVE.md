@@ -1,5 +1,8 @@
 # Native external co-scientists
 
+For the separate multi-site arm with an external orchestrator and native Biomni
+workers, see [Biomni federation](BIOMNI_FEDERATION.md).
+
 The `external-native-1` runner evaluates an external system without running it
 through the repository's persistent/sequential/deliberative scientific stages.
 Biomni is the first engine. Its native A1 graph, tool retriever, Python execution,

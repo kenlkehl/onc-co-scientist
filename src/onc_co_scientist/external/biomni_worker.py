@@ -150,6 +150,8 @@ def install_llm():
 def main():
     global CONFIG
     CONFIG = json.loads(Path(sys.argv[1]).read_text())
+    if CONFIG.get("exchange_doc"):
+        benchmark_exchange.__doc__ = CONFIG["exchange_doc"]
     os.chdir("/work")
 
     def network_audit(event, args):
@@ -201,23 +203,31 @@ def main():
         saved = json.loads(checkpoint.read_text())
         if not saved["resumable"]:
             raise RuntimeError("Unsafe native checkpoint; code will not be replayed")
+        if CONFIG.get("require_namespace_hash") and (
+            hashlib.sha256(namespace_path.read_bytes()).hexdigest() != saved.get("namespace_sha256")
+        ):
+            raise RuntimeError("Native namespace checkpoint checksum mismatch")
         restored = cloudpickle.loads(namespace_path.read_bytes())
         support_tools._persistent_namespace = restored["namespace"]
+        support_tools._persistent_namespace["benchmark_exchange"] = benchmark_exchange
         random.setstate(restored["random_state"])
         np.random.set_state(restored["numpy_random_state"])
         os.chdir(saved["working_directory"])
         agent.system_prompt = saved["system_prompt"]
         inputs = {"messages": messages_from_dict(saved["messages"]), "next_step": "generate"}
+        if CONFIG.get("continuation"):
+            inputs["messages"].append(HumanMessage(content=CONFIG["prompt"]))
     else:
         if agent.use_tool_retriever:
             selected = agent._prepare_resources_for_retrieval(CONFIG["prompt"])
             agent.update_system_prompt_with_selected_resources(selected)
         inputs = {"messages": [HumanMessage(content=CONFIG["prompt"])], "next_step": None}
     # Always visible even if the native resource retriever omits benchmark tooling.
-    agent.system_prompt += (
-        "\nThe Python function benchmark_exchange(request) is available. "
-        + benchmark_exchange.__doc__
-    )
+    if not CONFIG.get("resume"):
+        agent.system_prompt += (
+            "\nThe Python function benchmark_exchange(request) is available. "
+            + benchmark_exchange.__doc__
+        )
     started = time.time()
     nodes = 0
     final_state = inputs
@@ -238,6 +248,7 @@ def main():
                 "nodes": nodes,
                 "resumable": False,
                 "working_directory": os.getcwd(),
+                "dispatch_id": CONFIG["run_id"],
                 **audit,
             }
             # Publish unsafe first: a crash between state/namespace publication
@@ -261,6 +272,9 @@ def main():
                         )
                     )
                     temporary.replace(namespace_path)
+                    saved["namespace_sha256"] = hashlib.sha256(
+                        namespace_path.read_bytes()
+                    ).hexdigest()
                     saved["resumable"] = True
                 except Exception as exc:
                     saved["checkpoint_error"] = str(exc)

@@ -107,8 +107,22 @@ def usage_summary(records):
     }
 
 
+class RequestBudget:
+    """One request allowance shared by central, site, and native helper calls."""
+
+    def __init__(self, limit, used=0):
+        self.limit, self.used = limit, used
+        self.lock = threading.Lock()
+
+    def reserve(self):
+        with self.lock:
+            if self.used >= self.limit:
+                raise ValueError("shared_request_budget_exhausted")
+            self.used += 1
+
+
 class RunBroker:
-    def __init__(self, spec, gateway, root, secret):
+    def __init__(self, spec, gateway, root, secret, *, shared_budget=None):
         self.spec, self.gateway, self.root, self.secret = spec, gateway, Path(root), secret
         self.lock = threading.RLock()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -117,6 +131,7 @@ class RunBroker:
         ]
         self.exchange_count = 0
         self.fatal = None
+        self.shared_budget = shared_budget
         self.key = os.environ[spec.api_key_env] if spec.api_key_env else "EMPTY"
 
     def exchange(self, body):
@@ -140,6 +155,12 @@ class RunBroker:
                 self.fatal = "request_budget_exhausted"
                 raise ValueError(self.fatal)
             body = model_request(self.spec, body)
+            if self.shared_budget is not None:
+                try:
+                    self.shared_budget.reserve()
+                except ValueError:
+                    self.fatal = "shared_request_budget_exhausted"
+                    raise
             index = len(self.requests) + 1
             path = self.root / "llm" / f"{index:06d}.json"
             record = {
