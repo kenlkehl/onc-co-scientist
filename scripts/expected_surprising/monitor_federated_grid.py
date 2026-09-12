@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import json
+import threading
 import time
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
@@ -36,20 +37,25 @@ def receipt(path, cache, *, native=False):
     return counts
 
 
-def refresh(root, cache=None):
+def refresh(root, cache=None, *, audits=None, publish=True, audit_stamp=None):
     cache = {} if cache is None else cache
+    existing = {
+        condition: {p.name for p in (root / condition / "runs").iterdir()}
+        if (root / condition / "runs").exists()
+        else set()
+        for condition in ("named", "masked")
+    }
     policy = read(root / "release_policy.json", {})
     groups = defaultdict(Counter)
     for plan in read(root / "grid.json", []):
         key = (plan["model_profile"], plan["condition"], plan["site_count"])
         run = root / plan["condition"] / "runs" / plan["run_id"]
-        result = read(run / "run.json", {})
+        exists = plan["run_id"] in existing[plan["condition"]]
+        result = read(run / "run.json", {}) if exists else {}
         released = plan["model_profile"] in policy.get("released_models", [])
-        state = result.get("status") or (
-            "running" if run.exists() else "queued" if released else "held"
-        )
+        state = result.get("status") or ("running" if exists else "queued" if released else "held")
         groups[key][state] += 1
-        if run.exists():
+        if exists and audits is None:
             for path in (run / "calls").rglob("*.json"):
                 groups[key].update(receipt(path, cache))
     native = read(root / "biomni" / "plan.json")
@@ -58,9 +64,17 @@ def refresh(root, cache=None):
         run = root / "biomni" / plan.get("run_path", "not_started")
         result = read(run / "run.json", {})
         groups[key][result.get("status", "held")] += 1
-        if run.exists():
+        if run.exists() and audits is None:
             for path in run.rglob("llm/*.json"):
                 groups[key].update(receipt(path, cache, native=True))
+    if audits is not None:
+        for key in groups:
+            groups[key].update(audits.get(key, {}))
+    if not publish:
+        return {
+            key: Counter({name: values[name] for name in ("calls", "errors", "tokens", "unknown")})
+            for key, values in groups.items()
+        }
     totals = sum(groups.values(), Counter())
     stamp = datetime.now(UTC).isoformat()
     lines = [
@@ -78,6 +92,9 @@ def refresh(root, cache=None):
         "Calls and observed output tokens include active runs, peers, central agents and retries. "
         "Missing token receipts are counted separately. Native reporting rounds and controller "
         "iterations are different clocks.",
+        "Usage scan: " + (audit_stamp or "initial scan pending; displayed usage is incomplete")
+        if audits is not None
+        else "Usage scan completed with this refresh.",
         "",
         "| Model | View | Sites | Held | Queued | Active | Done | Failed | Calls | "
         "Errors | Output tokens | Unknown usage |",
@@ -114,6 +131,7 @@ def refresh(root, cache=None):
         json.dumps(
             dict(
                 updated_at=stamp,
+                usage_updated_at=audit_stamp,
                 totals=totals,
                 groups=[
                     dict(model=m, condition=c, sites=n, **v) for (m, c, n), v in groups.items()
@@ -132,11 +150,28 @@ def main():
     args = parser.parse_args()
     lock = (args.root / "progress_monitor.lock").open("a")
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    cache = {}
+    root = args.root.resolve()
+    if args.once:
+        refresh(root)
+        return
+    latest, guard = {"totals": {}, "stamp": None}, threading.Lock()
+
+    def scan():
+        cache = {}
+        while True:
+            try:
+                totals = refresh(root, cache, publish=False)
+                with guard:
+                    latest.update(totals=totals, stamp=datetime.now(UTC).isoformat())
+            except Exception as exc:
+                print("Usage scan failed:", repr(exc), flush=True)
+            time.sleep(30)
+
+    threading.Thread(target=scan, daemon=True).start()
     while True:
-        refresh(args.root.resolve(), cache)
-        if args.once:
-            return
+        with guard:
+            totals, stamp = latest["totals"], latest["stamp"]
+        refresh(root, audits=totals, audit_stamp=stamp)
         time.sleep(30)
 
 
