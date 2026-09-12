@@ -156,7 +156,7 @@ def install_transport(experiment, transport_path, endpoint, metadata):
         options = {k: v for k, v in config.items() if k != "kind"}
         options.update(backend="azure", azure_endpoint=endpoint, resume_audit=True)
         audit = Path(options["audit_dir"])
-        marker = audit / "azure_transport_cutover.json"
+        marker = audit / metadata.get("marker_name", "azure_transport_cutover.json")
         if not marker.exists():
             last = max(
                 (int(p.name[5:]) for p in audit.glob("call-*") if p.name[5:].isdigit()), default=0
@@ -210,6 +210,8 @@ def worker(plan_path, model):
             scientific_source="original frozen source unchanged",
             interrupted_requests="May be reissued; uncommitted usage is unknown",
         )
+        if plan.get("recovery_reason"):
+            metadata.update(reason=plan["recovery_reason"], marker_name="azure_rate_recovery.json")
         factory = install_transport(experiment, transport, plan["endpoint"], metadata)
         factory(
             dict(
@@ -252,7 +254,9 @@ def worker(plan_path, model):
             prior = read(run_dir / "run.json") if (run_dir / "run.json").exists() else {}
             already_terminal = bool(prior.get("scientific_report_sha256"))
             if not already_terminal:
-                write(run_dir / "azure_transport_cutover.json", metadata)
+                write(
+                    run_dir / metadata.get("marker_name", "azure_transport_cutover.json"), metadata
+                )
             result = experiment.run_cell(
                 specs[condition],
                 plans[condition][rid],
@@ -261,7 +265,13 @@ def worker(plan_path, model):
                 resume=True,
             )
             if not already_terminal:
-                result.update(mixed_transport=True, transport_cutover=metadata)
+                result.update(mixed_transport=True)
+                initial_marker = run_dir / "azure_transport_cutover.json"
+                result["transport_cutover"] = (
+                    read(initial_marker) if initial_marker.exists() else metadata
+                )
+                if plan.get("recovery_reason"):
+                    result["azure_rate_recovery"] = metadata
                 write(run_dir / "run.json", result)
             return result
 

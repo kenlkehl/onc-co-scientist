@@ -94,3 +94,30 @@ The workers resume only the original 30 identities, retaining 10 workers per mod
 The 690 reserved identities remain queued until these finish. Driver execution records
 before the cutover and all original audit files are preserved under the deadline
 control directory. Ambiguous dispatches and failed resume workers require inspection.
+
+## Shared throttling recovery
+
+The Sol, Terra and Luna Azure deployments each expose 333,000 tokens per minute.
+The transport serializes requests per endpoint/deployment across worker processes,
+reserves a conservative prompt estimate plus the unchanged output budget against
+90% of that rolling minute quota, and spaces admissions by at least ten seconds.
+One oversized estimate is admitted alone; actual service throttling remains the
+final authority. These local limits cannot account for unrelated Azure clients.
+
+Transient HTTP 429 responses stay inside the transport loop. The same scientific
+request is retried after a shared exponential cooldown (60 seconds up to 15 minutes,
+with jitter and any longer service retry hint). Every attempt refreshes its Azure
+Entra token. Throttling does not consume a scientific stage retry; persistent
+throttling remains visible in pacing and retry audit files for monitoring. Billing
+quota failures do not enter this transient retry loop. Personal-account routing is
+never a fallback.
+
+`recover_azure_rate_limits.py` preserves completed runs. For unfinished or failed
+runs with journaled throttling, it archives all cached calls and request records
+from the earliest affected iteration/stage across sites and central coordination,
+plus terminal reports and derived handoffs. It retains earlier calls, original
+transcripts, scientific provenance and immutable source. Archive manifests record
+original paths and SHA-256 checksums; a partial archive requires inspection before
+retry. A new frozen transport bundle and explicit recovery marker preserve the
+initial personal-to-Azure cutover record. Retries replay from the archived boundary
+because later cached responses may depend on the original error.

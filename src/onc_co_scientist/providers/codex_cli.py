@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
 import math
 import os
+import random
 import re
 import signal
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -57,8 +61,27 @@ class CodexCLIConfig:
     azure_cli_executable: str = "/usr/bin/az"
     azure_auth_retries: int = 3
     azure_auth_retry_s: float = 2.0
+    azure_pacing_dir: str = "/tmp/ocs-azure-pacing"
+    azure_tokens_per_minute: int = 333000
+    azure_request_interval_s: float = 10.0
+    azure_rate_limit_base_s: float = 60.0
+    azure_rate_limit_cap_s: float = 900.0
 
     def __post_init__(self):
+        if (
+            type(self.azure_tokens_per_minute) is not int
+            or self.azure_tokens_per_minute <= 0
+            or any(
+                not math.isfinite(v) or v < 0
+                for v in (
+                    self.azure_request_interval_s,
+                    self.azure_rate_limit_base_s,
+                    self.azure_rate_limit_cap_s,
+                )
+            )
+            or self.azure_rate_limit_cap_s < self.azure_rate_limit_base_s
+        ):
+            raise ValueError("Azure pacing requires a positive quota and finite nonnegative delays")
         if (
             type(self.azure_auth_retries) is not int
             or not 0 <= self.azure_auth_retries <= 10
@@ -82,6 +105,100 @@ class CodexCLIConfig:
                 raise ValueError("Azure requires an HTTPS /openai/v1 endpoint without credentials")
         elif self.azure_endpoint is not None:
             raise ValueError("azure_endpoint requires backend=azure")
+
+
+class AzureRequestLease:
+    """Mutable admission state protected by the deployment's separate flock inode."""
+
+    def __init__(self, config, path, attempt_dir):
+        self.config, self.path, self.attempt_dir = config, path, attempt_dir
+        self.state = json.loads(path.read_text()) if path.exists() else {}
+
+    def save(self):
+        tmp = self.path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(self.state, indent=2))
+        tmp.replace(self.path)
+
+    def admit(self, estimated_tokens):
+        budget = max(1, int(self.config.azure_tokens_per_minute * 0.9))
+        reservation = min(estimated_tokens, budget)
+        while True:
+            now = time.time()
+            recent = [r for r in self.state.get("reservations", []) if r["at"] + 60 > now]
+            delay = max(
+                0,
+                self.state.get("cooldown_until", 0) - now,
+                self.state.get("next_request_at", 0) - now,
+            )
+            if sum(r["tokens"] for r in recent) + reservation > budget:
+                delay = max(delay, min(r["at"] + 60 for r in recent) - now)
+            if delay <= 0:
+                self.state.update(
+                    reservations=[*recent, dict(at=now, tokens=reservation)],
+                    next_request_at=now + self.config.azure_request_interval_s,
+                )
+                self.save()
+                (self.attempt_dir / "pacing.json").write_text(
+                    json.dumps(
+                        dict(
+                            admitted_at=now,
+                            estimated_tokens=estimated_tokens,
+                            reserved_tokens=reservation,
+                            tokens_per_minute=self.config.azure_tokens_per_minute,
+                            single_request_over_estimated_budget=estimated_tokens > budget,
+                            state_path=str(self.path),
+                        ),
+                        indent=2,
+                    )
+                )
+                return
+            (self.attempt_dir / "pacing_wait.json").write_text(
+                json.dumps(
+                    dict(
+                        updated_at=now,
+                        wait_s=delay,
+                        reason="shared Azure quota admission",
+                    )
+                )
+            )
+            time.sleep(min(delay, 60))
+
+    def throttled(self, events, stderr):
+        text = (
+            json.dumps([e for e in events if e.get("type") in {"error", "turn.failed"}])
+            + "\n"
+            + stderr
+        ).lower()
+        count = self.state.get("consecutive_rate_limits", 0) + 1
+        delay = min(
+            self.config.azure_rate_limit_cap_s,
+            self.config.azure_rate_limit_base_s * 2 ** min(count - 1, 20),
+        )
+        delay = min(self.config.azure_rate_limit_cap_s, delay + random.uniform(0, delay * 0.1))
+        hints = [float(v) for v in re.findall(r"retry[ -]after[\s:=]+(\d+(?:\.\d+)?)", text)]
+        hints += [float(v) / 1000 for v in re.findall(r"retry-after-ms[\s:=]+(\d+)", text)]
+        delay = max([delay, *hints])
+        self.state.update(
+            consecutive_rate_limits=count,
+            cooldown_until=max(self.state.get("cooldown_until", 0), time.time() + delay),
+        )
+        self.save()
+        (self.attempt_dir / "rate_limit_retry.json").write_text(
+            json.dumps(
+                dict(
+                    reason="azure_rate_limit",
+                    shared_cooldown_until=self.state["cooldown_until"],
+                    cooldown_s=delay,
+                    consecutive_rate_limits=count,
+                    scientific_stage_retry_consumed=False,
+                ),
+                indent=2,
+            )
+        )
+
+    def succeeded(self):
+        self.state["consecutive_rate_limits"] = 0
+        self.save()
 
 
 class CodexCLIProvider:
@@ -228,6 +345,35 @@ class CodexCLIProvider:
     def auth_retry_delay(self, retry):
         return min(60.0, self.config.azure_auth_retry_s * 2**retry)
 
+    @contextmanager
+    def request_slot(self, attempt_dir, prompt, max_tokens):
+        """One request in flight per deployment, shared across threads AND processes."""
+        if self.config.backend != "azure":
+            yield None
+            return
+        root = Path(self.config.azure_pacing_dir)
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        key = hashlib.sha256(
+            f"{self.config.azure_endpoint.rstrip('/')}|{self.model_id}".encode()
+        ).hexdigest()
+        with (root / f"{key}.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            lease = AzureRequestLease(self.config, root / f"{key}.json", attempt_dir)
+            # Conservative input estimate plus the unchanged output-token ceiling
+            # and CLI overhead. A single oversized estimate is admitted alone;
+            # genuine service throttling then applies its shared cooldown.
+            estimate = math.ceil(len(prompt.encode()) / 3) + max_tokens + 8000
+            lease.admit(estimate)
+            yield lease
+
+    @staticmethod
+    def azure_rate_limit_failure(events, stderr):
+        errors = [e for e in events if e.get("type") in {"error", "turn.failed"}]
+        text = (json.dumps(errors) + "\n" + stderr).lower()
+        if "insufficient_quota" in text or "billing_hard_limit" in text:
+            return False
+        return bool(re.search(r"\b429\b|rate[_ -]?limit(?:[_ -]exceeded|ed)?", text))
+
     @staticmethod
     def azure_auth_failure(events, stderr):
         # Classify error records only: quoted HTTP errors in a successful model
@@ -252,6 +398,7 @@ class CodexCLIProvider:
         (call / "prompt.txt").write_text(prompt)
         attempt = 0
         auth_retries = 0
+        rate_limit_retries = 0
         while True:
             with self._quota_lock:
                 delay = max(0, self._quota_until - time.time())
@@ -271,122 +418,137 @@ class CodexCLIProvider:
             final_path = attempt_dir / "final.txt"
             command = self.command(final_path, max_tokens)
             (attempt_dir / "command.json").write_text(json.dumps(command, indent=2))
-            env = self.environment()
-            with (
-                (attempt_dir / "events.jsonl").open("w") as stdout,
-                (attempt_dir / "stderr.log").open("w") as stderr,
-            ):
-                process = subprocess.Popen(
-                    command,
-                    stdin=subprocess.PIPE,
-                    stdout=stdout,
-                    stderr=stderr,
-                    text=True,
-                    cwd=self.workspace,
-                    env=env,
-                    start_new_session=True,
-                )
-                try:
-                    process.communicate(prompt, timeout=self.config.timeout_s)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.communicate()
-                    raise TimeoutError(
-                        f"Codex exceeded {self.config.timeout_s}s; see {attempt_dir}"
-                    ) from None
-            raw = (attempt_dir / "events.jsonl").read_text()
-            errors = (attempt_dir / "stderr.log").read_text()
-            events = [json.loads(line) for line in raw.splitlines() if line.strip()]
-            # Reconnect warnings are top-level errors too. Resolve the final
-            # turn state instead of discarding a later successful completion.
-            terminal = next(
-                (
-                    event
-                    for event in reversed(events)
-                    if event.get("type")
-                    in {"turn.started", "turn.completed", "turn.failed", "error"}
-                ),
-                {},
-            )
-            completed = terminal.get("type") == "turn.completed" and process.returncode == 0
-            if (
-                not completed
-                and self.config.backend == "azure"
-                and self.azure_auth_failure(events, errors)
-            ):
-                exhausted = auth_retries >= self.config.azure_auth_retries
-                delay = 0 if exhausted else self.auth_retry_delay(auth_retries)
-                (attempt_dir / "auth_retry.json").write_text(
-                    json.dumps(
-                        {
-                            "reason": "azure_authentication_rejected",
-                            "retry": not exhausted,
-                            "retry_delay_s": delay,
-                            "next_attempt_refreshes_token": not exhausted,
-                        },
-                        indent=2,
+            with self.request_slot(attempt_dir, prompt, max_tokens) as lease:
+                env = self.environment()
+                with (
+                    (attempt_dir / "events.jsonl").open("w") as stdout,
+                    (attempt_dir / "stderr.log").open("w") as stderr,
+                ):
+                    process = subprocess.Popen(
+                        command,
+                        stdin=subprocess.PIPE,
+                        stdout=stdout,
+                        stderr=stderr,
+                        text=True,
+                        cwd=self.workspace,
+                        env=env,
+                        start_new_session=True,
                     )
+                    try:
+                        process.communicate(prompt, timeout=self.config.timeout_s)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.communicate()
+                        raise TimeoutError(
+                            f"Codex exceeded {self.config.timeout_s}s; see {attempt_dir}"
+                        ) from None
+                raw = (attempt_dir / "events.jsonl").read_text()
+                errors = (attempt_dir / "stderr.log").read_text()
+                events = [json.loads(line) for line in raw.splitlines() if line.strip()]
+                # Reconnect warnings are top-level errors too. Resolve the final
+                # turn state instead of discarding a later successful completion.
+                terminal = next(
+                    (
+                        event
+                        for event in reversed(events)
+                        if event.get("type")
+                        in {"turn.started", "turn.completed", "turn.failed", "error"}
+                    ),
+                    {},
                 )
-                if exhausted:
+                completed = terminal.get("type") == "turn.completed" and process.returncode == 0
+                if (
+                    not completed
+                    and self.config.backend == "azure"
+                    and self.azure_rate_limit_failure(events, errors)
+                ):
+                    rate_limit_retries += 1
+                    lease.throttled(events, errors)
+                    continue  # No scientific error journal or stage retry is consumed.
+                if (
+                    not completed
+                    and self.config.backend == "azure"
+                    and self.azure_auth_failure(events, errors)
+                ):
+                    exhausted = auth_retries >= self.config.azure_auth_retries
+                    delay = 0 if exhausted else self.auth_retry_delay(auth_retries)
+                    (attempt_dir / "auth_retry.json").write_text(
+                        json.dumps(
+                            {
+                                "reason": "azure_authentication_rejected",
+                                "retry": not exhausted,
+                                "retry_delay_s": delay,
+                                "next_attempt_refreshes_token": not exhausted,
+                            },
+                            indent=2,
+                        )
+                    )
+                    if exhausted:
+                        raise RuntimeError(
+                            f"Azure authentication failed after {auth_retries} retries; "
+                            "check Azure login/access; no personal-account fallback; "
+                            f"see {attempt_dir}"
+                        )
+                    auth_retries += 1
+                    time.sleep(delay)
+                    continue
+                failure_text = (raw + "\n" + errors).lower()
+                if not completed and any(
+                    s in failure_text
+                    for s in (
+                        "usage_limit_reached",
+                        "you've hit your usage limit",
+                        "usage limit exceeded",
+                    )
+                ):
+                    with self._quota_lock:
+                        type(self)._quota_until = time.time() + self.config.usage_retry_s
+                    continue
+                if process.returncode:
                     raise RuntimeError(
-                        f"Azure authentication failed after {auth_retries} retries; "
-                        f"check Azure login/access; no personal-account fallback; see {attempt_dir}"
+                        f"Codex exited {process.returncode}: {(errors or raw)[-1600:]}"
                     )
-                auth_retries += 1
-                time.sleep(delay)
-                continue
-            failure_text = (raw + "\n" + errors).lower()
-            if not completed and any(
-                s in failure_text
-                for s in (
-                    "usage_limit_reached",
-                    "you've hit your usage limit",
-                    "usage limit exceeded",
-                )
-            ):
-                with self._quota_lock:
-                    type(self)._quota_until = time.time() + self.config.usage_retry_s
-                continue
-            if process.returncode:
-                raise RuntimeError(f"Codex exited {process.returncode}: {(errors or raw)[-1600:]}")
-            if not completed:
-                raise RuntimeError(f"Codex turn failed; see {attempt_dir}")
-            tool_items = [
-                event
-                for event in events
-                if event.get("item", {}).get("type")
-                in {"command_execution", "mcp_tool_call", "web_search", "file_change"}
-            ]
-            if tool_items:
-                raise RuntimeError(
-                    f"Unexpected tool use in controller-only task; see {attempt_dir}"
-                )
-            usage = terminal.get("usage") or {}
-            if not final_path.exists():
-                raise RuntimeError(f"Codex returned no final message; see {attempt_dir}")
-            response = final_path.read_text()
-            metrics = {
-                "finish_reason": "stop",
-                "response_chars": len(response),
-                "usage": {
-                    "prompt_tokens": usage.get("input_tokens"),
-                    "completion_tokens": usage.get("output_tokens"),
-                    "cached_input_tokens": usage.get("cached_input_tokens", 0),
-                },
-                "reasoning_effort": self.config.reasoning_effort,
-                "service_tier_requested": self.config.service_tier,
-                "temperature_requested": temperature,
-                "temperature_control": "CLI default",
-                "token_budget_control": "Codex sampled-token rollout budget; no prefill charge",
-                "cli_usage": usage,
-                "audit_dir": str(attempt_dir),
-                "infrastructure_attempts": attempt,
-                "azure_auth_retries": auth_retries,
-                "recovered_error_count": sum(e.get("type") == "error" for e in events),
-                "tool_items": 0,
-                "backend": self.config.backend,
-                "azure_endpoint": self.config.azure_endpoint,
-            }
-            (call / "metrics.json").write_text(json.dumps(metrics, indent=2))
-            (self.root / "quota_wait.json").unlink(missing_ok=True)
-            return ChatResponse(text=response, model_id=self.model_id, raw={"metrics": metrics})
+                if not completed:
+                    raise RuntimeError(f"Codex turn failed; see {attempt_dir}")
+                tool_items = [
+                    event
+                    for event in events
+                    if event.get("item", {}).get("type")
+                    in {"command_execution", "mcp_tool_call", "web_search", "file_change"}
+                ]
+                if tool_items:
+                    raise RuntimeError(
+                        f"Unexpected tool use in controller-only task; see {attempt_dir}"
+                    )
+                if lease is not None:
+                    lease.succeeded()
+                usage = terminal.get("usage") or {}
+                if not final_path.exists():
+                    raise RuntimeError(f"Codex returned no final message; see {attempt_dir}")
+                response = final_path.read_text()
+                metrics = {
+                    "finish_reason": "stop",
+                    "response_chars": len(response),
+                    "usage": {
+                        "prompt_tokens": usage.get("input_tokens"),
+                        "completion_tokens": usage.get("output_tokens"),
+                        "cached_input_tokens": usage.get("cached_input_tokens", 0),
+                    },
+                    "reasoning_effort": self.config.reasoning_effort,
+                    "service_tier_requested": self.config.service_tier,
+                    "temperature_requested": temperature,
+                    "temperature_control": "CLI default",
+                    "token_budget_control": "Codex sampled-token rollout budget; no prefill charge",
+                    "cli_usage": usage,
+                    "audit_dir": str(attempt_dir),
+                    "infrastructure_attempts": attempt,
+                    "azure_auth_retries": auth_retries,
+                    "azure_rate_limit_retries": rate_limit_retries,
+                    "recovered_error_count": sum(e.get("type") == "error" for e in events),
+                    "tool_items": 0,
+                    "backend": self.config.backend,
+                    "azure_endpoint": self.config.azure_endpoint,
+                }
+                (call / "metrics.json").write_text(json.dumps(metrics, indent=2))
+                (self.root / "quota_wait.json").unlink(missing_ok=True)
+                return ChatResponse(text=response, model_id=self.model_id, raw={"metrics": metrics})

@@ -1,6 +1,7 @@
 """Checks for CLI transport accounting, isolation, and transient usage limits."""
 
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ from onc_co_scientist.providers.codex_cli import CodexCLIConfig, CodexCLIProvide
 
 def fake_cli(monkeypatch, outcomes):
     calls = []
+    monkeypatch.setattr(CodexCLIProvider, "request_slot", lambda *a: nullcontext(None))
 
     class Process:
         pid = 123
