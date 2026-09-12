@@ -39,6 +39,9 @@ def receipt(path, cache, *, native=False):
 
 def refresh(root, cache=None, *, audits=None, publish=True, audit_stamp=None):
     cache = {} if cache is None else cache
+    transition = read(root / "azure_transition.json", {})
+    transferred = {(r["condition"], r["run_id"]) for r in transition.get("queued", [])}
+    azure_root = Path(transition["target_root"]) if transition.get("target_root") else None
     existing = {
         condition: {p.name for p in (root / condition / "runs").iterdir()}
         if (root / condition / "runs").exists()
@@ -51,6 +54,9 @@ def refresh(root, cache=None, *, audits=None, publish=True, audit_stamp=None):
         key = (plan["model_profile"], plan["condition"], plan["site_count"])
         run = root / plan["condition"] / "runs" / plan["run_id"]
         exists = plan["run_id"] in existing[plan["condition"]]
+        if (plan["condition"], plan["run_id"]) in transferred:
+            run = azure_root / plan["condition"] / "runs" / plan["run_id"]
+            exists = run.is_dir()
         result = read(run / "run.json", {}) if exists else {}
         released = plan["model_profile"] in policy.get("released_models", [])
         state = result.get("status") or ("running" if exists else "queued" if released else "held")
@@ -123,6 +129,19 @@ def refresh(root, cache=None, *, audits=None, publish=True, audit_stamp=None):
         "[Grid documentation](README.md) · [Release policy](release_policy.json) · "
         "[Biomni setup](biomni/README.md)",
     ]
+    if transition:
+        lines += [
+            "",
+            "## Azure transition",
+            "",
+            f"Status: **{transition['status']}**. {len(transition.get('active', []))} "
+            f"original runs retained; {len(transferred)} queued identities reserved for Azure.",
+            "Only experiment runs change providers. Unreleased models remain held. "
+            "Legacy driver errors on reservation files are admission events, "
+            "not scientific failures.",
+            f"[Transition record]({root / 'azure_transition.json'}) · "
+            f"[Azure bundle]({azure_root / 'README.md'})",
+        ]
     temporary = root / "LIVE_PROGRESS.md.tmp"
     temporary.write_text("\n".join(lines) + "\n")
     temporary.replace(root / "LIVE_PROGRESS.md")

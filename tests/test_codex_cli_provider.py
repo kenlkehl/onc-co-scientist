@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -207,3 +208,61 @@ def test_completed_turn_with_missing_usage_remains_unknown(tmp_path, monkeypatch
     metrics = provider.chat([ChatMessage("user", "public ledger")]).raw["metrics"]
     assert metrics["usage"]["completion_tokens"] is None
     assert metrics["usage"]["prompt_tokens"] is None
+
+
+def test_azure_refreshes_every_attempt_without_personal_auth_or_logged_credentials(
+    tmp_path, monkeypatch
+):
+    calls = fake_cli(monkeypatch, ["ok", "ok"])
+    tokens = iter(["fresh-token-one", "fresh-token-two"])
+    refreshes = []
+
+    def refresh(command, **kwargs):
+        refreshes.append(command)
+        return SimpleNamespace(returncode=0, stdout=next(tokens), stderr="")
+
+    monkeypatch.setattr("onc_co_scientist.providers.codex_cli.subprocess.run", refresh)
+    monkeypatch.setenv("OCS_AZURE_ACCESS_TOKEN", "stale")
+    monkeypatch.setenv("OPENAI_API_KEY", "personal-key")
+    p = CodexCLIProvider(
+        CodexCLIConfig(
+            model_id="gpt-5.6-sol",
+            backend="azure",
+            azure_endpoint="https://example.openai.azure.com/openai/v1",
+            audit_dir=str(tmp_path / "azure"),
+        )
+    )
+    for _ in range(2):
+        assert p.chat([ChatMessage("user", "test")]).raw["metrics"]["backend"] == "azure"
+    assert len(refreshes) == 2
+    for i, call in enumerate(calls):
+        assert 'model_provider="ocs_azure"' in call.command
+        assert "model_providers.ocs_azure.requires_openai_auth=false" in call.command
+        assert not any("forced_login_method" in arg for arg in call.command)
+        assert "OPENAI_API_KEY" not in call.kwargs["env"]
+        assert (
+            call.kwargs["env"]["OCS_AZURE_ACCESS_TOKEN"]
+            == ["fresh-token-one", "fresh-token-two"][i]
+        )
+    for path in p.root.rglob("*"):
+        if path.is_file():
+            assert "fresh-token" not in path.read_text()
+
+
+def test_azure_refresh_failure_never_starts_codex(tmp_path, monkeypatch):
+    calls = fake_cli(monkeypatch, [])
+    monkeypatch.setattr(
+        "onc_co_scientist.providers.codex_cli.subprocess.run",
+        lambda *a, **k: SimpleNamespace(returncode=1, stdout="secret", stderr="secret"),
+    )
+    p = CodexCLIProvider(
+        CodexCLIConfig(
+            model_id="gpt-5.6-sol",
+            backend="azure",
+            azure_endpoint="https://example.openai.azure.com/openai/v1",
+            audit_dir=str(tmp_path / "azure"),
+        )
+    )
+    with pytest.raises(RuntimeError, match="no personal-account fallback") as error:
+        p.chat([ChatMessage("user", "test")])
+    assert "secret" not in str(error.value) and not calls

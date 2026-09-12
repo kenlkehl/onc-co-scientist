@@ -21,6 +21,28 @@ def now():
     return datetime.now(UTC).isoformat()
 
 
+def verify_predecessor(transition):
+    """Never admit a replacement bundle while original calls can still be active."""
+    if not transition:
+        return
+    source = Path(transition["source_root"])
+    completed = set()
+    for model in transition["models"]:
+        state = json.loads((source / "control" / model / "execution.json").read_text())
+        if not state.get("completed_at") or state.get("active") or state.get("queued_runs"):
+            raise RuntimeError(f"Azure launch held: original {model} driver has not drained")
+        completed.update((r["condition"], r["run_id"]) for r in state.get("finished", []))
+    if any((r["condition"], r["run_id"]) not in completed for r in transition["active"]):
+        raise RuntimeError("Azure launch held: original active identities lack terminal records")
+    for row in transition["queued"]:
+        reservation = source / row["condition"] / "runs" / row["run_id"]
+        if (
+            not reservation.is_file()
+            or json.loads(reservation.read_text()).get("status") != "reserved_for_azure"
+        ):
+            raise RuntimeError("Azure launch held: an original admission reservation changed")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
@@ -35,6 +57,7 @@ def main():
     for name, expected in frozen["hashes"].items():
         if hashlib.sha256((root / name).read_bytes()).hexdigest() != expected:
             raise ValueError(f"Frozen file changed: {name}")
+    verify_predecessor(frozen.get("azure_transition"))
     policy = json.loads((root / "release_policy.json").read_text())
     if args.model not in policy["released_models"]:
         raise ValueError(f"{args.model} is held pending the user's launch instruction")

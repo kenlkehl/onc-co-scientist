@@ -10,6 +10,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .base import ChatMessage, ChatResponse
 
@@ -49,6 +50,27 @@ class CodexCLIConfig:
     timeout_s: float = 1800
     usage_retry_s: float = 900
     resume_audit: bool = False
+    backend: str = "chatgpt"
+    azure_endpoint: str | None = None
+    azure_cli_executable: str = "/usr/bin/az"
+
+    def __post_init__(self):
+        if self.backend not in {"chatgpt", "azure"}:
+            raise ValueError("Codex backend must be chatgpt or azure")
+        if self.backend == "azure":
+            url = urlsplit(self.azure_endpoint or "")
+            if (
+                url.scheme != "https"
+                or not url.hostname
+                or url.username
+                or url.password
+                or url.query
+                or url.fragment
+                or url.path.rstrip("/") != "/openai/v1"
+            ):
+                raise ValueError("Azure requires an HTTPS /openai/v1 endpoint without credentials")
+        elif self.azure_endpoint is not None:
+            raise ValueError("azure_endpoint requires backend=azure")
 
 
 class CodexCLIProvider:
@@ -101,8 +123,20 @@ class CodexCLIProvider:
             "skills.bundled.enabled": False,
             "features.skip_host_skill_discovery": True,
             "tools.update_plan.enabled": False,
-            "forced_login_method": "chatgpt",
         }
+        if self.config.backend == "chatgpt":
+            settings["forced_login_method"] = "chatgpt"
+        else:
+            settings.update(
+                {
+                    "model_provider": "ocs_azure",
+                    "model_providers.ocs_azure.name": "Azure experiment transport",
+                    "model_providers.ocs_azure.base_url": self.config.azure_endpoint,
+                    "model_providers.ocs_azure.wire_api": "responses",
+                    "model_providers.ocs_azure.env_key": "OCS_AZURE_ACCESS_TOKEN",
+                    "model_providers.ocs_azure.requires_openai_auth": False,
+                }
+            )
         if self.config.service_tier is not None:
             settings["service_tier"] = self.config.service_tier
         command = [
@@ -141,6 +175,43 @@ class CodexCLIProvider:
             command += ["--disable", feature]
         return [*command, "-"]
 
+    def environment(self):
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in {"OPENAI_API_KEY", "CODEX_API_KEY", "OCS_AZURE_ACCESS_TOKEN"}
+        }
+        if self.config.backend == "azure":
+            # .bashrc uses this Entra flow. Refresh for every fresh CLI attempt:
+            # inheriting its initial token would fail during a multi-day grid.
+            try:
+                result = subprocess.run(
+                    [
+                        self.config.azure_cli_executable,
+                        "account",
+                        "get-access-token",
+                        "--resource=https://cognitiveservices.azure.com/",
+                        "--query",
+                        "accessToken",
+                        "--output",
+                        "tsv",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                raise RuntimeError(
+                    "Azure token refresh failed; no personal-account fallback"
+                ) from None
+            token = result.stdout.strip()
+            if result.returncode or not token or any(c.isspace() for c in token):
+                # Never include token command output in errors or audit files.
+                raise RuntimeError("Azure token refresh failed; no personal-account fallback")
+            env["OCS_AZURE_ACCESS_TOKEN"] = token
+        return env
+
     def chat(self, messages: list[ChatMessage], *, temperature=0.0, max_tokens=125000, system=None):
         self.calls += 1
         call = self.root / f"call-{self.calls:04d}"
@@ -167,9 +238,7 @@ class CodexCLIProvider:
             final_path = attempt_dir / "final.txt"
             command = self.command(final_path, max_tokens)
             (attempt_dir / "command.json").write_text(json.dumps(command, indent=2))
-            env = {
-                k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY"}
-            }
+            env = self.environment()
             with (
                 (attempt_dir / "events.jsonl").open("w") as stdout,
                 (attempt_dir / "stderr.log").open("w") as stderr,
@@ -255,6 +324,8 @@ class CodexCLIProvider:
                 "infrastructure_attempts": attempt,
                 "recovered_error_count": sum(e.get("type") == "error" for e in events),
                 "tool_items": 0,
+                "backend": self.config.backend,
+                "azure_endpoint": self.config.azure_endpoint,
             }
             (call / "metrics.json").write_text(json.dumps(metrics, indent=2))
             (self.root / "quota_wait.json").unlink(missing_ok=True)
