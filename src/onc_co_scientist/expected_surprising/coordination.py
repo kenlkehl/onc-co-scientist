@@ -13,11 +13,11 @@ from dataclasses import asdict
 
 from ..harness.durable_io import StorageUnavailable, atomic_write_json, durable_read_json
 from ..providers.base import ChatMessage, ChatResponse
-from .prompting import FORMS
+from .prompting import FORMS, STAGE_INSTRUCTIONS, research_brief
 from .rollout import json_response
 from .workflow import WorkflowInfrastructureError
 
-COORDINATION_VERSION = "1.1.0"
+COORDINATION_VERSION = "1.2.0"
 
 
 def digest(value):
@@ -55,6 +55,8 @@ class StageCoordinator:
         self.draft_errors = {}
         self.memory_trims = []
         self.peer_fallbacks = {}
+        self.task_context = {}
+        self.federation_role = None
 
     def _bounded_history(self, key):
         limit = self.source.persistent_history_chars
@@ -88,8 +90,12 @@ class StageCoordinator:
         truncations = 0
         prefix = slot.rsplit("-a", 1)[0]
         for previous in range(attempt - 1, 0, -1):
-            old = next((r for r in self.records if r["request"]["slot"] == f"{prefix}-a{previous}"), None)
-            if old is None or not str(old["result"].get("error", "")).startswith("Output token limit reached"):
+            old = next(
+                (r for r in self.records if r["request"]["slot"] == f"{prefix}-a{previous}"), None
+            )
+            if old is None or not str(old["result"].get("error", "")).startswith(
+                "Output token limit reached"
+            ):
                 break
             truncations += 1
         request = {
@@ -112,7 +118,9 @@ class StageCoordinator:
         }
         path = self.calls_dir / f"{slot}.json"
         if hasattr(self.provider, "generation_options"):
-            request["generation_options"] = self.provider.generation_options(final_retry=final_retry, truncation_failures=truncations)
+            request["generation_options"] = self.provider.generation_options(
+                final_retry=final_retry, truncation_failures=truncations
+            )
             request["temperature"] = request["generation_options"].get("temperature", 0)
             request["consecutive_truncations"] = truncations
         try:
@@ -143,7 +151,11 @@ class StageCoordinator:
                 started = time.monotonic()
                 try:
                     chat = getattr(self.provider, "chat_for_retry", self.provider.chat)
-                    options = {"final_retry": final_retry} if hasattr(self.provider, "chat_for_retry") else {}
+                    options = (
+                        {"final_retry": final_retry}
+                        if hasattr(self.provider, "chat_for_retry")
+                        else {}
+                    )
                     if hasattr(self.provider, "generation_options"):
                         options["truncation_failures"] = truncations
                     response = chat(
@@ -157,7 +169,9 @@ class StageCoordinator:
                         "text": response.text,
                         "model_id": response.model_id,
                         "usage": response_usage(response.raw, time.monotonic() - started),
-                        "error": response.raw.get("adapter_error") if isinstance(response.raw, dict) else None,
+                        "error": response.raw.get("adapter_error")
+                        if isinstance(response.raw, dict)
+                        else None,
                     }
                 except Exception as exc:
                     result = {
@@ -181,12 +195,71 @@ class StageCoordinator:
         return ChatResponse(text=result["text"], model_id=result["model_id"])
 
     def _system(self, stage, role, drafts=None):
-        instructions = (
-            f"You are the {role} for the {stage} stage. "
-            f"Scientific role: {self.stages[stage].role}. {self.stages[stage].instructions}\n"
-            "Use the supplied scientific ledger and return the requested stage JSON form. "
+        context = research_brief(self.task_context)
+        if self.federation_role == "orchestrator":
+            instructions = (
+                "You are the federated research orchestrator. "
+                + context
+                + "You direct site teams working on partitions of one study dataset "
+                "and interpret their aggregate evidence toward this shared research goal. "
+                "You cannot access patient rows or private site files; do not request raw "
+                "records. Only your final form changes the shared ledger or requests "
+                "independent validation. All sites share at most 12 comparisons per iteration "
+                "and the displayed validation allowance; testing one comparison at all sites "
+                "uses one comparison request. Use controller-produced numerical summaries "
+                "for empirical claims. You may weigh replication and site disagreement "
+                "without requiring consensus across sites.\n" + f"Current stage: {stage}. "
+            )
+            if role == "planner":
+                instructions += (
+                    "The site teams have not yet acted in this stage. Set their scientific "
+                    "goal and directions using the Direction form. Only analyze may select "
+                    "up to 12 existing claims for testing at every site.\n"
+                )
+            else:
+                instructions += (
+                    "The site teams have returned recommendations. Integrate their proposals "
+                    "and the registered aggregate evidence; explain substantive disagreement. "
+                    + (
+                        "Confirm exactly the approved comparisons in run_analyses. Their new "
+                        "results become available in appraise after this stage commits. "
+                        "Any assessments now must use already registered evidence.\n"
+                        if stage == "analyze"
+                        else STAGE_INSTRUCTIONS[stage] + "\n"
+                    )
+                )
+        else:
+            scope = (
+                "You are a scientist on one federated site team. "
+                if self.federation_role == "site"
+                else "You are a research scientist. "
+            )
+            instructions = (
+                scope
+                + context
+                + (
+                    f"Current stage: {stage}. Your responsibility in this stage: {role}. "
+                    + (
+                        "Return the centrally approved_analyses unchanged in run_analyses. "
+                        "Trusted local execution follows your form; appraise will receive "
+                        "the registered results. Assess only already available evidence now."
+                        if self.federation_role == "site" and stage == "analyze"
+                        else STAGE_INSTRUCTIONS[stage]
+                    )
+                    + "\n"
+                )
+            )
+            if self.federation_role != "site":
+                instructions += (
+                    f"Scientific focus: {self.stages[stage].role}. "
+                    f"{self.stages[stage].instructions}\n"
+                )
+        instructions += (
+            "Use the current supplied ledger and return the requested JSON form. "
             "The controller executes analyses and maintains evidence and assessments. "
-            "Treat others' narratives as suggestions, not as new empirical evidence. "
+            "Treat participant narratives as suggestions, not as new empirical evidence. "
+            "Evidence fields may use only R references in the current ledger; omit evidence "
+            "to attach the claim's displayed evidence automatically.\n"
         )
         if role == "independent peer":
             instructions += (
@@ -195,6 +268,7 @@ class StageCoordinator:
             )
         elif role == "chair":
             instructions += (
+                "You are the chair selecting this stage's final form. "
                 "Review the drafts, resolve disagreements using the supplied evidence, and "
                 "return one complete stage form. Choose, revise, or combine proposals using "
                 "scientific judgment; do not count votes. Explain substantive disagreements "
@@ -216,6 +290,10 @@ class StageCoordinator:
         return ChatMessage(role="system", content=instructions)
 
     def respond(self, prompt, *, iteration, stage, attempt):
+        marker = prompt.find('{"schema":')
+        if marker >= 0:
+            payload, _ = json.JSONDecoder().raw_decode(prompt[marker:])
+            self.task_context = payload.get("task", {})
         key = f"i{iteration:03d}-{stage}"
         self.initial_prompts.setdefault(key, prompt)
         current = ChatMessage(role="user", content=prompt)
@@ -311,8 +389,14 @@ class StageCoordinator:
                                 "\nDraft format error: "
                                 + str(exc)
                                 + "\nReturn a corrected complete form. The ledger is unchanged."
-                                + " Return exactly one JSON object, without thinking tags or commentary outside JSON."
-                                + ("\nRejected response excerpt (untrusted):\n" + draft.text[-6000:] if draft else "")
+                                + " Return exactly one JSON object, without thinking tags "
+                                "or commentary outside JSON."
+                                + (
+                                    "\nRejected response excerpt (untrusted):\n"
+                                    + draft.text[-6000:]
+                                    if draft
+                                    else ""
+                                )
                             )
                     if form is None:
                         drafts.append(

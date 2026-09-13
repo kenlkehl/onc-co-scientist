@@ -267,8 +267,10 @@ def test_notebook_and_repair_context_commit_only_successful_responses(tmp_path):
         iterations=6,
     )
     assert not report["protocol_errors"]
-    assert all("FAILED NOTE MUST NOT PERSIST" not in p for p in scientist.prompts)
     contexts = [json.loads(p[p.index('{"schema":') :]) for p in scientist.prompts]
+    # A rejected response may be shown for repair, but never becomes notebook state.
+    assert all("FAILED NOTE MUST NOT PERSIST" not in c["research_notes"] for c in contexts)
+    assert all("FAILED NOTE MUST NOT PERSIST" not in p for p in scientist.prompts[2:])
     assert "repair" in contexts[1]
     assert "repair" not in contexts[2]
     assert all(
@@ -322,3 +324,26 @@ def test_compact_workflow_is_selected_by_package_for_every_provider(
     assert report["successful_stages"] == 24
     assert report["versions"]["prompt"] == "ledger-1.0.0"
     assert not report["protocol_errors"]
+
+
+def test_study_goal_and_stage_sequence_precede_large_ledger(controller):
+    prompt = build_prompt(
+        controller,
+        {
+            "instructions": "Use only the supplied study data.",
+            "outcomes": [{"name": "log_pfs_months", "units": "log(months)"}],
+        },
+        1,
+        6,
+        "analyze",
+        1,
+        {},
+        None,
+    )
+    intro = prompt[: prompt.index('{"schema":')]
+    assert "Research goal:" in intro
+    assert "log_pfs_months (log(months))" in intro
+    assert "explore (propose comparisons)" in intro
+    assert "Use only the supplied study data." in intro
+    assert "New results enter the ledger after this form is accepted" in intro
+    assert "assessed in appraise" in intro

@@ -15,7 +15,7 @@ from ..harness.durable_io import atomic_write_json
 from ..harness.experiment import WorkflowSpec
 from ..providers.base import ChatMessage
 from .coordination import StageCoordinator
-from .prompting import FORMS, SCIENTIFIC_GUIDANCE, references
+from .prompting import FORMS, SCIENTIFIC_GUIDANCE, STAGE_INSTRUCTIONS, direct_results, references
 from .research import json_response
 from .scoring import comparison_key
 from .site_statistics import (
@@ -35,19 +35,6 @@ class Direction(BaseModel):
     analyses: list[str] = Field(default_factory=list, max_length=12)
 
 
-CENTRAL = """You are the federated orchestrator pursuing one unified research goal. Direct the
-sites and interpret their aggregate evidence. You cannot access patient rows or private site
-files; never request raw records or row-level exports. Site narratives are proposals, not
-new evidence. Use only controller-produced numerical summaries for empirical claims.
-Choose how to weigh combined evidence, replication and site disagreement; no rule forces
-acceptance or consensus across sites. One shared budget applies to the entire federation:
-at most 12 distinct comparisons per iteration and the single displayed validation allowance.
-Each approved comparison is evaluated across all sites as one analysis request, not N requests.
-Only your final stage form changes the shared ledger. Sites can recommend validation; only
-you can spend the common validation allowance. The final independent evaluator is unchanged.
-"""
-
-
 class FederatedCoordinator:
     def __init__(
         self, provider, workflow, stages, source, budget, run_dir, cell, *, central_provider=None
@@ -64,6 +51,7 @@ class FederatedCoordinator:
             self.root / "calls" / "central",
             self.shared_budget,
         )
+        self.central.federation_role = "orchestrator"
         self.sites = {
             f"site_{i + 1}": StageCoordinator(
                 provider,
@@ -78,6 +66,7 @@ class FederatedCoordinator:
         }
         for coordinator in self.sites.values():
             coordinator.central_authority = False
+            coordinator.federation_role = "site"
         self.prepared = {}
         self.local_statistics = {}
         self.validation_summaries = {}
@@ -151,6 +140,7 @@ class FederatedCoordinator:
     def _direction(self, prompt, iteration, stage, attempt):
         marker = prompt.index('{"schema":')
         payload = json.loads(prompt[marker:])
+        self.central.task_context = payload["task"]
         payload["schema"] = Direction.model_json_schema()
         request = (
             "Before this stage, direct the sites. Return only the Direction JSON form below. "
@@ -166,7 +156,7 @@ class FederatedCoordinator:
         )
         response = self.central._call(
             f"i{iteration:03d}-{stage}-direction-a{attempt}",
-            [ChatMessage("system", CENTRAL), ChatMessage("user", request)],
+            [self.central._system(stage, "planner"), ChatMessage("user", request)],
             session="orchestrator",
             authoritative=False,
             iteration=iteration,
@@ -186,6 +176,40 @@ class FederatedCoordinator:
             raise ValueError("Only the analyze stage can direct analyses")
         return direction.model_dump()
 
+    def _committed_local_results(self, site):
+        hs, rs = references(self.controller)
+        reverse_r = {rid: ref for ref, rid in rs.items()}
+        summaries = {}
+        for claim, result in self.site_discovery[site].items():
+            h = self.controller.state["hypotheses"][hs[claim]]
+            refs = [
+                reverse_r[rid]
+                for rid in direct_results(self.controller, h)
+                if rid.startswith("analysis-")
+            ]
+            if refs:
+                summaries[claim] = {
+                    "shared_evidence": refs,
+                    **{k: v for k, v in result.items() if k not in {"id", "hypothesis_id"}},
+                }
+        return summaries
+
+    def _committed_validation_summaries(self):
+        _, rs = references(self.controller)
+        reverse_r = {rid: ref for ref, rid in rs.items()}
+        return {
+            reverse_r[rid]: {
+                "source": item["source"],
+                "sites": {
+                    site: {k: v for k, v in result.items() if k != "id"}
+                    for site, result in item["sites"].items()
+                },
+                "combined": {k: v for k, v in item["combined"].items() if k != "id"},
+            }
+            for rid, item in self.validation_summaries.items()
+            if rid in reverse_r
+        }
+
     def _site_prompt(self, prompt, site, direction, stage):
         marker = prompt.index('{"schema":')
         payload = json.loads(prompt[marker:])
@@ -197,9 +221,10 @@ class FederatedCoordinator:
             "goal": direction["goal"],
             "directions": direction["site_instructions"].get(site, ""),
             "approved_analyses": direction["analyses"],
-            "local_analyses": self.site_discovery[site],
+            "local_analyses": self._committed_local_results(site),
             "local_validation": {
-                key: value["sites"][site] for key, value in self.validation_summaries.items()
+                key: value["sites"][site]
+                for key, value in self._committed_validation_summaries().items()
             },
         }
         instructions = (
@@ -215,7 +240,14 @@ class FederatedCoordinator:
                 "Set run_analyses to exactly approved_analyses. "
                 "Trusted local execution follows your form. "
             )
-        return prompt[:marker] + instructions + "\n" + json.dumps(payload, separators=(",", ":"))
+        prefix = prompt[:marker]
+        if stage == "analyze":
+            prefix = prefix.replace(
+                STAGE_INSTRUCTIONS[stage],
+                "Record exactly the approved_analyses in run_analyses. "
+                "Their results will be available for assessment in appraise.",
+            )
+        return prefix + instructions + "\n" + json.dumps(payload, separators=(",", ":"))
 
     def respond(self, prompt, *, iteration, stage, attempt):
         key = f"i{iteration:03d}-{stage}"
@@ -288,35 +320,38 @@ class FederatedCoordinator:
                     )
             entry["handoffs"][site] = handoff
             atomic_write_json(self.root / "handoffs" / f"{key}-{site}.json", handoff)
-        combined = {}
+        # New numerical results cannot be assessed until controller.apply registers
+        # them. Keep this stage's computed handoffs in the audit, but expose only
+        # committed results to agents. Appraise sees the new R references and sites.
+        visible_handoffs = [
+            {**handoff, "analysis_results": self._committed_local_results(site)}
+            for site, handoff in entry["handoffs"].items()
+        ]
         if stage == "analyze":
-            hs, _ = references(self.controller)
-            for ref in entry["direction"]["analyses"]:
-                h = self.controller.state["hypotheses"][hs[ref]]
-                combined[ref] = public_result(
-                    self._analysis(
-                        None,
-                        h,
-                        delta=self.controller.outcomes[h.outcome].delta,
-                        alpha=0.05,
-                        result_id="analysis-"
-                        + hashlib.sha256(comparison_key(h).encode()).hexdigest()[:16],
-                    )
-                )
+            prompt = prompt.replace(
+                STAGE_INSTRUCTIONS[stage],
+                "Confirm the centrally approved comparisons in run_analyses. "
+                "Their new results will enter the ledger after this form commits; "
+                "assess them in appraise. Use only already registered evidence now.",
+                1,
+            )
         central_prompt = (
-            CENTRAL
-            + "\n"
-            + prompt
-            + "\nAll sites completed this stage. Their aggregate handoffs:\n"
-            + json.dumps(list(entry["handoffs"].values()))
-            + "\nCombined summaries computed from site sufficient statistics:\n"
-            + json.dumps(combined)
+            prompt + "\nAll sites completed this stage. Their recommendations and previously "
+            "committed local discovery summaries:\n"
+            + json.dumps(visible_handoffs)
             + "\nIndependent validation site summaries:\n"
-            + json.dumps(self.validation_summaries)
-            + "\nDecide how to integrate this evidence; explain site disagreement. "
+            + json.dumps(self._committed_validation_summaries())
+            + "\nUse the registered shared ledger for assessments. Explain site disagreement "
+            "using the committed site summaries. Their shared_evidence links and validation "
+            "summary keys identify the corresponding shared ledger R references. "
             "Return the ordinary stage form. "
-            "In analyze, run_analyses must exactly record the approved comparisons "
-            "already executed at the sites: " + json.dumps(entry["direction"]["analyses"])
+            + (
+                "New results are withheld until this form commits; assess them in appraise, "
+                "when they have registered R references. Confirm the approved comparisons "
+                "in run_analyses: " + json.dumps(entry["direction"]["analyses"])
+                if stage == "analyze"
+                else STAGE_INSTRUCTIONS[stage]
+            )
         )
         response = self.central.respond(
             central_prompt, iteration=iteration, stage=stage, attempt=attempt

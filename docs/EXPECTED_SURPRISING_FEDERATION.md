@@ -23,13 +23,22 @@ For N>1, every iteration follows exploration, analysis, appraisal, and synthesis
 1. A central orchestrator receives the common aggregate ledger and directs the sites. It may give site-specific scientific instructions. During analysis it selects up to 12 registered comparisons for evaluation across sites.
 2. Each site completes that stage using the grid's persistent, sequential, or deliberative workflow. Its model context includes its own aggregate data description, its own notebook/history, central directions, and the common aggregate evidence ledger. Deliberative sites use the configured peers and chair.
 3. The controller writes an aggregate handoff as each site finishes. Trusted local execution produces any directed numerical results. Site forms recommend hypotheses, assessments, and validation; they do not independently change the global registry or spend validation requests.
-4. After all sites finish the stage, the orchestrator receives their handoffs, site-level results, and combined numerical summaries. It produces the one authoritative stage form and explains how it integrates the evidence. This is a stage barrier, not a central review only at the end of the experiment.
+4. After all sites finish the stage, the orchestrator receives their recommendations and previously committed site summaries alongside the current shared ledger. It produces the one authoritative stage form. During analyze, newly computed results stay out of agent prompts until that form commits and the controller registers them. Appraise then receives the pooled results with valid `R` references and the matching local summaries. Local summaries include `shared_evidence` links; validation summaries are keyed by their shared `R` references. This preserves the same analyze → appraise evidence timing as N=1, including after a rejected central form or resumed run.
 
 The research goal is unified. All sites evaluate each selected comparison, making global comparison coverage stable and allowing repeated analyses to use the existing canonical cache. Site-specific instructions can prioritize explanations, subgroup hypotheses, alternative interpretations, and proposed next analyses. This implementation does not give sites independent analysis queues or allow a registered comparison's site coverage to change silently over time.
 
 The orchestrator decides whether pooled evidence, replication across sites, or site disagreement is persuasive. It is not required to vote, obtain site consensus, or apply a replication threshold. The combined numerical summary is a reference statistic, not an automatic acceptance rule. Final independent confirmation still evaluates claims about the unified population, so the benchmark remains comparable with N=1. B continues to measure agreement with the evaluator's interval rule rather than every possible scientific argument about heterogeneity.
 
 By default the central agent uses the same provider/model as the sites. `orchestrator_model_profile` may name another profile in `models`; it changes only the N>1 central deployment. Within a grid cell, every site uses the selected workflow mode. Mixed workflow assignments among sites are not an additional dimension of this implementation.
+
+
+### Prompt context and evidence timing (coordination 1.2.0)
+
+Each agent receives an explicit public research goal naming the study outcomes and units, a description of the four-stage research cycle, and its current responsibility. Study instructions precede the large schema and ledger payload. Central planning and integration calls identify the agent as the federated research orchestrator in the system message; site scientists, peers, and chairs retain their site scope. The generic standalone scientist role is not layered over the central role.
+
+This corrects a previous inconsistency: an analyze prompt could include freshly computed `analysis-…` results and ask the orchestrator to integrate them even though the controller allowed assessments to cite only pre-stage evidence. The new results now appear first in appraise, after registration. Pending numerical handoffs remain in the audit and are reused on repair, but are not presented as available evidence. Agents may omit an assessment's `evidence` field to attach its displayed evidence automatically.
+
+The September 12 initial batch retains its frozen source, journals, results, and original prompt behavior. These changes require a newly frozen experiment bundle; they must not be silently substituted into an existing run or interpreted as a repair of its historical results.
 
 ## Partitioning and data boundaries
 

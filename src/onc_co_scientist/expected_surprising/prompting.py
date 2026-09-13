@@ -123,13 +123,37 @@ STAGE_INSTRUCTIONS = {
     "explore": "Propose scientifically useful new comparisons or refinements for later analysis.",
     "analyze": "Select up to 12 existing claim references in run_analyses. "
     "This requests analyses now; "
-    "previously tested comparisons reuse their data and give no new sample.",
+    "previously tested comparisons reuse their data and give no new sample. "
+    "New results enter the ledger after this form is accepted and are assessed in appraise. "
+    "Any assessment in this form must use evidence already in the supplied ledger.",
     "appraise": "Assess the newly delivered discovery evidence. Optionally set validate to one "
     "eligible claim reference for independent validation; omit it for no request. "
     "The controller attaches the discovery result. Validation arrives after this stage.",
     "synthesize": "Assess new validation and any response deadlines listed below. Explain what you "
     "conclude and what to investigate next. Accepted claims update automatically.",
 }
+
+
+def research_brief(task_context):
+    """Describe the public scientific objective without private benchmark targets."""
+    outcomes = (
+        ", ".join(
+            f"{outcome['name']} ({outcome['units']})" if outcome.get("units") else outcome["name"]
+            for outcome in task_context.get("outcomes", [])
+        )
+        or "the outcomes described in the supplied study instructions"
+    )
+    return (
+        f"Research goal: investigate which measured predictors and subgroups are associated "
+        f"with scientifically meaningful differences in {outcomes}. "
+        "Use the supplied dataset to discover and follow up comparisons, assess effect sizes "
+        "and uncertainty, and decide which conclusions the evidence supports. "
+        "Use independent validation when useful and distinguish findings in this dataset "
+        "from claims about causality or generalizability.\n"
+        "Each iteration proceeds through explore (propose comparisons), analyze (request "
+        "tests), appraise (assess the resulting discovery evidence and optionally request "
+        "validation), and synthesize (assess validation and update conclusions and plans).\n"
+    )
 
 
 def schemas():
@@ -229,6 +253,10 @@ def build_prompt(controller, task_context, iteration, iterations, stage, attempt
         payload["repair"] = feedback
     return (
         f"Iteration {iteration}/{iterations}, stage {stage}, attempt {attempt}.\n"
+        + research_brief(task_context)
+        + "\nStudy instructions:\n"
+        + task_context.get("instructions", "")
+        + "\n\n"
         + COMMON
         + "\nYour action now: "
         + STAGE_INSTRUCTIONS[stage]

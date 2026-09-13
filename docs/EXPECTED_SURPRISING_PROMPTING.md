@@ -98,3 +98,9 @@ Exhausted-stage scoring is unchanged: such failures remain visible and can zero 
 Implementation: [prompt forms and translation](../src/onc_co_scientist/expected_surprising/prompting.py), [controller integration](../src/onc_co_scientist/expected_surprising/workflow.py), and [verification record](../benchmarks/expected_surprising/workflow_v3_2/README.md).
 
 The prompt builder runs in the common workflow before the provider call. All providers receive the same stage form and public ledger for a given state, including vLLM, Gemini/Vertex, Anthropic/Vertex, and Codex. Backend choice does not select a different scientific prompt.
+
+## Study context and roles (coordination 1.2.0)
+
+Prompts now lead with the public research objective, the outcome names and units, and the explore → analyze → appraise → synthesize sequence. Full study instructions appear before the schema and claim ledger. System instructions identify the scientist's concrete responsibility within that study, including the site or orchestrator scope for federation. The research brief uses only public task metadata, so masked predictors remain masked and private target discoveries are never inserted into the goal.
+
+Analyze requests tests; their new numerical results are registered after the selected form succeeds, then assessed in appraise. Any assessment made during analyze must use already registered evidence. See the [federation protocol](EXPECTED_SURPRISING_FEDERATION.md) for the corrected timing of pooled and local result disclosure.

@@ -335,3 +335,87 @@ def test_resume_mid_stage_and_central_repair_reuse_site_handoffs(tmp_path, monke
     root = Path(result["scientific_report"]).parent
     for site in ("central", "site_1", "site_2"):
         assert (root / "calls" / "requests" / site / "i001-analyze-agent-a1.json").exists()
+
+
+@pytest.mark.parametrize("mode", ["persistent", "deliberative"])
+def test_results_are_citable_when_first_shown_and_roles_have_study_context(
+    tmp_path, monkeypatch, mode
+):
+    """Regression: a rejected analyze form cannot see or guess its future R IDs."""
+    from onc_co_scientist.expected_surprising import experiment as integration
+
+    _, pairs, raw, path = config(tmp_path)
+    raw["federation"] = {"site_counts": [2]}
+    raw["workflows"] = [w for w in raw["workflows"] if w["mode"] == mode]
+    raw["budget"]["max_agent_calls"] = 240
+    path.write_text(yaml.safe_dump(raw))
+    grid = load_experiment_spec(path)
+
+    class LedgerReader(FederatedScientist):
+        def chat(self, messages, **kwargs):
+            response = super().chat(messages, **kwargs)
+            prompt = messages[-1].content
+            if (
+                "All sites completed this stage." in prompt
+                and "Iteration 1/6, stage analyze, attempt 1." in prompt
+            ):
+                form = json.loads(response.text)
+                form["run_analyses"] = []  # Force rollback and central repair.
+                response.text = json.dumps(form)
+            return response
+
+    made = providers(monkeypatch, pairs[0], LedgerReader)
+    result = integration.run_cell(
+        grid, build_run_plans(grid)[0], grid.output_root, grid.fingerprint(), resume=False
+    )
+    assert result["status"] == "completed", result.get("call_failures")
+    saw = set()
+    for messages, system in made[0].messages:
+        prompt = messages[-1]
+        payload, _ = json.JSONDecoder().raw_decode(prompt[prompt.index('{"schema":') :])
+        assert "Research goal:" in system
+        assert pairs[0].outcomes[0].name in system
+        assert "explore (propose comparisons)" in system
+        assert "scientist for the" not in system
+        if "Before this stage, direct the sites." in prompt:
+            assert system.startswith("You are the federated research orchestrator.")
+            assert "not yet acted" in system
+            saw.add("planner")
+            continue
+        # Task instructions are visible before the schema/large claim ledger.
+        assert prompt.index("Study instructions:") < prompt.index('{"schema":')
+        if "federation" in payload:
+            assert system.startswith("You are a scientist on one federated site team.")
+            assert "only the central orchestrator" in system.lower()
+            saw.add("site")
+            continue
+        assert system.startswith("You are the federated research orchestrator.")
+        assert "Test the candidate hypotheses" not in system
+        assert "You are the federated orchestrator" not in prompt
+        marker = "committed local discovery summaries:\n"
+        handoffs, _ = json.JSONDecoder().raw_decode(prompt.split(marker)[1])
+        if "Iteration 1/6, stage analyze," in prompt:
+            assert all(not h["evidence"] for h in payload["claims"])
+            assert all(not h["analysis_results"] for h in handoffs)
+            assert "Combined summaries computed" not in prompt
+            assert "assess them in appraise" in prompt
+            saw.add("analyze_retry" if "attempt 2." in prompt else "analyze")
+        if "Iteration 1/6, stage appraise," in prompt:
+            cards = {h["ref"]: h for h in payload["claims"]}
+            assert all(h["analysis_results"] for h in handoffs)
+            for handoff in handoffs:
+                for claim, local in handoff["analysis_results"].items():
+                    assert "id" not in local
+                    assert set(local["shared_evidence"]) <= {
+                        e["ref"] for e in cards[claim]["evidence"]
+                    }
+                    assert cards[claim]["evidence"]
+                    assert all(e["ref"].startswith("R") for e in cards[claim]["evidence"])
+            # Assessments using omitted evidence resolve to these displayed R IDs.
+            assert payload["assessments_due"]
+            saw.add("appraise")
+    assert saw == {"planner", "site", "analyze", "analyze_retry", "appraise"}
+    report = reports({"runs": [result]})[0]
+    assert report["coordination"]["scope_audits"]["site_1"]["agent_calls"] == (
+        72 if mode == "deliberative" else 24
+    )
