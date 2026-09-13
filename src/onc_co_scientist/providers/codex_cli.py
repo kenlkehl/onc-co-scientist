@@ -13,7 +13,7 @@ import signal
 import subprocess
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -67,8 +67,25 @@ class CodexCLIConfig:
     azure_request_interval_s: float = 10.0
     azure_rate_limit_base_s: float = 60.0
     azure_rate_limit_cap_s: float = 900.0
+    azure_max_inflight: int = 3
+    azure_response_idle_s: float = 180.0
+    azure_transport_retries: int = 5
+    azure_transport_retry_s: float = 2.0
 
     def __post_init__(self):
+        if (
+            type(self.azure_max_inflight) is not int
+            or not 1 <= self.azure_max_inflight <= 10
+            or type(self.azure_transport_retries) is not int
+            or not 0 <= self.azure_transport_retries <= 10
+            or not math.isfinite(self.azure_response_idle_s)
+            or self.azure_response_idle_s <= 0
+            or not math.isfinite(self.azure_transport_retry_s)
+            or not 0 <= self.azure_transport_retry_s <= 60
+        ):
+            raise ValueError(
+                "Azure recovery requires bounded concurrency, retries and positive idle time"
+            )
         if (
             type(self.azure_tokens_per_minute) is not int
             or self.azure_tokens_per_minute <= 0
@@ -116,6 +133,15 @@ class AzureRequestLease:
     def __init__(self, config, path, attempt_dir):
         self.config, self.path, self.attempt_dir = config, path, attempt_dir
         self.state = json.loads(path.read_text()) if path.exists() else {}
+        self.admitted_at = 0.0
+
+    @contextmanager
+    def locked(self):
+        # Only quota bookkeeping holds this mutex; neither inference nor waiting does.
+        with self.path.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self.state = json.loads(self.path.read_text()) if self.path.exists() else {}
+            yield
 
     def save(self):
         tmp = self.path.with_suffix(f".{os.getpid()}.tmp")
@@ -126,35 +152,37 @@ class AzureRequestLease:
         budget = max(1, int(self.config.azure_tokens_per_minute * 0.9))
         reservation = min(estimated_tokens, budget)
         while True:
-            now = time.time()
-            recent = [r for r in self.state.get("reservations", []) if r["at"] + 60 > now]
-            delay = max(
-                0,
-                self.state.get("cooldown_until", 0) - now,
-                self.state.get("next_request_at", 0) - now,
-            )
-            if sum(r["tokens"] for r in recent) + reservation > budget:
-                delay = max(delay, min(r["at"] + 60 for r in recent) - now)
-            if delay <= 0:
-                self.state.update(
-                    reservations=[*recent, dict(at=now, tokens=reservation)],
-                    next_request_at=now + self.config.azure_request_interval_s,
+            with self.locked():
+                now = time.time()
+                recent = [r for r in self.state.get("reservations", []) if r["at"] + 60 > now]
+                delay = max(
+                    0,
+                    self.state.get("cooldown_until", 0) - now,
+                    self.state.get("next_request_at", 0) - now,
                 )
-                self.save()
-                (self.attempt_dir / "pacing.json").write_text(
-                    json.dumps(
-                        dict(
-                            admitted_at=now,
-                            estimated_tokens=estimated_tokens,
-                            reserved_tokens=reservation,
-                            tokens_per_minute=self.config.azure_tokens_per_minute,
-                            single_request_over_estimated_budget=estimated_tokens > budget,
-                            state_path=str(self.path),
-                        ),
-                        indent=2,
+                if sum(r["tokens"] for r in recent) + reservation > budget:
+                    delay = max(delay, min(r["at"] + 60 for r in recent) - now)
+                if delay <= 0:
+                    self.state.update(
+                        reservations=[*recent, dict(at=now, tokens=reservation)],
+                        next_request_at=now + self.config.azure_request_interval_s,
                     )
-                )
-                return
+                    self.admitted_at = now
+                    self.save()
+                    (self.attempt_dir / "pacing.json").write_text(
+                        json.dumps(
+                            dict(
+                                admitted_at=now,
+                                estimated_tokens=estimated_tokens,
+                                reserved_tokens=reservation,
+                                tokens_per_minute=self.config.azure_tokens_per_minute,
+                                single_request_over_estimated_budget=estimated_tokens > budget,
+                                state_path=str(self.path),
+                            ),
+                            indent=2,
+                        )
+                    )
+                    return
             (self.attempt_dir / "pacing_wait.json").write_text(
                 json.dumps(
                     dict(
@@ -172,32 +200,35 @@ class AzureRequestLease:
             + "\n"
             + stderr
         ).lower()
-        count = self.state.get("consecutive_rate_limits", 0) + 1
-        delay = min(
-            self.config.azure_rate_limit_cap_s,
-            self.config.azure_rate_limit_base_s * 2 ** min(count - 1, 20),
-        )
-        delay = min(self.config.azure_rate_limit_cap_s, delay + random.uniform(0, delay * 0.1))
-        hints = [float(v) for v in re.findall(r"retry[ -]after[\s:=]+(\d+(?:\.\d+)?)", text)]
-        hints += [float(v) / 1000 for v in re.findall(r"retry-after-ms[\s:=]+(\d+)", text)]
-        delay = max([delay, *hints])
-        self.state.update(
-            consecutive_rate_limits=count,
-            cooldown_until=max(self.state.get("cooldown_until", 0), time.time() + delay),
-        )
-        self.save()
-        (self.attempt_dir / "rate_limit_retry.json").write_text(
-            json.dumps(
-                dict(
-                    reason="azure_rate_limit",
-                    shared_cooldown_until=self.state["cooldown_until"],
-                    cooldown_s=delay,
-                    consecutive_rate_limits=count,
-                    scientific_stage_retry_consumed=False,
-                ),
-                indent=2,
+        with self.locked():
+            count = self.state.get("consecutive_rate_limits", 0) + 1
+            delay = min(
+                self.config.azure_rate_limit_cap_s,
+                self.config.azure_rate_limit_base_s * 2 ** min(count - 1, 20),
             )
-        )
+            delay = min(self.config.azure_rate_limit_cap_s, delay + random.uniform(0, delay * 0.1))
+            hints = [float(v) for v in re.findall(r"retry[ -]after[\s:=]+(\d+(?:\.\d+)?)", text)]
+            hints += [float(v) / 1000 for v in re.findall(r"retry-after-ms[\s:=]+(\d+)", text)]
+            delay = max([delay, *hints])
+            self.state.update(
+                consecutive_rate_limits=count,
+                last_rate_limit_at=time.time(),
+                cooldown_until=max(self.state.get("cooldown_until", 0), time.time() + delay),
+            )
+            self.save()
+            (self.attempt_dir / "rate_limit_retry.json").write_text(
+                json.dumps(
+                    dict(
+                        reason="azure_rate_limit",
+                        shared_cooldown_until=self.state["cooldown_until"],
+                        cooldown_s=delay,
+                        consecutive_rate_limits=count,
+                        last_rate_limit_at=time.time(),
+                        scientific_stage_retry_consumed=False,
+                    ),
+                    indent=2,
+                )
+            )
 
     def output_reservation(self, max_tokens):
         # Admission estimate only: never changes the scientific output ceiling.
@@ -206,14 +237,16 @@ class AzureRequestLease:
         return min(max_tokens, max(self.config.azure_output_reserve_tokens, learned))
 
     def succeeded(self, usage=None):
-        self.state["consecutive_rate_limits"] = 0
-        output = (usage or {}).get("output_tokens")
-        if type(output) is int and output >= 0:
-            self.state["recent_output_tokens"] = [
-                *self.state.get("recent_output_tokens", []),
-                output,
-            ][-20:]
-        self.save()
+        with self.locked():
+            if self.admitted_at >= self.state.get("last_rate_limit_at", 0):
+                self.state["consecutive_rate_limits"] = 0
+            output = (usage or {}).get("output_tokens")
+            if type(output) is int and output >= 0:
+                self.state["recent_output_tokens"] = [
+                    *self.state.get("recent_output_tokens", []),
+                    output,
+                ][-20:]
+            self.save()
 
 
 class CodexCLIProvider:
@@ -278,6 +311,12 @@ class CodexCLIProvider:
                     "model_providers.ocs_azure.wire_api": "responses",
                     "model_providers.ocs_azure.env_key": "OCS_AZURE_ACCESS_TOKEN",
                     "model_providers.ocs_azure.requires_openai_auth": False,
+                    # The wrapper refreshes credentials and re-admits every retry.
+                    "model_providers.ocs_azure.request_max_retries": 0,
+                    "model_providers.ocs_azure.stream_max_retries": 0,
+                    "model_providers.ocs_azure.stream_idle_timeout_ms": max(
+                        1, int(self.config.azure_response_idle_s * 1000)
+                    ),
                 }
             )
         if self.config.service_tier is not None:
@@ -362,7 +401,7 @@ class CodexCLIProvider:
 
     @contextmanager
     def request_slot(self, attempt_dir, prompt, max_tokens):
-        """One request in flight per deployment, shared across threads AND processes."""
+        """Bound active requests separately from shared per-deployment quota bookkeeping."""
         if self.config.backend != "azure":
             yield None
             return
@@ -371,8 +410,29 @@ class CodexCLIProvider:
         key = hashlib.sha256(
             f"{self.config.azure_endpoint.rstrip('/')}|{self.model_id}".encode()
         ).hexdigest()
-        with (root / f"{key}.lock").open("a") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+        slot = None
+        while slot is None:
+            for i in range(self.config.azure_max_inflight):
+                candidate = (root / f"{key}.inflight-{i}.lock").open("a")
+                try:
+                    fcntl.flock(candidate, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    candidate.close()
+                else:
+                    slot = candidate
+                    break
+            if slot is None:
+                (attempt_dir / "pacing_wait.json").write_text(
+                    json.dumps(
+                        dict(
+                            updated_at=time.time(),
+                            reason="shared Azure concurrency limit",
+                            wait_s=0.5,
+                        )
+                    )
+                )
+                time.sleep(0.5)
+        try:
             lease = AzureRequestLease(self.config, root / f"{key}.json", attempt_dir)
             output_reserve = lease.output_reservation(max_tokens)
             estimate = math.ceil(len(prompt.encode()) / 3) + output_reserve + 8000
@@ -388,7 +448,16 @@ class CodexCLIProvider:
                     indent=2,
                 )
             )
+            (attempt_dir / "inflight.json").write_text(
+                json.dumps(
+                    dict(
+                        slot=i, max_inflight=self.config.azure_max_inflight, acquired_at=time.time()
+                    )
+                )
+            )
             yield lease
+        finally:
+            slot.close()  # Kernel also releases the slot on process death.
 
     @staticmethod
     def azure_rate_limit_failure(events, stderr):
@@ -414,6 +483,64 @@ class CodexCLIProvider:
             )
         )
 
+    @staticmethod
+    def azure_transport_failure(events, stderr):
+        errors = [e for e in events if e.get("type") in {"error", "turn.failed"}]
+        # Catalog refresh warnings alone are not inference failures.
+        transport_logs = "\n".join(
+            line for line in stderr.splitlines() if "responses_retry" in line
+        )
+        text = (json.dumps(errors) + "\n" + transport_logs).lower()
+        return bool(
+            re.search(
+                r"\b(?:408|500|502|503|504)\b|server had an error processing|"
+                r"stream disconnected|stream idle|request timed out|connection reset|"
+                r"error sending request|connection closed",
+                text,
+            )
+        )
+
+    def communicate(self, process, prompt, attempt_dir):
+        if self.config.backend != "azure":
+            process.communicate(prompt, timeout=self.config.timeout_s)
+            return
+        started = last_progress = time.monotonic()
+        offset = 0
+        pending = ""
+        sent = False
+        while True:
+            remaining = min(
+                self.config.timeout_s - (time.monotonic() - started),
+                self.config.azure_response_idle_s - (time.monotonic() - last_progress),
+            )
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(
+                    process.args if hasattr(process, "args") else "codex", 0
+                )
+            try:
+                process.communicate(None if sent else prompt, timeout=min(1.0, remaining))
+                return
+            except subprocess.TimeoutExpired:
+                sent = True
+                # CLI diagnostics and startup/reconnect messages are not model progress.
+                with (attempt_dir / "events.jsonl").open() as stream:
+                    stream.seek(offset)
+                    pending += stream.read()
+                    offset = stream.tell()
+                lines = pending.split("\n")
+                pending = lines.pop()
+                for line in lines:
+                    try:
+                        event = json.loads(line)
+                    except ValueError:
+                        continue
+                    item = event.get("item", {})
+                    if event.get("type") == "turn.completed" or (
+                        item.get("type") in {"agent_message", "reasoning"}
+                        and (item.get("text") or item.get("content"))
+                    ):
+                        last_progress = time.monotonic()
+
     def chat(self, messages: list[ChatMessage], *, temperature=0.0, max_tokens=125000, system=None):
         self.calls += 1
         call = self.root / f"call-{self.calls:04d}"
@@ -423,6 +550,7 @@ class CodexCLIProvider:
         attempt = 0
         auth_retries = 0
         rate_limit_retries = 0
+        transport_retries = 0
         while True:
             with self._quota_lock:
                 delay = max(0, self._quota_until - time.time())
@@ -444,6 +572,7 @@ class CodexCLIProvider:
             (attempt_dir / "command.json").write_text(json.dumps(command, indent=2))
             with self.request_slot(attempt_dir, prompt, max_tokens) as lease:
                 env = self.environment()
+                timed_out = False
                 with (
                     (attempt_dir / "events.jsonl").open("w") as stdout,
                     (attempt_dir / "stderr.log").open("w") as stderr,
@@ -459,16 +588,29 @@ class CodexCLIProvider:
                         start_new_session=True,
                     )
                     try:
-                        process.communicate(prompt, timeout=self.config.timeout_s)
+                        self.communicate(process, prompt, attempt_dir)
                     except subprocess.TimeoutExpired:
-                        os.killpg(process.pid, signal.SIGKILL)
+                        with suppress(ProcessLookupError):
+                            os.killpg(process.pid, signal.SIGKILL)
                         process.communicate()
-                        raise TimeoutError(
-                            f"Codex exceeded {self.config.timeout_s}s; see {attempt_dir}"
-                        ) from None
+                        if self.config.backend != "azure":
+                            raise TimeoutError(
+                                f"Codex exceeded {self.config.timeout_s}s; see {attempt_dir}"
+                            ) from None
+                        timed_out = True
                 raw = (attempt_dir / "events.jsonl").read_text()
                 errors = (attempt_dir / "stderr.log").read_text()
-                events = [json.loads(line) for line in raw.splitlines() if line.strip()]
+                events = []
+                lines = raw.splitlines()
+                for i, line in enumerate(lines):
+                    if not line.strip():
+                        continue
+                    try:
+                        events.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        # SIGKILL may interrupt the final event write; preserve raw audit bytes.
+                        if not timed_out or i != len(lines) - 1:
+                            raise
                 # Reconnect warnings are top-level errors too. Resolve the final
                 # turn state instead of discarding a later successful completion.
                 terminal = next(
@@ -482,7 +624,8 @@ class CodexCLIProvider:
                 )
                 completed = terminal.get("type") == "turn.completed" and process.returncode == 0
                 if (
-                    not completed
+                    not timed_out
+                    and not completed
                     and self.config.backend == "azure"
                     and self.azure_rate_limit_failure(events, errors)
                 ):
@@ -514,6 +657,37 @@ class CodexCLIProvider:
                             f"see {attempt_dir}"
                         )
                     auth_retries += 1
+                    time.sleep(delay)
+                    continue
+                if (
+                    self.config.backend == "azure"
+                    and not completed
+                    and (timed_out or self.azure_transport_failure(events, errors))
+                ):
+                    exhausted = transport_retries >= self.config.azure_transport_retries
+                    delay = min(30.0, self.config.azure_transport_retry_s * 2**transport_retries)
+                    (attempt_dir / "transport_retry.json").write_text(
+                        json.dumps(
+                            dict(
+                                reason="response_watchdog"
+                                if timed_out
+                                else "azure_transport_error",
+                                retry=not exhausted,
+                                retry_delay_s=0 if exhausted else delay,
+                                idle_limit_s=self.config.azure_response_idle_s,
+                                next_attempt_refreshes_token=not exhausted,
+                                scientific_stage_retry_consumed=False,
+                                interrupted_usage_unknown=timed_out,
+                            ),
+                            indent=2,
+                        )
+                    )
+                    if exhausted:
+                        raise RuntimeError(
+                            f"Azure transport failed after {transport_retries} retries; "
+                            f"see {attempt_dir}"
+                        )
+                    transport_retries += 1
                     time.sleep(delay)
                     continue
                 failure_text = (raw + "\n" + errors).lower()
@@ -568,6 +742,7 @@ class CodexCLIProvider:
                     "infrastructure_attempts": attempt,
                     "azure_auth_retries": auth_retries,
                     "azure_rate_limit_retries": rate_limit_retries,
+                    "azure_transport_retries": transport_retries,
                     "recovered_error_count": sum(e.get("type") == "error" for e in events),
                     "tool_items": 0,
                     "backend": self.config.backend,

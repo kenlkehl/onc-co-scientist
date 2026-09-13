@@ -108,7 +108,8 @@ from onc_co_scientist.providers.codex_cli import CodexCLIConfig, CodexCLIProvide
 root=Path(sys.argv[1]); name=sys.argv[2]
 p=CodexCLIProvider(CodexCLIConfig(model_id="test", backend="azure",
  azure_endpoint="https://example.openai.azure.com/openai/v1",
- audit_dir=str(root/name), azure_pacing_dir=str(root/"pacing"), azure_request_interval_s=0))
+ audit_dir=str(root/name), azure_pacing_dir=str(root/"pacing"),
+ azure_request_interval_s=0, azure_max_inflight=1))
 with p.request_slot(p.root, "prompt", 1):
  print("admitted", flush=True)
  sys.stdin.readline()
@@ -170,3 +171,166 @@ def test_adaptive_reserve_learns_large_outputs_and_keeps_scientific_ceiling(tmp_
 def test_invalid_output_reserve(tmp_path, value):
     with pytest.raises(ValueError):
         configuration(tmp_path, azure_output_reserve_tokens=value)
+
+
+def test_concurrent_lease_updates_do_not_erase_quota_or_cooldown(tmp_path, monkeypatch):
+    now = clock(monkeypatch)
+    cfg = configuration(tmp_path, azure_request_interval_s=0)
+    path = tmp_path / "state.json"
+    first = cli.AzureRequestLease(cfg, path, tmp_path)
+    first.admit(100)
+    now[0] += 1
+    second = cli.AzureRequestLease(cfg, path, tmp_path)
+    second.admit(200)
+    second.throttled([{"type": "error", "message": "429"}], "")
+    first.succeeded({"output_tokens": 77})
+    saved = json.loads(path.read_text())
+    assert len(saved["reservations"]) == 2
+    assert saved["consecutive_rate_limits"] == 1
+    assert saved["cooldown_until"] > now[0]
+    assert saved["recent_output_tokens"] == [77]
+
+
+def test_one_hung_request_does_not_block_other_slots_and_dead_owner_releases(tmp_path):
+    import select
+    import subprocess
+    import sys
+    import time
+
+    script = """
+import sys
+from pathlib import Path
+from onc_co_scientist.providers.codex_cli import CodexCLIConfig, CodexCLIProvider
+root=Path(sys.argv[1]); name=sys.argv[2]
+p=CodexCLIProvider(CodexCLIConfig(model_id="test", backend="azure",
+ azure_endpoint="https://example.openai.azure.com/openai/v1", azure_max_inflight=3,
+ audit_dir=str(root/name), azure_pacing_dir=str(root/"pacing"), azure_request_interval_s=0))
+with p.request_slot(p.root, "prompt", 1):
+ print("admitted", flush=True)
+ sys.stdin.readline()
+"""
+    processes = []
+    try:
+        for name in ("hung", "second", "third", "fourth"):
+            processes.append(
+                subprocess.Popen(
+                    [sys.executable, "-c", script, str(tmp_path), name],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+            )
+            if name != "fourth":
+                assert select.select([processes[-1].stdout], [], [], 10)[0]
+                assert processes[-1].stdout.readline().strip() == "admitted"
+        time.sleep(0.2)
+        assert not (tmp_path / "fourth/pacing.json").exists()
+        processes[0].kill()
+        processes[0].wait(timeout=5)
+        assert select.select([processes[-1].stdout], [], [], 10)[0]
+        assert processes[-1].stdout.readline().strip() == "admitted"
+        state = next((tmp_path / "pacing").glob("*.json"))
+        assert len(json.loads(state.read_text())["reservations"]) == 4
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+
+
+def test_server_failure_retries_identical_prompt_with_fresh_auth(tmp_path, monkeypatch):
+    calls = fake_cli(
+        monkeypatch,
+        [
+            dict(
+                returncode=1,
+                write_final=False,
+                events=[
+                    {
+                        "type": "turn.failed",
+                        "error": {"message": "The server had an error processing your request"},
+                    }
+                ],
+            ),
+            "ok",
+        ],
+    )
+    refreshes = []
+
+    def environment(self):
+        refreshes.append(1)
+        return {"OCS_AZURE_ACCESS_TOKEN": str(len(refreshes))}
+
+    monkeypatch.setattr(cli.CodexCLIProvider, "environment", environment)
+    p = cli.CodexCLIProvider(configuration(tmp_path, azure_transport_retry_s=0))
+    result = p.chat([ChatMessage("user", "unchanged")], max_tokens=125000)
+    assert len(calls) == len(refreshes) == 2
+    assert calls[0].prompt == calls[1].prompt == "unchanged"
+    assert result.raw["metrics"]["azure_transport_retries"] == 1
+    assert all(any("limit_tokens=125000" in arg for arg in c.command) for c in calls)
+    assert "model_providers.ocs_azure.stream_max_retries=0" in calls[0].command
+    receipt = json.loads((p.root / "call-0001/attempt-0001/transport_retry.json").read_text())
+    assert receipt["scientific_stage_retry_consumed"] is False
+
+
+def test_transport_retry_is_bounded_and_does_not_retry_task_text(tmp_path, monkeypatch):
+    event = {"type": "turn.failed", "error": {"message": "503 Service unavailable"}}
+    calls = fake_cli(monkeypatch, [dict(returncode=1, events=[event], write_final=False)] * 3)
+    monkeypatch.setattr(cli.CodexCLIProvider, "environment", lambda self: {})
+    p = cli.CodexCLIProvider(
+        configuration(tmp_path, azure_transport_retries=2, azure_transport_retry_s=0)
+    )
+    with pytest.raises(RuntimeError, match="after 2 retries"):
+        p.chat([ChatMessage("user", "same")])
+    assert len(calls) == 3
+    assert not cli.CodexCLIProvider.azure_transport_failure(
+        [{"type": "item.completed", "item": {"text": "503 stream disconnected"}}], ""
+    )
+    assert not cli.CodexCLIProvider.azure_transport_failure([], "models_manager: 503")
+
+
+@pytest.mark.parametrize("progress", [False, True])
+def test_watchdog_ignores_diagnostics_but_allows_model_progress(tmp_path, monkeypatch, progress):
+    import sys
+    import time
+
+    script = tmp_path / "codex-fixture"
+    script.write_text(f"""#!{sys.executable}
+import json,sys,time
+from pathlib import Path
+output=Path(sys.argv[sys.argv.index('--output-last-message')+1])
+prompt=sys.stdin.read()
+(output.parent/'received.txt').write_text(prompt)
+print(json.dumps({{"type":"turn.started"}}),flush=True)
+if output.parent.name=='attempt-0001':
+ for i in range(8):
+  item=({{"type":"reasoning","text":"working"}} if {progress!r}
+   else {{"type":"error","message":"heartbeat"}})
+  print(json.dumps({{"type":"item.completed","item":item}}),flush=True)
+  time.sleep(.08)
+output.write_text('{{"ok":true}}')
+print(json.dumps({{"type":"turn.completed","usage":{{"input_tokens":20,"output_tokens":5}}}}),flush=True)
+""")
+    script.chmod(0o700)
+    monkeypatch.setattr(cli.CodexCLIProvider, "environment", lambda self: {})
+    p = cli.CodexCLIProvider(
+        configuration(
+            tmp_path,
+            executable=str(script),
+            azure_response_idle_s=0.25,
+            azure_transport_retry_s=0,
+            azure_request_interval_s=0,
+        )
+    )
+    start = time.monotonic()
+    result = p.chat([ChatMessage("user", "exact original prompt")])
+    assert time.monotonic() - start < 5
+    assert result.raw["metrics"]["azure_transport_retries"] == (0 if progress else 1)
+    if not progress:
+        base = p.root / "call-0001"
+        assert (base / "attempt-0001/received.txt").read_text() == (
+            base / "attempt-0002/received.txt"
+        ).read_text()
+        receipt = json.loads((base / "attempt-0001/transport_retry.json").read_text())
+        assert receipt["reason"] == "response_watchdog"
+        assert receipt["interrupted_usage_unknown"]

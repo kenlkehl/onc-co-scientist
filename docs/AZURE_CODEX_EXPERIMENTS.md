@@ -98,16 +98,17 @@ control directory. Ambiguous dispatches and failed resume workers require inspec
 ## Shared throttling recovery
 
 The Sol, Terra and Luna Azure deployments each expose 333,000 tokens per minute.
-The transport serializes requests per endpoint/deployment across worker processes,
-reserves a conservative prompt estimate plus an adaptive output allowance against
+The transport allows up to three in-flight requests per endpoint/deployment across
+worker processes (`azure_max_inflight`), and reserves a prompt estimate plus an
+adaptive output allowance against
 90% of that rolling minute quota, and spaces admissions by at least ten seconds.
 The output allowance starts at 8,192 tokens and rises to 1.5 times the largest
 of the last 20 observed outputs plus 1,024 tokens when needed. It is capped at
 the request output ceiling. This admission estimate does not change the model's
 125,000-token scientific output budget. Successful usage observations are shared
 across worker processes for the same deployment.
-One oversized estimate is admitted alone; actual service throttling remains the
-final authority. These local limits cannot account for unrelated Azure clients.
+One oversized estimate consumes the entire rolling admission budget; actual service
+throttling remains the final authority. These local limits cannot account for unrelated Azure clients.
 
 Transient HTTP 429 responses stay inside the transport loop. The same scientific
 request is retried after a shared exponential cooldown (60 seconds up to 15 minutes,
@@ -126,3 +127,33 @@ original paths and SHA-256 checksums; a partial archive requires inspection befo
 retry. A new frozen transport bundle and explicit recovery marker preserve the
 initial personal-to-Azure cutover record. Retries replay from the archived boundary
 because later cached responses may depend on the original error.
+
+## Stalled-request recovery
+
+Quota accounting holds a short cross-process mutex; it is never held while waiting
+for model output or for the next quota window. Separate kernel-held slots cap
+concurrency and are released even when a worker dies. Successful old requests do
+not erase a cooldown or throttle streak created by a newer concurrent request.
+
+Azure requests have a 180-second model-progress watchdog (`azure_response_idle_s`).
+Startup events, reconnect notices and catalog refresh logs do not reset it; actual
+reasoning/message content does. The existing overall `timeout_s` remains a hard
+ceiling. On timeout, the owned CLI process group is killed and reaped before retry.
+The raw attempt audit is retained, including any partial event, and interrupted
+usage is marked unknown. This is a transport timeout, not a token limit; the
+scientific output ceiling and reasoning effort are unchanged.
+
+Transient inference/server failures and watchdog expirations get up to five retries
+(`azure_transport_retries`), with 2-second exponential backoff capped at 30 seconds
+(`azure_transport_retry_s`). Each retry uses the identical prompt, reacquires quota,
+and requests a current Entra token. CLI HTTP/stream retries are disabled so they
+cannot silently repeat requests using stale credentials or bypass local admission.
+The CLI stream idle timeout is also set, but the outer watchdog handles connections
+that keep delivering transport activity without model progress. Exhausted retries
+remain explicit errors; they never fall back to a personal account.
+
+Audit receipts `inflight.json` and `transport_retry.json` record slot use and retry
+causes; completed metrics add `azure_transport_retries`. Existing frozen experiment
+bundles retain their old code. Applying this recovery to a running bundle requires
+an explicitly authorized, separately frozen transport override and a checkpointed
+restart that replays its existing scientific call journals.
