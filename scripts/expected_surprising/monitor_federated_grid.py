@@ -7,6 +7,7 @@ import threading
 import time
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
+from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 
 
@@ -31,9 +32,58 @@ def receipt(path, cache, *, native=False):
         tokens=tokens or 0,
         unknown=tokens is None,
         errors=(value.get("status") == "failed" if native else bool(value.get("error"))),
+        input_tokens=usage.get("prompt_tokens" if native else "input_tokens") or 0,
+        input_unknown=usage.get("prompt_tokens" if native else "input_tokens") is None,
+        cost_unknown=1,
     )
     if not native or value.get("status") in {"completed", "failed"}:
         cache[path] = counts
+    return counts
+
+
+def provider_receipt(path, cache, rates):
+    """Read small provider receipts, never multi-megabyte scientific prompt journals."""
+    key = (path, json.dumps(rates, sort_keys=True))
+    if key in cache:
+        return cache[key]
+    data = read(path)
+    if data is None:
+        return Counter(calls=1, unknown=1, input_unknown=1, cost_unknown=1)
+    usage = data.get("cli_usage") or data.get("usage", {})
+    inp, out = usage.get("input_tokens"), usage.get("output_tokens")
+    cached, written = usage.get("cached_input_tokens"), usage.get("cache_write_input_tokens")
+    counts = Counter(
+        calls=1,
+        tokens=out or 0,
+        input_tokens=inp or 0,
+        cache_reads=cached or 0,
+        cache_writes=written or 0,
+        unknown=out is None,
+        input_unknown=inp is None,
+        infrastructure_retries=max(0, data.get("infrastructure_attempts", 1) - 1),
+    )
+    cost = data.get("cost_micro_usd")
+    if (
+        cost is None
+        and rates
+        and all(type(n) is int and n >= 0 for n in (inp, out, cached, written))
+        and cached + written <= inp
+    ):
+        tariff = rates["long" if inp > rates["short_context_tokens"] else "short"]
+        cost = int(
+            sum(
+                Decimal(str(tariff[k])) * n
+                for k, n in (
+                    ("input", inp - cached - written),
+                    ("cached", cached),
+                    ("write", written),
+                    ("output", out),
+                )
+            ).to_integral_value(rounding=ROUND_CEILING)
+        )
+    counts["cost_micro_usd"] = cost or 0
+    counts["cost_unknown"] = cost is None
+    cache[key] = counts
     return counts
 
 
@@ -49,6 +99,9 @@ def refresh(root, cache=None, *, audits=None, publish=True, audit_stamp=None):
         for condition in ("named", "masked")
     }
     policy = read(root / "release_policy.json", {})
+    spending = read(root / "control/cache_fix_v1/spend_policy.json", {})
+    spend_state = read(root / "control/cache_fix_v1/spend_state.json", {})
+    price_models = {v: k for k, v in spending.get("model_profiles", {}).items()}
     groups = defaultdict(Counter)
     for plan in read(root / "grid.json", []):
         key = (plan["model_profile"], plan["condition"], plan["site_count"])
@@ -59,11 +112,63 @@ def refresh(root, cache=None, *, audits=None, publish=True, audit_stamp=None):
             exists = run.is_dir()
         result = read(run / "run.json", {}) if exists else {}
         released = plan["model_profile"] in policy.get("released_models", [])
-        state = result.get("status") or ("running" if exists else "queued" if released else "held")
+        driver = read(root / "control" / plan["model_profile"] / "execution.json", {})
+        paused = driver.get("status") == "paused"
+        finished_state = next(
+            (
+                r.get("status")
+                for r in driver.get("finished", [])
+                if r["run_id"] == plan["run_id"] and r["condition"] == plan["condition"]
+            ),
+            None,
+        )
+        state = (
+            result.get("status")
+            or finished_state
+            or (
+                "paused"
+                if exists and (paused or not released)
+                else "running"
+                if exists
+                else "queued"
+                if released
+                else "held"
+            )
+        )
+        if (
+            not result.get("status")
+            and not finished_state
+            and released
+            and driver.get("status") == "running"
+            and "active" in driver
+        ):
+            state = (
+                "running"
+                if any(
+                    r["run_id"] == plan["run_id"] and r["condition"] == plan["condition"]
+                    for r in driver["active"]
+                )
+                else "queued"
+            )
         groups[key][state] += 1
         if exists and audits is None:
-            for path in (run / "calls").rglob("*.json"):
-                groups[key].update(receipt(path, cache))
+            provider_audits = [
+                p for p in (run / "provider_audit", run / "central_provider_audit") if p.is_dir()
+            ]
+            if provider_audits:
+                model_name = price_models.get(plan["model_profile"])
+                rates = spending.get("rates", {}).get(model_name)
+                for audit in provider_audits:
+                    # Mixed-model central providers require explicit per-receipt model pricing.
+                    audit_rates = rates if audit.name == "provider_audit" else None
+                    for call in audit.glob("call-*"):
+                        if call.is_dir():
+                            groups[key].update(
+                                provider_receipt(call / "metrics.json", cache, audit_rates)
+                            )
+            else:
+                for path in (run / "calls").rglob("*.json"):
+                    groups[key].update(receipt(path, cache))
     native = read(root / "biomni" / "plan.json")
     for plan in native or read(root / "biomni_reserved_plan.json", []):
         key = ("biomni_native", plan["condition"], plan["sites"])
@@ -78,7 +183,24 @@ def refresh(root, cache=None, *, audits=None, publish=True, audit_stamp=None):
             groups[key].update(audits.get(key, {}))
     if not publish:
         return {
-            key: Counter({name: values[name] for name in ("calls", "errors", "tokens", "unknown")})
+            key: Counter(
+                {
+                    name: values[name]
+                    for name in (
+                        "calls",
+                        "errors",
+                        "tokens",
+                        "unknown",
+                        "input_tokens",
+                        "input_unknown",
+                        "cache_reads",
+                        "cache_writes",
+                        "cost_micro_usd",
+                        "cost_unknown",
+                        "infrastructure_retries",
+                    )
+                }
+            )
             for key, values in groups.items()
         }
     totals = sum(groups.values(), Counter())
@@ -92,19 +214,26 @@ def refresh(root, cache=None, *, audits=None, publish=True, audit_stamp=None):
         "rounds/iterations.",
         "",
         f"**Running {totals['running']} · Queued {totals['queued']} · "
-        f"Completed {totals['completed']} · Failed {totals['failed']} · Held {totals['held']}**",
+        f"Completed {totals['completed']} · Failed {totals['failed']} · "
+        f"Paused {totals['paused']} · Held {totals['held']}**",
         "",
         "Refreshes every 30 seconds. Biomni and all unreleased models stay held. "
-        "Calls and observed output tokens include active runs, peers, central agents and retries. "
+        "Input, output, cache reads/writes and estimated cost include recorded provider receipts. "
         "Missing token receipts are counted separately. Native reporting rounds and controller "
         "iterations are different clocks.",
+        f"**Recorded cost estimate: ${totals['cost_micro_usd'] / 1_000_000:,.2f}** · "
+        f"Input {totals['input_tokens']:,} · Cache reads {totals['cache_reads']:,} · "
+        f"Cache writes {totals['cache_writes']:,} · "
+        f"Receipts with unknown cost {totals['cost_unknown']:,}. Not an Azure invoice; "
+        "unreported attempts can add charges.",
         "Usage scan: " + (audit_stamp or "initial scan pending; displayed usage is incomplete")
         if audits is not None
         else "Usage scan completed with this refresh.",
         "",
-        "| Model | View | Sites | Held | Queued | Active | Done | Failed | Calls | "
-        "Errors | Output tokens | Unknown usage |",
-        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Model | View | Sites | Held | Queued | Active | Paused | Done | Failed | Calls | "
+        "Errors | Output tokens | Unknown usage | Input tokens | Cache reads | Cache writes | "
+        "Cost USD | Unknown cost |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for (model, view, sites), c in sorted(groups.items()):
         values = [
@@ -113,17 +242,37 @@ def refresh(root, cache=None, *, audits=None, publish=True, audit_stamp=None):
                 "held",
                 "queued",
                 "running",
+                "paused",
                 "completed",
                 "failed",
                 "calls",
                 "errors",
                 "tokens",
                 "unknown",
+                "input_tokens",
+                "cache_reads",
+                "cache_writes",
             )
         ]
         lines.append(
-            f"| {model} | {view} | {sites} | " + " | ".join(f"{v:,}" for v in values) + " |"
+            f"| {model} | {view} | {sites} | "
+            + " | ".join(f"{v:,}" for v in values)
+            + f" | ${c['cost_micro_usd'] / 1_000_000:,.2f} | {c['cost_unknown']:,} |"
         )
+    if spending:
+        reserved = sum(
+            a["reserved_micro_usd"]
+            for a in spend_state.get("attempts", {}).values()
+            if a["status"] in {"reserved", "unknown"}
+        )
+        lines += [
+            "",
+            f"Additional budget: ${spending['additional_budget_usd']:,.2f}; "
+            f"settled ${spend_state.get('spent_micro_usd', 0) / 1_000_000:,.2f}; "
+            f"reserved/unknown ${reserved / 1_000_000:,.2f}. "
+            f"Gate: {'enabled' if spending.get('enabled') else 'held'}. "
+            f"{spend_state.get('hold_reason', '')}",
+        ]
     lines += [
         "",
         "[Grid documentation](README.md) · [Release policy](release_policy.json) · "
