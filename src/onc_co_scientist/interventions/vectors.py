@@ -103,6 +103,27 @@ class VectorBundle:
         )
         return path
 
+    def with_random_control(
+        self, *, source_concept="paradigm_orthogonalized", seed=20260913
+    ) -> VectorBundle:
+        """Add seeded, isotropic directions with the source norm at each layer."""
+        rng = np.random.default_rng(seed)
+        vectors = {c: {k: v.copy() for k, v in layers.items()}
+                   for c, layers in self.vectors.items()}
+        controls = {}
+        for layer in self.layers_for(source_concept):
+            source = self.vector(source_concept, layer)
+            random = rng.normal(size=source.shape)
+            controls[layer] = (random * np.linalg.norm(source) / np.linalg.norm(random)).astype(
+                np.float32
+            )
+        if not controls:
+            raise ValueError("Random control requires a nonempty source concept")
+        vectors["random_norm_matched"] = controls
+        return VectorBundle(vectors, {**self.metadata, "random_control": {
+            "seed": seed, "source_concept": source_concept, "distribution": "isotropic normal",
+        }})
+
     @classmethod
     def load(cls, path: Path) -> VectorBundle:
         loaded = np.load(path)

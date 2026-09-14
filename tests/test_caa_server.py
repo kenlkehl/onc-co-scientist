@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from onc_co_scientist.caa_server import (
     CAA_MODEL_ALIASES,
@@ -58,7 +59,7 @@ def test_inference_engine_passes_transformers_speed_knobs(monkeypatch, tmp_path)
 
     def fake_vector_load(path):
         calls["vector_file"] = path
-        return object()
+        return SimpleNamespace(vector=lambda *args: [0.0])
 
     def fake_model_load(model_path, **kwargs):
         calls["model_path"] = model_path
@@ -66,6 +67,7 @@ def test_inference_engine_passes_transformers_speed_knobs(monkeypatch, tmp_path)
         return object(), object()
 
     monkeypatch.setattr("onc_co_scientist.caa_server.VectorBundle.load", fake_vector_load)
+    monkeypatch.setattr(CAAInferenceEngine, "_manifest", lambda self: {"fingerprint": "fixture"})
     monkeypatch.setattr(
         "onc_co_scientist.interventions.caa.load_transformers_text_model",
         fake_model_load,

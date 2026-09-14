@@ -8,13 +8,15 @@ are intentionally importable in the normal test environment, while
 from __future__ import annotations
 
 import ast
+import hashlib
+import importlib.metadata
 import json
 import re
 import threading
 import time
 import uuid
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +89,29 @@ def make_caa_model_aliases(
 
 
 CAA_MODEL_ALIASES: dict[str, CaaModelAlias] = make_caa_model_aliases()
+
+
+def load_model_aliases(path: Path) -> dict[str, CaaModelAlias]:
+    """Load explicitly frozen arms, including held-out or random-vector controls."""
+    import math
+
+    aliases = {}
+    for item in json.loads(path.read_text()):
+        alias = CaaModelAlias(**item)
+        if alias.model_id in aliases or not alias.model_id or not alias.arm:
+            raise ValueError("CAA aliases need unique model IDs and nonempty arm names")
+        if alias.layer < 0 or alias.mode not in {"add", "ablate"}:
+            raise ValueError("Invalid CAA layer or mode")
+        if alias.scale is not None and not math.isfinite(alias.scale):
+            raise ValueError("CAA scales must be finite")
+        aliases[alias.model_id] = alias
+    if not aliases or not any(a.is_control for a in aliases.values()):
+        raise ValueError("CAA alias manifest must include an unsteered control")
+    return aliases
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 class UnknownModelError(ValueError):
@@ -368,14 +393,16 @@ def build_responses_payload(
                 ],
             }
         ]
+    truncated = getattr(generated_text, "finish_reason", None) == "length"
+    usage = getattr(generated_text, "usage", None)
     return {
         "id": response_id,
         "object": "response",
         "created_at": created,
-        "status": "completed",
+        "status": "incomplete" if truncated else "completed",
         "background": False,
         "error": None,
-        "incomplete_details": None,
+        "incomplete_details": {"reason": "max_output_tokens"} if truncated else None,
         "instructions": request_payload.get("instructions"),
         "max_output_tokens": _int_or_none(
             request_payload.get("max_output_tokens") or request_payload.get("max_tokens")
@@ -389,7 +416,11 @@ def build_responses_payload(
         "tools": request_payload.get("tools", []),
         "top_p": request_payload.get("top_p"),
         "truncation": request_payload.get("truncation", "disabled"),
-        "usage": None,
+        "usage": ({"input_tokens": usage["prompt_tokens"],
+                   "output_tokens": usage["completion_tokens"],
+                   "total_tokens": usage["total_tokens"]} if usage else None),
+        "caa_provenance": getattr(generated_text, "provenance", None),
+        "raw_generation": getattr(generated_text, "raw_text", str(generated_text)),
     }
 
 
@@ -552,9 +583,10 @@ def build_chat_completion_payload(
     alias = model_alias or resolve_model_alias(_as_text(request_payload.get("model")))
     tool_calls = parse_tool_calls(generated_text) if request_payload.get("tools") else []
     message: dict[str, Any] = {"role": "assistant"}
-    finish_reason = "stop"
+    finish_reason = getattr(generated_text, "finish_reason", "stop")
     if tool_calls:
-        finish_reason = "tool_calls"
+        if finish_reason != "length":
+            finish_reason = "tool_calls"
         message["content"] = None
         message["tool_calls"] = [
             {
@@ -581,7 +613,9 @@ def build_chat_completion_payload(
                 "finish_reason": finish_reason,
             }
         ],
-        "usage": None,
+        "usage": getattr(generated_text, "usage", None),
+        "caa_provenance": getattr(generated_text, "provenance", None),
+        "raw_generation": getattr(generated_text, "raw_text", str(generated_text)),
     }
 
 
@@ -865,6 +899,7 @@ class CAAInferenceEngine:
         self._generate_lock = threading.Lock()
         self._history_lock = threading.Lock()
         self._response_histories: dict[str, list[dict[str, Any]]] = {}
+        self.manifest: dict[str, Any] | None = None
 
     @property
     def loaded(self) -> bool:
@@ -888,6 +923,60 @@ class CAAInferenceEngine:
                 compile_forward=self.compile_forward,
                 compile_mode=self.compile_mode,
             )
+            for alias in self.aliases.values():
+                if not alias.is_control:
+                    self.vector_bundle.vector(alias.concept, alias.layer)
+            self.manifest = self._manifest()
+
+    def _manifest(self):
+        """Fingerprint checkpoint metadata, vectors, serving policy and implementation."""
+        from .interventions.vectors import metadata_path_for
+
+        snapshot = Path(self.model_path)
+        package = Path(__file__).parent
+        checkpoint_files = (
+            "config.json", "generation_config.json", "model.safetensors.index.json",
+            "tokenizer_config.json", "tokenizer.json", "chat_template.jinja",
+            "processor_config.json",
+        )
+        config = getattr(self.model, "config", None)
+        # Record the concrete weight files as well as configuration. For cached
+        # LFS blobs the resolved filename is a content-addressed SHA-256; stat
+        # identity also detects replacement of ordinary local checkpoint files.
+        weights = {p.name: {"resolved_path": str(p.resolve()),
+                            "bytes": p.stat().st_size, "mtime_ns": p.stat().st_mtime_ns}
+                   for p in sorted(snapshot.glob("*.safetensors"))}
+        manifest = {
+            "protocol": "caa-discovery-1",
+            "model_path": self.model_path,
+            "model_revision": getattr(config, "_commit_hash", None),
+            "checkpoint_weights": weights,
+            "weight_identity_method": "resolved cache blob name plus size/mtime; not rehashed",
+            "vector_derivation": self.vector_bundle.metadata if self.vector_bundle else None,
+            "checkpoint_files": {name: file_sha256(snapshot / name) for name in checkpoint_files
+                                 if (snapshot / name).is_file()},
+            "vector_sha256": file_sha256(self.vector_file),
+            "vector_metadata_sha256": file_sha256(metadata_path_for(self.vector_file)),
+            "aliases": [asdict(a) for a in self.aliases.values()],
+            "dtype": self.dtype, "device_map": self.device_map,
+            "resolved_device_map": {k: str(v) for k, v in
+                                    getattr(self.model, "hf_device_map", {}).items()},
+            "attention": self.attn_implementation, "cache": self.cache_implementation,
+            "compile_forward": self.compile_forward, "compile_mode": self.compile_mode,
+            "default_enable_thinking": self.enable_thinking,
+            "compact_agent_context": self.compact_agent_context,
+            "json_constraint": "none; shared stage prompts and controller validation",
+            "steering_scope": "decoder residual outputs; all prefill and generated positions",
+            "dependencies": {name: importlib.metadata.version(name)
+                             for name in ("torch", "transformers", "accelerate")},
+            "implementation": {name: file_sha256(package / name) for name in (
+                "caa_server.py", "interventions/caa.py", "interventions/vectors.py",
+            )},
+        }
+        manifest["fingerprint"] = hashlib.sha256(
+            json.dumps(manifest, sort_keys=True).encode()
+        ).hexdigest()
+        return manifest
 
     def generate_for_request(
         self,
@@ -896,6 +985,14 @@ class CAAInferenceEngine:
         chat_messages: bool = False,
     ) -> tuple[str, CaaModelAlias, list[dict[str, Any]]]:
         self.load()
+        expected = payload.get("caa_expected_fingerprint")
+        if expected and (self.manifest is None or expected != self.manifest["fingerprint"]):
+            raise ValueError("CAA serving fingerprint differs from the frozen experiment")
+        if payload.get("response_format", {}).get("type", "text") != "text":
+            raise ValueError(
+                "CAA Transformers does not implement constrained JSON decoding; "
+                "use the caa_openai provider with shared stage prompts and validation"
+            )
         alias = resolve_model_alias(_as_text(payload.get("model")), self.aliases)
         template_tools = normalize_tools_for_chat_template(payload.get("tools"))
         use_native_tools = False
@@ -922,6 +1019,11 @@ class CAAInferenceEngine:
         temperature = _float_or_default(payload.get("temperature"), 0.2)
         top_p = _float_or_default(payload.get("top_p"), 0.95)
         top_k = _int_or_none(payload.get("top_k")) or 64
+        thinking = payload.get("chat_template_kwargs", {}).get(
+            "enable_thinking", self.enable_thinking
+        )
+        if not isinstance(thinking, bool):
+            raise ValueError("enable_thinking must be boolean")
         assert self.processor is not None
         assert self.model is not None
         with self._generate_lock:
@@ -938,7 +1040,7 @@ class CAAInferenceEngine:
                     top_p=top_p,
                     top_k=top_k,
                     cache_implementation=self.cache_implementation,
-                    enable_thinking=self.enable_thinking,
+                    enable_thinking=thinking,
                 )
             else:
                 from .interventions.caa import generate_messages_with_vector
@@ -959,8 +1061,14 @@ class CAAInferenceEngine:
                     top_p=top_p,
                     top_k=top_k,
                     cache_implementation=self.cache_implementation,
-                    enable_thinking=self.enable_thinking,
+                    enable_thinking=thinking,
                 )
+        if hasattr(text, "provenance"):
+            text.provenance = {
+                "fingerprint": self.manifest["fingerprint"] if self.manifest else None,
+                "arm": asdict(alias), "enable_thinking": thinking,
+                "temperature": temperature, "top_p": top_p, "top_k": top_k,
+            }
         return text, alias, messages
 
     def remember_response(
@@ -1006,6 +1114,11 @@ def create_app(engine: CAAInferenceEngine, *, load_on_startup: bool = True):
     def models():
         return models_payload(engine.aliases)
 
+    @app.get("/v1/caa")
+    def caa_manifest():
+        engine.load()
+        return engine.manifest
+
     async def responses(request):
         payload = await request.json()
         try:
@@ -1021,6 +1134,8 @@ def create_app(engine: CAAInferenceEngine, *, load_on_startup: bool = True):
             engine.remember_response(response_payload["id"], generation_messages, response_payload)
         except UnknownModelError as exc:
             return JSONResponse(response_error(str(exc), status=404), status_code=404)
+        except ValueError as exc:
+            return JSONResponse(response_error(str(exc)), status_code=400)
         except Exception as exc:
             return JSONResponse(
                 response_error(str(exc), status=500, error_type="server_error"),
@@ -1050,6 +1165,8 @@ def create_app(engine: CAAInferenceEngine, *, load_on_startup: bool = True):
             )
         except UnknownModelError as exc:
             return JSONResponse(response_error(str(exc), status=404), status_code=404)
+        except ValueError as exc:
+            return JSONResponse(response_error(str(exc)), status_code=400)
         except Exception as exc:
             return JSONResponse(
                 response_error(str(exc), status=500, error_type="server_error"),
@@ -1089,6 +1206,7 @@ def serve(
     alias_prefix: str = DEFAULT_ALIAS_PREFIX,
     steering_layer: int = DEFAULT_CAA_LAYER,
     concept: str = DEFAULT_CAA_CONCEPT,
+    aliases_file: Path | None = None,
 ) -> None:
     """Run the local CAA OpenAI-compatible server."""
 
@@ -1115,7 +1233,7 @@ def serve(
         enable_thinking=enable_thinking,
         cache_dir=cache_dir,
         compact_agent_context=compact_agent_context,
-        aliases=make_caa_model_aliases(
+        aliases=load_model_aliases(aliases_file) if aliases_file else make_caa_model_aliases(
             alias_prefix=alias_prefix,
             layer=steering_layer,
             concept=concept,

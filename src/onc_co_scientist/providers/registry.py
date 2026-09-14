@@ -21,6 +21,10 @@ ProviderConfig = dict[str, Any]
 
 def get_provider(config: ProviderConfig) -> LLMProvider:
     kind = config.get("kind")
+    if kind == "caa_openai":
+        from .caa_openai import CAAConfig, CAAProvider
+
+        return CAAProvider(CAAConfig(**{k: v for k, v in config.items() if k != "kind"}))
     if kind == "codex_cli":
         return CodexCLIProvider(
             CodexCLIConfig(**{key: value for key, value in config.items() if key != "kind"})
@@ -51,5 +55,5 @@ def get_provider(config: ProviderConfig) -> LLMProvider:
         )
     raise ValueError(
         f"Unknown provider kind {kind!r}. "
-        "Supported: 'anthropic_vertex', 'vllm_openai', 'gemini_vertex', 'codex_cli'."
+        "Supported: 'anthropic_vertex', 'vllm_openai', 'caa_openai', 'gemini_vertex', 'codex_cli'."
     )

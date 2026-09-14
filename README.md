@@ -189,6 +189,10 @@ New task schemas require `proposed_hypotheses[].finding`. Old prose-only transcr
 
 ## Prototype: CAA paradigm-bias vectors
 
+For the September expected/surprising × masked/unmasked key-discovery experiment,
+see [CAA discovery integration](docs/CAA_DISCOVERY.md). The older commands below
+remain available for reproducing the historical prototype.
+
 Aim 2.2 now has a prototype under `ocs caa`. It derives residual-stream
 contrastive activation addition vectors from paired prompts, subtracts the
 oncology-knowledge component from the paradigm-adherence vector, and can run a

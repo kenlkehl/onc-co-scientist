@@ -1176,6 +1176,13 @@ def caa_derive(
             help="Pass Gemma thinking-mode preference through the chat template when supported.",
         ),
     ] = False,
+    add_generation_prompt: Annotated[
+        bool,
+        typer.Option(
+            "--add-generation-prompt/--no-generation-prompt",
+            help="Disable for assistant-response contrasts; retain for legacy prompt pairs.",
+        ),
+    ] = True,
 ) -> None:
     """Derive paradigm, knowledge, and orthogonalized CAA vectors."""
     from .interventions.caa import (
@@ -1205,9 +1212,12 @@ def caa_derive(
         layers=selected_layers,
         position=position,  # type: ignore[arg-type]
         enable_thinking=enable_thinking,
+        add_generation_prompt=add_generation_prompt,
     )
     bundle.metadata["requested_model"] = model_id
     bundle.metadata["pairs_path"] = str(pairs_path)
+    from .caa_server import file_sha256
+    bundle.metadata["pairs_file_sha256"] = file_sha256(pairs_path)
     bundle.save(out)
     console.print(
         f"[green]Wrote[/green] CAA vectors to {out}\n"
@@ -1337,6 +1347,11 @@ def caa_serve(
         str,
         typer.Option("--concept", help="Vector concept used by steered aliases."),
     ] = "paradigm_orthogonalized",
+    aliases_file: Annotated[
+        Path | None,
+        typer.Option("--aliases-file", exists=True, dir_okay=False,
+                     help="JSON arm definitions, including an unsteered control."),
+    ] = None,
 ) -> None:
     """Serve Gemma 31B CAA arms via OpenAI-compatible local endpoints."""
 
@@ -1362,6 +1377,7 @@ def caa_serve(
         alias_prefix=alias_prefix,
         steering_layer=steering_layer,
         concept=concept,
+        aliases_file=aliases_file,
     )
 
 

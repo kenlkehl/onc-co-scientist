@@ -9,7 +9,9 @@ it does not edit model weights on disk.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import inspect
+import json
 from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path
@@ -22,6 +24,27 @@ from .vectors import VectorBundle
 
 ActivationPosition = Literal["last", "mean"]
 SteeringMode = Literal["add", "ablate"]
+
+
+class GenerationOutput(str):
+    """Text-compatible result retaining the actual generated-token accounting."""
+
+    def __new__(cls, text, *, prompt_tokens, completion_tokens, finish_reason, raw_text):
+        result = super().__new__(cls, text)
+        result.prompt_tokens = prompt_tokens
+        result.completion_tokens = completion_tokens
+        result.finish_reason = finish_reason
+        result.raw_text = raw_text
+        result.provenance = None
+        return result
+
+    @property
+    def usage(self):
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.prompt_tokens + self.completion_tokens,
+        }
 
 
 def parse_layers(raw: str | None, *, n_layers: int) -> list[int]:
@@ -153,6 +176,7 @@ def derive_caa_vectors(
     layers: list[int],
     position: ActivationPosition = "last",
     enable_thinking: bool = False,
+    add_generation_prompt: bool = True,
 ) -> VectorBundle:
     """Derive mean positive-minus-negative activation vectors for each concept."""
 
@@ -170,6 +194,7 @@ def derive_caa_vectors(
             layers=layers,
             position=position,
             enable_thinking=enable_thinking,
+            add_generation_prompt=add_generation_prompt,
         )
         negative = collect_prompt_activations(
             pair.negative_messages,
@@ -178,6 +203,7 @@ def derive_caa_vectors(
             layers=layers,
             position=position,
             enable_thinking=enable_thinking,
+            add_generation_prompt=add_generation_prompt,
         )
         for layer in layers:
             accum[pair.concept][layer].append(positive[layer] - negative[layer])
@@ -194,6 +220,10 @@ def derive_caa_vectors(
         "layers": layers,
         "position": position,
         "enable_thinking": enable_thinking,
+        "add_generation_prompt": add_generation_prompt,
+        "pairs_sha256": hashlib.sha256(json.dumps(
+            [pair.to_json() for pair in pairs], sort_keys=True
+        ).encode()).hexdigest(),
         "pairs": [
             {
                 "pair_id": pair.pair_id,
@@ -214,6 +244,7 @@ def collect_prompt_activations(
     layers: list[int],
     position: ActivationPosition,
     enable_thinking: bool = False,
+    add_generation_prompt: bool = True,
 ) -> dict[int, np.ndarray]:
     """Run one prompt and return selected hidden-state activations by layer."""
 
@@ -221,7 +252,7 @@ def collect_prompt_activations(
     text = render_messages(
         processor,
         messages,
-        add_generation_prompt=True,
+        add_generation_prompt=add_generation_prompt,
         enable_thinking=enable_thinking,
     )
     inputs = tokenize_text(processor, text)
@@ -409,30 +440,53 @@ def _generate_messages(
     eos_token_id = _processor_token_id(processor, "eos_token_id")
     if pad_token_id is not None:
         kwargs["pad_token_id"] = pad_token_id
-    if eos_token_id is not None:
+    # Gemma has an end-of-turn stop ID in addition to the tokenizer EOS. Do not
+    # replace the checkpoint's multi-stop configuration with tokenizer.eos alone.
+    if eos_token_id is not None and not getattr(model.generation_config, "eos_token_id", None):
         kwargs["eos_token_id"] = eos_token_id
 
-    outputs = model.generate(**inputs, **kwargs)
+    torch = _import_torch()
+    with torch.inference_mode():
+        outputs = model.generate(**inputs, **kwargs)
 
     generated = outputs[0][input_len:]
     decoded = decode_tokens(processor, generated)
+    # Count reasoning and special tokens too; never infer usage from decoded text.
+    count = int(generated.shape[-1])
+    eos_ids = getattr(getattr(model, "generation_config", None), "eos_token_id", None)
+    eos_ids = eos_ids if isinstance(eos_ids, (list, tuple)) else [eos_ids]
+    if eos_token_id is not None:
+        eos_ids = [*eos_ids, eos_token_id]
+    stopped = bool(count and int(generated[-1]) in eos_ids)
+    reason = "length" if count >= max_new_tokens and not stopped else "stop"
+
+    def result(text):
+        return GenerationOutput(
+            text, prompt_tokens=input_len, completion_tokens=count,
+            finish_reason=reason, raw_text=decoded,
+        )
+
+    # A cut-off thought or JSON document must remain a length failure even if a
+    # response parser can salvage something that looks like a complete answer.
+    if reason == "length":
+        return result(decoded)
     parser = getattr(processor, "parse_response", None)
     if callable(parser):
         try:
             parsed = parser(decoded)
             if isinstance(parsed, str):
-                return parsed
+                return result(parsed)
             if isinstance(parsed, dict):
                 tool_calls = parsed.get("tool_calls")
                 if tool_calls:
-                    return json_dumps(parsed)
-                return str(parsed.get("content") or parsed.get("text") or parsed)
+                    return result(json_dumps(parsed))
+                return result(str(parsed.get("content") or parsed.get("text") or parsed))
             if isinstance(parsed, list):
-                return json_dumps(parsed)
-            return str(parsed)
+                return result(json_dumps(parsed))
+            return result(str(parsed))
         except Exception:
-            return decoded
-    return decoded
+            return result(decoded)
+    return result(decoded)
 
 
 class SteeringHooks:
@@ -514,7 +568,9 @@ def render_messages(
             "add_generation_prompt": add_generation_prompt,
         }
         signature = inspect.signature(template)
-        if "enable_thinking" in signature.parameters:
+        if "enable_thinking" in signature.parameters or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values()
+        ):
             kwargs["enable_thinking"] = enable_thinking
         if tools:
             try:
@@ -570,7 +626,8 @@ def json_dumps(value: Any) -> str:
 
 def tokenize_text(processor, text: str):
     if callable(processor):
-        return processor(text=text, return_tensors="pt")
+        # The rendered chat template already contains its BOS/turn delimiters.
+        return processor(text=text, return_tensors="pt", add_special_tokens=False)
     raise TypeError("Processor/tokenizer is not callable.")
 
 

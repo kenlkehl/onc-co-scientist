@@ -44,6 +44,7 @@ def validate_experiment(spec):
             raise ValueError("provider profiles do not use native-runtime or federated options")
         if config.get("kind") not in {
             "vllm_openai",
+            "caa_openai",
             "codex_cli",
             "gemini_vertex",
             "anthropic_vertex",
@@ -115,6 +116,8 @@ def implementation_hashes():
     paths.extend(
         package / "harness" / name for name in ("experiment.py", "orchestrator.py", "durable_io.py")
     )
+    paths.extend((package / "interventions").glob("*.py"))
+    paths.append(package / "caa_server.py")
     return {str(p.relative_to(package)): sha256(p) for p in sorted(paths)}
 
 
