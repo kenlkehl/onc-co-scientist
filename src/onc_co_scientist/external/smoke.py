@@ -81,6 +81,15 @@ def run_smoke(spec, *, full_length=False):
             .get("reasoning_content")
             for r in requests
         )
+        if spec.llm_backend == "azure":
+            # OpenAI does not expose raw reasoning; validate its usage accounting.
+            checks["thinking"] = any(
+                (r.get("response", {}).get("usage", {}).get("completion_tokens_details") or {}).get(
+                    "reasoning_tokens", 0
+                )
+                > 0
+                for r in requests
+            )
         checks["request_settings"] = bool(requests) and all(
             r["request"]["max_tokens"]
             == (
@@ -91,8 +100,13 @@ def run_smoke(spec, *, full_length=False):
                 if spec.completion_policy == "adaptive" and "prompt_token_count" in r
                 else spec.max_tokens
             )
-            and r["request"]["chat_template_kwargs"]
-            == {"enable_thinking": True, "reasoning_effort": "xhigh"}
+            and (
+                r["request"].get("chat_template_kwargs")
+                == {"enable_thinking": True, "reasoning_effort": spec.reasoning_effort}
+                if spec.llm_backend == "vllm"
+                else r["request"].get("reasoning_effort") == spec.reasoning_effort
+                and "chat_template_kwargs" not in r["request"]
+            )
             for r in requests
         )
         from .transport import without_reasoning
@@ -103,6 +117,15 @@ def run_smoke(spec, *, full_length=False):
             for m in r["request"]["messages"]
             if m.get("role") == "assistant"
         )
+        if spec.llm_backend == "azure" and spec.azure_native_protocol == "structured":
+            checks["native_command_protocol"] = any(
+                r.get("native_protocol") == "structured" for r in requests
+            ) and all(
+                r.get("native_protocol") == (
+                    "structured" if r["request"].get("_biomni_native_step") else "text"
+                )
+                for r in requests
+            )
         report = json.loads((root / "report.json").read_text())
         checks["validation_exchange"] = bool(report["responsiveness"]["events"])
         checks["deadline_assessments"] = any(

@@ -77,6 +77,22 @@ def model_request(spec, body):
         reasoning_effort=spec.reasoning_effort,
     )
     body.setdefault("temperature", spec.temperature)
+    if spec.llm_backend == "azure":
+        # Pinned A1's generate node prepends its system prompt. Its retriever and
+        # critic reuse the SAME LLM (including stops), but send no system message.
+        # Both conditions are needed to preserve those helpers' output contracts.
+        body.pop("_biomni_native_step", None)
+        if (
+            spec.azure_native_protocol == "structured"
+            and set(body.get("stop") or []) == {"</execute>", "</solution>"}
+            and body["messages"]
+            and body["messages"][0]["role"] == "system"
+        ):
+            body["_biomni_native_step"] = True
+        body.pop("chat_template_kwargs", None)
+        body.pop("temperature", None)
+        body.pop("stop", None)
+        return body
     body["chat_template_kwargs"] = {
         **body.get("chat_template_kwargs", {}),
         "enable_thinking": True,
@@ -86,7 +102,7 @@ def model_request(spec, body):
 
 
 def usage_summary(records):
-    known = [r.get("response", {}).get("usage") or {} for r in records]
+    known = [r.get("response", {}).get("usage") or r.get("provider_usage") or {} for r in records]
     details = [u.get("completion_tokens_details") or {} for u in known]
     complete = all("prompt_tokens" in u and "completion_tokens" in u for u in known)
     return {
@@ -173,6 +189,15 @@ class RunBroker:
             write_json(path, record)
         start = time.monotonic()
         try:
+            if self.spec.llm_backend == "azure":
+                from .azure import azure_complete
+
+                result = azure_complete(self.spec, body, record, path)
+                record.update(response=result, status="completed")
+                if result["choices"][0]["finish_reason"] == "length":
+                    self.fatal = "completion_length_exhausted"
+                    raise ValueError("Length-truncated output cannot be executed as complete code")
+                return copy.deepcopy(result)
             base = self.spec.base_url.removesuffix("/v1").rstrip("/")
             count = http_json(
                 base + "/tokenize",

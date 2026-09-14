@@ -28,7 +28,12 @@ class ExternalSpec(StrictModel):
     model: str = "Inferact/Qwen3.8-27B-NVFP4"
     base_url: str = "http://127.0.0.1:8000/v1"
     api_key_env: str | None = None
-    reasoning_effort: Literal["xhigh"] = "xhigh"
+    llm_backend: Literal["vllm", "azure"] = "vllm"
+    azure_api: Literal["responses", "chat_completions"] = "responses"
+    azure_native_protocol: Literal["text", "structured"] = "text"
+    reasoning_effort: Literal["low", "medium", "high", "xhigh", "max"] = "xhigh"
+    azure_cli_executable: str = "/usr/bin/az"
+    azure_pacing_dir: str = "/tmp/ocs-azure-pacing"
     max_tokens: int = Field(default=125000, ge=1)
     completion_policy: Literal["fixed", "adaptive"] = "fixed"
     context_guard_tokens: int = Field(default=256, ge=0)
@@ -45,6 +50,12 @@ class ExternalSpec(StrictModel):
 
     @model_validator(mode="after")
     def check_paths(self):
+        if self.llm_backend == "azure":
+            from ..providers.codex_cli import CodexCLIConfig
+
+            CodexCLIConfig(model_id=self.model, backend="azure", azure_endpoint=self.base_url)
+            if self.api_key_env or self.completion_policy != "fixed":
+                raise ValueError("Azure uses refreshed Entra tokens and a fixed output ceiling")
         if self.min_completion_tokens > self.max_tokens:
             raise ValueError("Minimum completion allowance exceeds the ceiling")
         if self.context_length <= self.max_tokens:

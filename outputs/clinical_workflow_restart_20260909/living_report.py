@@ -57,12 +57,15 @@ def tokens(folder,report):
 
 def update():
     groups=defaultdict(list)
+    expansion=VLLM/"control/gemma_8060_expansion"
+    paused_ids=set(read(expansion/"new_endpoint/selection.json")) if (expansion/"new_endpoint/pause.json").exists() else set()
     gemma_paused=VLLM.name=='20260910_vllm_repair' and (REPO/'outputs/qwen_generation_repair_20260910/gemma_pause.json').exists()
     qwen_paused=VLLM.name=='20260910_vllm_repair' and (REPO/'outputs/qwen_generation_repair_20260910/pause.json').exists()
     def inspect(p):
         rid=p['run_id'];root=VLLM if rid in vllm_ids else NEW if rid in selected else OLD;folder=root/'runs'/rid
         result,report=saved_report(folder)
         state=result['status'] if result else 'active' if folder.exists() else 'queued'
+        if rid in paused_ids and result is None:state="paused"
         if qwen_paused and p['model_profile']=='qwen_3_8_27b' and result is None:state='paused'
         if gemma_paused and p['model_profile']=='gemma_4_31b' and result is None:state='paused'
         return {'run_id':rid,'model':p['model_profile'],'workflow':p['workflow_id'],'version':p['semantic_condition'],'generation':'vllm_replacement' if rid in vllm_ids else 'replacement' if rid in selected else 'original','state':state,'folder':str(folder),'result':result,'report':report,'tokens':tokens(folder,report)}
@@ -76,6 +79,7 @@ def update():
     lines=['# Living clinical workflow report — September 9, 2026','',f'Updated **{stamp}**. The selected comparison contains **{finished}/360 finished runs** ({totals["completed"]} completed all stages; {totals["failed"]} finished with errors), **{totals["active"]} active**, and **{totals["queued"]} queued**, and **{totals["paused"]} paused**. **{replacement_finished}/104 Codex replacements have finished.**','',
     'This report follows the takeover of the six-model experiment. Each model has three workflows, two versions of the same clinical dataset, and ten separate runs per version: 20 runs per model/workflow. All models request medium reasoning and standard/default service. Each run has 25 iterations; the two-iteration rule is a deadline for reassessing evidence, not a limit on the run.', '',
     '## What changed','',
+    ('**The camus:8060 Gemma worker group is paused as requested at 8:55 AM Eastern September 11.** Its unfinished runs are marked paused below; saved results remain included.' if paused_ids else ''),'',
     ('**Qwen and Gemma batches are paused by user request.** Scheduled Codex monitoring is disabled. Generation settings are under review; saved results are preserved.' if gemma_paused else '**Qwen batch paused by user request.** Gemma continues unchanged; automatic Codex monitoring is disabled. Candidate Qwen sampling/JSON fixes are diagnostic only and have not been applied to this frozen batch.' if qwen_paused else ''),'',
     '- **104 Codex cells restart from the beginning:** 22 finished cells had native proof that the adapter discarded a completed response; 82 were still active or queued at the pause. Original traces remain saved. The 136 other finished Codex cells are retained, including four failures unrelated to this adapter defect. A replacement is chosen by its fixed run identity, never by whether its new score improves.',
     '- **Adapter:** a successful terminal completion after reconnect warnings is accepted, with its output tokens retained. Genuine terminal failures still fail. This fix is in the new frozen build; the old records are unchanged.',
@@ -154,7 +158,8 @@ def update():
     'These are preliminary results on one clinical dataset pair. They do not establish general model rankings or a causal benefit/harm of deliberation. Retained old-code runs and repaired-code runs must remain distinguishable in subsequent analyses.', '',
     '## Artifacts and progress logs','',
     f'- [Codex replacement progress log]({NEW}/control/progress.log)',
-    f'- [Fresh local-model progress log]({VLLM}/control/progress.log)',
+    f'- [Local-model continuation progress log]({VLLM}/control/gemma_8060_expansion/continuation/progress.log)',
+    f'- [Gemma camus:8060 progress log (paused)]({VLLM}/control/gemma_8060_expansion/new_endpoint/progress.log)',
     f'- [Combined progress log]({OUT}/progress.log)',
     f'- [Replacement selection and native evidence]({OUT}/selection_audit.json)',
     f'- [Pause-time snapshot]({OUT}/snapshot.json)',

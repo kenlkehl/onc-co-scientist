@@ -1,5 +1,7 @@
 # onc-co-scientist
 
+**Combined clinical results:** [Rerunnable tables and presentation figures](scripts/expected_surprising/presentation_results.md) unify the selected masked, unmasked, Claude, and Biomni runs. Run `python3 scripts/expected_surprising/build_presentation_results.py` to refresh `outputs/presentation_results/`.
+
 **Claude Opus 5 on Vertex:** [Setup and experiment commands](docs/CLAUDE_VERTEX.md) for named/masked recovery and expected/surprising workflow grids.
 
 **Native Biomni evaluation:** [setup, protocol, and scoring](docs/BIOMNI_NATIVE.md).

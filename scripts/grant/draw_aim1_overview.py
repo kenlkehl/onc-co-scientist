@@ -13,9 +13,9 @@ OUT = ROOT / "docs/figures"
 OUT.mkdir(parents=True, exist_ok=True)
 plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 9,
                      "svg.fonttype": "none", "pdf.fonttype": 42})
-fig, ax = plt.subplots(figsize=(7.5, 6.7))
+fig, ax = plt.subplots(figsize=(7.5, 7.2))
 fig.subplots_adjust(0, 0, 1, 1)
-ax.set(xlim=(0, 100), ylim=(-4, 100)); ax.axis("off")
+ax.set(xlim=(0, 100), ylim=(-4, 112)); ax.axis("off")
 ink, green, blue, orange = "#21312C", "#E2EED9", "#E4EDF4", "#FAE6D4"
 
 def box(x, y, w, h, title, body="", color="white", fontsize=8.3):
@@ -29,9 +29,9 @@ def arrow(start, end, rad=0):
     ax.add_patch(FancyArrowPatch(start,end,arrowstyle="-|>",mutation_scale=10,
                                connectionstyle=f"arc3,rad={rad}",color=ink,linewidth=1))
 
-ax.text(2,98,"Aim 1a. Generate datasets with known discoveries",weight="bold",va="top",fontsize=11)
-box(2,67,29,25,"Propose and review", color=green)
-box(36,67,28,25,"Specify the data\ngeneration process", color=green)
+ax.text(2,110,"Aim 1a. Generate datasets with known pre-specified\nscientific 'discoveries'",weight="bold",va="top",fontsize=11,linespacing=1.15)
+box(2,67,29,35,"Propose and review", color=green)
+box(34,67,32,35,"Specify the data\ngeneration process", color=green)
 
 
 def variable_icon(kind, x, y):
@@ -55,6 +55,19 @@ def variable_icon(kind, x, y):
     elif kind == "Outcomes":
         line([1, 1, 13], [13, 1, 1])
         line([3, 6, 9, 12], [4, 8, 6, 11])
+    elif kind == "Clinical":
+        drawing.add_artist(FancyBboxPatch((2, 1), 10, 12,
+                           boxstyle="round,pad=0,rounding_size=1",
+                           facecolor="white", edgecolor=ink, linewidth=1))
+        line([4, 10], [8, 8]); line([7, 7], [5, 11])
+        line([5, 9], [3, 3])
+    elif kind == "CellLine":
+        drawing.add_artist(Circle((7, 7), 5.5, facecolor="white", edgecolor=ink, linewidth=1))
+        drawing.add_artist(Circle((8, 8), 2, facecolor=green, edgecolor=ink, linewidth=.9))
+        line([3, 4], [6, 5]); line([8, 9], [3, 3.5])
+    elif kind == "Neutral":
+        drawing.add_artist(Circle((7, 7), 5.5, facecolor="white", edgecolor=ink, linewidth=1))
+        line([4, 10], [7, 7])
     elif kind == "Idea":
         drawing.add_artist(Circle((7, 9), 4, facecolor="white", edgecolor=ink, linewidth=1))
         line([5, 5, 9, 9], [5, 3, 3, 5])
@@ -103,26 +116,41 @@ def icon_label(kind, x, y, text, fontsize=7.5):
             color=ink, linespacing=1.25)
 
 
-icon_label("Idea", 5.2, 83.0, "LLM proposes hypotheses", 7.8)
-icon_label("Search", 5.2, 77.8, "Search and compare\nliterature", 7.8)
-icon_label("Refresh", 5.2, 72.2, "Replace unsupported\ncandidates", 7.8)
+icon_label("Idea", 5.2, 91.0, "LLM proposes hypotheses", 7.8)
+icon_label("Search", 5.2, 83.0, "Search and compare\nliterature", 7.8)
+icon_label("Refresh", 5.2, 75.0, "Replace unsupported\ncandidates", 7.8)
 
 
-for label, x, y in [("Exposures", 38.8, 82.1), ("Comparisons", 51.9, 82.1),
-                    ("Outcomes", 38.8, 77.7), ("Subgroups", 51.9, 77.7)]:
-    variable_icon(label, x, y)
-    ax.text(x+1.9, y, label, ha="left", va="center", fontsize=7.2, color=ink)
-ax.text(50, 73.6, "Clinical or cell-line covariates", ha="center", va="center",
+# Choose the dataset structure before specifying its comparisons.
+ax.text(50, 92.5, "Choose dataset structure", ha="center", va="center",
         fontsize=7.6, color=ink)
-ax.text(50, 70.4, "Six discoveries of three types:\nexpected · neutral · surprising",
-        ha="center", va="center", fontsize=7.6, color=ink, linespacing=1.25)
+ax.plot([50, 50], [91.1, 90.0], color=ink, linewidth=.9)
+for branch_x in [42, 58]:
+    ax.plot([50, branch_x], [90, 90], color=ink, linewidth=.9)
+    ax.add_patch(FancyArrowPatch((branch_x, 90), (branch_x, 88.3),
+                 arrowstyle="-|>", mutation_scale=7, color=ink,
+                 linewidth=.9, shrinkA=0, shrinkB=0))
+icon_label("Clinical", 38.5, 86.8, "Clinical", 7.5)
+icon_label("CellLine", 54.0, 86.8, "Cell-line", 7.5)
+ax.text(50, 86.8, "or", ha="center", va="center", fontsize=7.0, color=ink)
+ax.plot([42, 42, 58, 58], [84.8, 83.3, 83.3, 84.8], color=ink, linewidth=.9)
+ax.add_patch(FancyArrowPatch((50, 83.3), (50, 81.6), arrowstyle="-|>",
+             mutation_scale=7, color=ink, linewidth=.9, shrinkA=0, shrinkB=0))
+for label, x, y in [("Exposures", 37.2, 79.4), ("Comparisons", 53.0, 79.4),
+                    ("Outcomes", 37.2, 75.5), ("Subgroups", 53.0, 75.5)]:
+    icon_label(label, x, y, label, 7.2)
+ax.text(50, 72.0, "Embed six discoveries of three types", ha="center", va="center",
+        fontsize=7.0, color=ink)
+for kind, x, label in [("Agree", 36.1, "Expected"), ("Neutral", 46.8, "Neutral"),
+                       ("Oppose", 56.0, "Surprising")]:
+    icon_label(kind, x, 69.3, label, 6.8)
 
-box(69,67,29,25,"Select one discovery\nto reverse", color=green)
-icon_label("Comparisons", 71.8, 80.4,
+box(69,67,29,35,"For each dataset, select\none discovery to reverse", color=green)
+icon_label("Comparisons", 71.8, 88.5,
            "Change the association from\nagreeing with the literature\nto opposing it.", 7.2)
-icon_label("Subgroups", 71.8, 72.8,
+icon_label("Subgroups", 71.8, 76.5,
            "Reverse it overall, or within a\nsubgroup while the overall\nassociation remains expected.", 7.2)
-arrow((31.5,84),(35,84)); arrow((64.5,84),(68,84))
+arrow((31.5,91),(33.5,91)); arrow((66.5,91),(68.5,91))
 box(4,50,41,12,"Key discovery: expected", color=blue)
 icon_label("Agree", 7.5, 56.0, "Key direction agrees with literature", 7.5)
 icon_label("Discoveries", 7.5, 52.3, "3 expected · 2 neutral · 1 surprising discoveries", 7.0)
@@ -130,7 +158,10 @@ box(55,50,41,12,"Key discovery: surprising", color=orange)
 icon_label("Oppose", 58.5, 56.0, "Key direction opposes literature", 7.5)
 icon_label("Discoveries", 58.5, 52.3, "2 expected · 2 neutral · 2 surprising discoveries", 7.0)
 ax.plot([83.5,83.5,24.5], [66.5,64.5,64.5], color=ink, linewidth=1)
-arrow((24.5,64.5),(24.5,62.5)); arrow((75.5,64.5),(75.5,62.5))
+for branch_x in (24.5, 75.5):
+    ax.add_patch(FancyArrowPatch((branch_x, 64.5), (branch_x, 62.5),
+                               arrowstyle="-|>", mutation_scale=8,
+                               color=ink, linewidth=1, shrinkA=0, shrinkB=0))
 ax.text(50,47.1,"The other five discoveries, covariates, and random outcome noise remain fixed",ha="center",fontsize=8.2,color=ink)
 ax.text(50,44.3,"Calibrate statistical association strength across paired datasets",ha="center",weight="bold",fontsize=8.4)
 ax.plot([2,98],[41.7,41.7],color="#B9C2BD",linewidth=.8)

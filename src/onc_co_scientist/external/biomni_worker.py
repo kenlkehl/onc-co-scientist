@@ -125,19 +125,24 @@ def install_llm():
 
     def local_llm(model=None, temperature=None, stop_sequences=None, **kwargs):
         # Explicitly override even helper-specific default model/provider choices.
+        effort = CONFIG.get("reasoning_effort", "xhigh")
+        azure = CONFIG.get("llm_backend") == "azure"
         return ChatOpenAI(
             model=CONFIG["model"],
             base_url=default_config.base_url,
             api_key=CONFIG["secret"],
-            temperature=CONFIG["temperature"] if temperature is None else temperature,
+            temperature=None
+            if azure
+            else (CONFIG["temperature"] if temperature is None else temperature),
             max_tokens=CONFIG["max_tokens"],
             timeout=CONFIG["request_timeout"],
             max_retries=0,
             stop=stop_sequences,
-            reasoning_effort="xhigh",
-            extra_body={
-                "chat_template_kwargs": {"enable_thinking": True, "reasoning_effort": "xhigh"}
-            },
+            reasoning_effort=effort,
+            use_responses_api=False,
+            extra_body={}
+            if azure
+            else {"chat_template_kwargs": {"enable_thinking": True, "reasoning_effort": effort}},
         )
 
     original = biomni.llm.get_llm

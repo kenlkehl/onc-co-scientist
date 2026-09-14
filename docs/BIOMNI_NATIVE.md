@@ -227,3 +227,39 @@ in JSON, with scalar means and available-run denominators in Markdown. Missing
 metrics and unpriced local dollar cost remain null. The reports are uploaded to
 `gs://kehl-lab-caia/onc-co-scientist-data/reports/biomni-named-masked-20260910/`.
 No custom-harness result files were present in the supplied GCS directory.
+
+## Luna through Azure
+
+The native runner also supports `llm_backend: azure` with `model: gpt-5.6-luna`,
+`reasoning_effort: medium`, an HTTPS `/openai/v1` endpoint, and
+`azure_native_protocol: structured`. It reuses the existing Azure adapter's Entra
+token refresh and shared deployment admission; credentials remain in the broker.
+The source, runtime and full Biomni data lake are installed locally. This uses
+Biomni's A1 graph, resource retriever and persistent Python interpreter.
+
+Biomni's native text protocol normally stops on `</execute>` or `</solution>`.
+The initial Azure text transport omitted those stops, and Luna described imagined
+tool execution and finished without submitting Python. Switching from Responses to
+Chat Completions alone reproduced the failure. The structured protocol asks for
+one `{action, content}` object per command-generation turn and translates it to
+one native execute or solution message. Only visible response content is used;
+private reasoning is never interpreted as code. The native graph then executes
+the command and returns its actual observation on the next model call.
+
+The retriever and critic share A1's LLM object and its stop configuration. They
+retain their text contracts: only calls with A1's prepended system message and
+both native stop markers use the command schema. The scientific task, model,
+reasoning effort, request budget and evaluator protocol are unchanged. The
+transport instructions and schema are retained in each raw request audit and
+the protocol option participates in experiment fingerprints. Malformed,
+ambiguous, refused and truncated output never reaches native execution; known
+provider usage remains recorded even when the response is rejected.
+
+`scripts/expected_surprising/probe_biomni_azure.py` provides an excluded live
+diagnostic: two native executions must read an unpredictable public challenge,
+retain a Python variable, write a verified receipt, and return the observed
+nonce and sum. It uses an 8,192-token diagnostic ceiling and at most eight model
+calls. Formal runs retain the 125,000-token ceiling. The campaign supervisor
+requires four separate six-round integration pilots on fresh rows before
+admitting the 100 formal runs (four conditions × 25 replicates). Failed earlier
+attempts are kept in separate bundles and are excluded from formal results.

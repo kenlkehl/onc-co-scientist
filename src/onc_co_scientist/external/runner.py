@@ -232,6 +232,17 @@ def preflight(spec, *, live=True):
         ),
     }
     if live:
+        if spec.llm_backend == "azure":
+            from .azure import azure_provider
+
+            # Refresh without a scientific call; the excluded smoke verifies the model.
+            azure_provider(spec, spec.output_root / "azure_preflight").environment()
+            return {
+                **result,
+                "status": "azure_auth_passed",
+                "backend": "azure",
+                "endpoint": spec.base_url,
+            }
         key = os.environ[spec.api_key_env] if spec.api_key_env else "EMPTY"
         inventory = http_json(spec.base_url.rstrip("/") + "/models", key=key)
         found = next((m for m in inventory["data"] if m["id"] == spec.model), None)
@@ -357,6 +368,8 @@ def run_cell(spec, task, pair, policy, replicate, digest, *, resume=False, runne
             "model": spec.model,
             "max_tokens": spec.max_tokens,
             "temperature": spec.temperature,
+            "llm_backend": spec.llm_backend,
+            "reasoning_effort": spec.reasoning_effort,
             "request_timeout": spec.request_timeout,
             "tool_timeout": spec.tool_timeout,
             "prompt": task_prompt(spec.rounds, masked=masking is not None),
@@ -394,7 +407,15 @@ def run_cell(spec, task, pair, policy, replicate, digest, *, resume=False, runne
         harness="external-native",
         workflow_id="biomni-native",
         workflow_mode="external-native",
-        model_profile="biomni-qwen38-xhigh",
+        model_profile=(
+            "biomni-qwen38-xhigh"
+            if spec.llm_backend == "vllm"
+            else f"biomni-{spec.model}-{spec.reasoning_effort}"
+        ),
+        llm_backend=spec.llm_backend,
+        azure_api=spec.azure_api if spec.llm_backend == "azure" else None,
+        azure_native_protocol=spec.azure_native_protocol if spec.llm_backend == "azure" else None,
+        reasoning_effort=spec.reasoning_effort,
         resource_policy="full",
         clock="reporting_round",
         completed_rounds=gateway.state["completed_rounds"],
