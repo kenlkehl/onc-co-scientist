@@ -376,11 +376,8 @@ def required_agent_calls(
         calls_per_stage = workflow.agents_per_stage * workflow.deliberation_rounds + 1
     scientific_calls = spec.iteration_policy.iterations * len(spec.stages) * calls_per_stage
     if federation is not None and federation.sites > 1:
-        return (
-            spec.iteration_policy.iterations
-            * len(spec.stages)
-            * (federation.sites * calls_per_stage + 2)
-        )
+        # Sites and center each use the selected workflow; only the center commits.
+        return scientific_calls * (federation.sites + 1)
     if workflow.federated:
         scientific_calls *= len(task.site_workspaces)
         scientific_calls += 1  # one evaluator-blind central synthesis

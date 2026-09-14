@@ -210,23 +210,17 @@ class StageCoordinator:
                 "for empirical claims. You may weigh replication and site disagreement "
                 "without requiring consensus across sites.\n" + f"Current stage: {stage}. "
             )
-            if role == "planner":
+            instructions += (
+                "The site teams have returned recommendations. Integrate their proposals "
+                "and the registered aggregate evidence; explain substantive disagreement. "
+                + STAGE_INSTRUCTIONS[stage]
+                + "\n"
+            )
+            if stage == "analyze":
                 instructions += (
-                    "The site teams have not yet acted in this stage. Set their scientific "
-                    "goal and directions using the Direction form. Only analyze may select "
-                    "up to 12 existing claims for testing at every site.\n"
-                )
-            else:
-                instructions += (
-                    "The site teams have returned recommendations. Integrate their proposals "
-                    "and the registered aggregate evidence; explain substantive disagreement. "
-                    + (
-                        "Confirm exactly the approved comparisons in run_analyses. Their new "
-                        "results become available in appraise after this stage commits. "
-                        "Any assessments now must use already registered evidence.\n"
-                        if stage == "analyze"
-                        else STAGE_INSTRUCTIONS[stage] + "\n"
-                    )
+                    "Select the shared comparisons after considering site recommendations. "
+                    "Trusted execution tests each selected comparison at every site. "
+                    "Their registered results become available in appraise.\n"
                 )
         else:
             scope = (
@@ -240,9 +234,9 @@ class StageCoordinator:
                 + (
                     f"Current stage: {stage}. Your responsibility in this stage: {role}. "
                     + (
-                        "Return the centrally approved_analyses unchanged in run_analyses. "
-                        "Trusted local execution follows your form; appraise will receive "
-                        "the registered results. Assess only already available evidence now."
+                        "Recommend comparisons in run_analyses for the central team to select. "
+                        "Trusted execution then tests the selected set at every site; appraise "
+                        "will receive the registered results. Assess available evidence only."
                         if self.federation_role == "site" and stage == "analyze"
                         else STAGE_INSTRUCTIONS[stage]
                     )

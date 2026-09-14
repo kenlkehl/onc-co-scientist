@@ -27,6 +27,25 @@ def write(path, value):
     path.write_text(json.dumps(value, indent=2) + "\n")
 
 
+def balanced_selection(rows):
+    """Order a model's grid in complete matched four-condition review blocks."""
+    groups = {}
+    conditions = [(c, s) for c in ("named", "masked") for s in ("expected", "surprising")]
+    for row in rows:
+        key = (row["replicate"], row["workflow_id"], row["site_count"], row["partition_id"])
+        group = groups.setdefault(key, {})
+        condition = row["condition"], row["semantic_condition"]
+        if condition in group:
+            raise ValueError(f"Duplicate condition in review block: {key}, {condition}")
+        group[condition] = {"condition": row["condition"], "run_id": row["run_id"]}
+    selection = []
+    for key, group in sorted(groups.items()):
+        if set(group) != set(conditions):
+            raise ValueError(f"Incomplete four-condition review block: {key}")
+        selection.extend(group[condition] for condition in conditions)
+    return selection
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=Path, required=True)
@@ -60,7 +79,7 @@ def main():
         site_counts=[2, 4], seed=20260908, partitions=[dict(id="random", mode="random")]
     )
     # Existing single-site cap is 3x the largest healthy workflow. Preserve that margin.
-    raw["budget"]["max_agent_calls"] = 3 * 4 * 25 * (4 * 3 + 2)
+    raw["budget"]["max_agent_calls"] = 3 * 4 * 25 * ((4 + 1) * 3)
     raw["expected_surprising"].update(
         peer_failure_policy="chair_with_available", stage_failure_policy="retain_scientific_scores"
     )
@@ -90,7 +109,7 @@ def main():
         plans = json.loads((folder / "plan.json").read_text())
         assert len(plans) == 840
         for p in plans:
-            item = {"condition": condition, "run_id": p["run_id"]}
+            item = {"condition": condition, **p}
             selections[p["model_profile"]].append(item)
             all_rows.append({"condition": condition, **p})
         # Verify all four presentations use identical random memberships in each repeat.
@@ -109,22 +128,19 @@ def main():
                         assert partition_audits[key] == audit
                     partition_audits[key] = audit
     for model, rows in selections.items():
-        # Interleave named and masked, keeping each condition's seeded plan order.
-        named = [r for r in rows if r["condition"] == "named"]
-        masked = [r for r in rows if r["condition"] == "masked"]
         write(
             out / "selections" / f"{model}.json",
-            [r for pair in zip(named, masked, strict=True) for r in pair],
+            balanced_selection(rows),
         )
     write(out / "grid.json", all_rows)
     write(out / "partition_audit.json", partition_audits)
-    released = ["sol_medium", "terra_medium", "luna_medium"]
+    released = []
     write(
         out / "release_policy.json",
         dict(
             released_models=released,
             held_models=[m for m in selections if m not in released] + ["biomni_native"],
-            instruction="Only Sol/Terra/Luna released. Others require explicit user release.",
+            instruction="All models held for review. Release only on explicit user instruction.",
         ),
     )
     # Biomni is a native tool-execution harness, not a provider for the three controller workflows.
@@ -166,21 +182,22 @@ def main():
     )
     assert len(cells) == 168 and set(cells.values()) == {10}
     (out / "README.md").write_text(
-        "# Federated clinical grid — September 12, 2026\n\n"
+        "# Federated clinical grid\n\n"
         "2 and 4 randomly partitioned sites × named/masked × expected/surprising × "
         "persistent/sequential/deliberative × 10 repeats; 25 iterations. "
         "The prior single-site experiments are the controls. Central and sites use "
         "the same model.\n\n"
         "1,680 controller runs across Sol, Terra, Luna, Astra, Claude Opus 5, Qwen and Gemma. "
-        "Only the 720 Sol/Terra/Luna runs are released, with 10 workers per model (30 total). "
-        "All other models remain held until the user explicitly releases them.\n\n"
+        "All runs are held until the user explicitly releases them. Selections consist of "
+        "matched named/masked × expected/surprising blocks. Use --review-blocks to run a "
+        "bounded number of complete blocks and pause for review.\n\n"
         "Same frozen source datasets, medium reasoning, prior provider settings, "
         "125,000 output-token "
         "ceiling, 1,800-second call timeout, 12 shared analyses per iteration, and "
         "unchanged validation "
-        "policy. The shared agent-call cap is 4,200 (three times the largest healthy "
-        "1,400-call run), "
-        "including central directions/decisions, site peers/chairs, and retries.\n\n"
+        "policy. The shared agent-call cap is 4,500 (three times the largest healthy "
+        "1,500-call run), "
+        "including central/site peers/chairs and retries.\n\n"
         "Biomni: 80 native cells are reserved in biomni_reserved_plan.json. Its "
         "existing external-native "
         "harness does not implement federation. These cells require a native "
@@ -194,7 +211,8 @@ def main():
         "Resume uses the frozen source and verified call journals.\n\n"
         "Launch/resume one released model with:\n\n```bash\n"
         f"PYTHONPATH={out}/source/src /tmp/ocs-es-refactor-venv/bin/python "
-        f"{out}/source/run_federated_grid.py --root {out} --model sol_medium --workers 10\n"
+        f"{out}/source/run_federated_grid.py --root {out} --model sol_medium "
+        "--workers 4 --review-blocks 1\n"
         "```\n\nAppend `--resume` only for an existing execution. "
         "Do not use the generic matrix runner: it does not enforce the release gate.\n"
     )
@@ -210,11 +228,12 @@ def main():
             hashes=hashes,
             source_grids={c: str(p) for c, p in sources.items()},
             runs=len(all_rows),
-            released_runs=720,
+            released_runs=0,
+            selection_protocol="matched-four-condition-blocks-v1",
             reserved_biomni_runs=80,
         ),
     )
-    print(json.dumps(dict(root=str(out), runs=len(all_rows), released_runs=720, cells=len(cells))))
+    print(json.dumps(dict(root=str(out), runs=len(all_rows), released_runs=0, cells=len(cells))))
 
 
 if __name__ == "__main__":

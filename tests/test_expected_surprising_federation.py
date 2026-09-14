@@ -1,7 +1,7 @@
 """Federation boundary, shared-budget and N=1 equivalence checks."""
 
 import json
-import re
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -68,11 +68,13 @@ def test_partitions_disjoint_reproducible_and_heterogeneous():
         FederationGrid(site_counts=[0])
 
 
-def test_sufficient_statistics_reproduce_pooled_contrast_and_suppress_small_cells():
+@pytest.mark.parametrize("sites", [2, 4])
+@pytest.mark.parametrize("version", ["expected", "surprising"])
+def test_sufficient_statistics_reproduce_pooled_contrast_and_suppress_small_cells(sites, version):
     spec = pair()
-    frame = sample(spec, "expected", seed=123)
+    frame = sample(spec, version, seed=123)
     h = spec.discoveries[0].hypothesis
-    partitions, _ = partition_frame(frame, FederationCell(sites=2), spec.pair_id, "repeat")
+    partitions, _ = partition_frame(frame, FederationCell(sites=sites), spec.pair_id, "repeat")
     stats = [sufficient_statistics(part, h) for part in partitions.values()]
     kwargs = dict(delta=spec.outcomes[0].delta, alpha=0.05, result_id="test")
     combined = combine_statistics(stats, h, **kwargs)
@@ -100,33 +102,10 @@ class FederatedScientist(ScriptedScientist):
         marker = prompt.index('{"schema":', start)
         payload, _ = json.JSONDecoder().raw_decode(prompt[marker:])
         first = prompt[start : prompt.index("\n", start)]
-        stage = re.search(r"stage (\w+)", first)[1]
-        if "Before this stage, direct the sites." in prompt:
-            refs = (
-                [h["ref"] for h in payload["claims"]]
-                if stage == "analyze" and first.startswith("Iteration 1/")
-                else []
-            )
-            value = {
-                "goal": "One shared scientific goal",
-                "analyses": refs,
-                "site_instructions": {},
-            }
-            return ChatResponse(
-                text=json.dumps(value),
-                model_id=self.model_id,
-                raw={"usage": {"prompt_tokens": 20, "completion_tokens": 7}},
-            )
         response = super().chat(
             [ChatMessage("user", first + "\n" + json.dumps(payload, separators=(",", ":")))]
         )
-        # Site and central forms record precisely the currently directed comparisons.
         form = json.loads(response.text)
-        if stage == "analyze":
-            if "federation" in payload:
-                form["run_analyses"] = payload["federation"]["approved_analyses"]
-            elif "All sites completed this stage." in prompt:
-                form["run_analyses"] = json.loads(prompt.rsplit(": ", 1)[1])
         return ChatResponse(
             text=json.dumps(form),
             model_id=self.model_id,
@@ -136,17 +115,17 @@ class FederatedScientist(ScriptedScientist):
 
 def test_grid_n1_equivalence_stage_handoffs_tokens_and_shared_budget(tmp_path, monkeypatch):
     spec, pairs, raw, path = config(tmp_path, iterations=6)
-    raw["federation"] = {"site_counts": [1, 2]}
-    raw["budget"]["max_agent_calls"] = 200
+    raw["federation"] = {"site_counts": [1, 2, 4]}
+    raw["budget"]["max_agent_calls"] = 400
     path.write_text(yaml.safe_dump(raw))
     grid = load_experiment_spec(path)
-    assert len(build_run_plans(grid)) == 12
+    assert len(build_run_plans(grid)) == 18
     assert (
-        required_agent_calls(grid, grid.tasks[0], grid.workflows[2], FederationCell(sites=2)) == 192
+        required_agent_calls(grid, grid.tasks[0], grid.workflows[2], FederationCell(sites=2)) == 216
     )
     made = providers(monkeypatch, pairs[0], FederatedScientist)
     result = run_experiment(grid)
-    assert result["n_completed"] == 12, [
+    assert result["n_completed"] == 18, [
         (r["run_id"], r.get("error"), r.get("call_failures", [])[:1])
         for r in result["runs"]
         if r["status"] != "completed"
@@ -155,7 +134,7 @@ def test_grid_n1_equivalence_stage_handoffs_tokens_and_shared_budget(tmp_path, m
     for report in scientific:
         n = report["site_count"]
         per_stage = 3 if report["workflow_mode"] == "deliberative" else 1
-        expected_calls = 24 * (per_stage if n == 1 else n * per_stage + 2)
+        expected_calls = 24 * (per_stage if n == 1 else (n + 1) * per_stage)
         audit = report["coordination"]
         assert audit["agent_calls"] == expected_calls
         assert audit["usage"]["output_tokens"] > 0
@@ -164,7 +143,7 @@ def test_grid_n1_equivalence_stage_handoffs_tokens_and_shared_budget(tmp_path, m
         assert len(report["validation"]["cache"]) <= report["policy"]["voluntary_limit"] + len(
             report["policy"]["release_iterations"]
         )
-        if n == 2:
+        if n > 1:
             root = Path(
                 next(
                     r["scientific_report"]
@@ -172,8 +151,8 @@ def test_grid_n1_equivalence_stage_handoffs_tokens_and_shared_budget(tmp_path, m
                     if r["run_id"] == report["run_id"]
                 )
             ).parent
-            assert len(list((root / "handoffs").glob("*.json"))) == 48
-            assert set(audit["scope_audits"]) == {"central", "site_1", "site_2"}
+            assert len(list((root / "handoffs").glob("*.json"))) == 24 * n
+            assert set(audit["scope_audits"]) == {"central", *(f"site_{i + 1}" for i in range(n))}
             assert len(audit["committed_stages"]) == 24
             assert all((root / p).exists() for p in audit["participant_artifacts"])
             assert report["successful_stages"] == 24
@@ -182,8 +161,8 @@ def test_grid_n1_equivalence_stage_handoffs_tokens_and_shared_budget(tmp_path, m
         text = json.dumps(provider.messages)
         assert "patient_id" not in text and "membership_sha256" not in text
     summary = json.loads((grid.output_root / "expected_surprising_summary.json").read_text())
-    assert len(summary["conditions"]) == 6
-    assert len(summary["workflow_contrasts"]) == 4
+    assert len(summary["conditions"]) == 9
+    assert len(summary["workflow_contrasts"]) == 6
     assert all(c["run_n"] == 2 and c["output_tokens"] > 0 for c in summary["conditions"])
     # Explicit N=1 follows the same prompts, science and seed as a grid with federation omitted.
     baseline_dir = tmp_path / "baseline"
@@ -199,7 +178,7 @@ def test_grid_n1_equivalence_stage_handoffs_tokens_and_shared_budget(tmp_path, m
 def test_central_extra_queries_cannot_bypass_budget(tmp_path):
     from types import SimpleNamespace
 
-    from onc_co_scientist.expected_surprising.federation import Direction, FederatedCoordinator
+    from onc_co_scientist.expected_surprising.federation import FederatedCoordinator
     from onc_co_scientist.expected_surprising.schemas import ValidationPolicy
     from onc_co_scientist.expected_surprising.workflow import WorkflowController
     from onc_co_scientist.harness.experiment import ResourceBudget, WorkflowSpec, default_stages
@@ -223,13 +202,11 @@ def test_central_extra_queries_cannot_bypass_budget(tmp_path):
     federation.bind(controller, {"instructions": "test", "outcomes": [], "variables": {}})
     assert controller.frame.empty
     federation.active = "i001-analyze"
-    federation.prepared[federation.active] = {"direction": {"analyses": []}}
+    federation.prepared[federation.active] = {"analyses": []}
     with pytest.raises(ValueError, match="not sent to the sites"):
         controller.analysis_estimator(
             controller.frame, spec.discoveries[0].hypothesis, delta=0.1, alpha=0.05, result_id="x"
         )
-    with pytest.raises(ValueError):
-        Direction(analyses=[f"H{i}" for i in range(13)])
 
 
 def test_constant_variance_is_invalid_like_single_site():
@@ -307,17 +284,17 @@ def test_resume_mid_stage_and_central_repair_reuse_site_handoffs(tmp_path, monke
             response = super().chat(messages, **kwargs)
             prompt = messages[-1].content
             if (
-                "All sites completed this stage." in prompt
+                "Site consultation is complete." in prompt
                 and "Iteration 1/6, stage analyze, attempt 1." in prompt
             ):
                 value = json.loads(response.text)
-                value["run_analyses"] = []  # Central cannot omit executed site comparisons.
-                response.text = json.dumps(value)
+                value["run_analyses"] = ["H999"]  # Invalid reference forces central repair.
+                response = replace(response, text=json.dumps(value))
             return response
 
     class Interrupted(Repairing):
         def chat(self, messages, **kwargs):
-            if len(self.messages) == 8:
+            if len(self.messages) == 5:
                 raise KeyboardInterrupt("simulate interruption before central repair")
             return super().chat(messages, **kwargs)
 
@@ -327,8 +304,8 @@ def test_resume_mid_stage_and_central_repair_reuse_site_handoffs(tmp_path, monke
     made = providers(monkeypatch, pairs[0], Repairing)
     result = integration.run_cell(grid, plan, grid.output_root, grid.fingerprint(), resume=True)
     assert result["status"] == "completed", result.get("error")
-    assert result["agent_calls"] == 97
-    assert len(made[0].messages) == 89
+    assert result["agent_calls"] == 73
+    assert len(made[0].messages) == 68
     audit = reports({"runs": [result]})[0]["coordination"]
     assert audit["scope_audits"]["site_1"]["agent_calls"] == 24
     assert audit["scope_audits"]["site_2"]["agent_calls"] == 24
@@ -337,7 +314,7 @@ def test_resume_mid_stage_and_central_repair_reuse_site_handoffs(tmp_path, monke
         assert (root / "calls" / "requests" / site / "i001-analyze-agent-a1.json").exists()
 
 
-@pytest.mark.parametrize("mode", ["persistent", "deliberative"])
+@pytest.mark.parametrize("mode", ["persistent", "sequential", "deliberative"])
 def test_results_are_citable_when_first_shown_and_roles_have_study_context(
     tmp_path, monkeypatch, mode
 ):
@@ -347,7 +324,7 @@ def test_results_are_citable_when_first_shown_and_roles_have_study_context(
     _, pairs, raw, path = config(tmp_path)
     raw["federation"] = {"site_counts": [2]}
     raw["workflows"] = [w for w in raw["workflows"] if w["mode"] == mode]
-    raw["budget"]["max_agent_calls"] = 240
+    raw["budget"]["max_agent_calls"] = 280
     path.write_text(yaml.safe_dump(raw))
     grid = load_experiment_spec(path)
 
@@ -356,12 +333,12 @@ def test_results_are_citable_when_first_shown_and_roles_have_study_context(
             response = super().chat(messages, **kwargs)
             prompt = messages[-1].content
             if (
-                "All sites completed this stage." in prompt
+                "Site consultation is complete." in prompt
                 and "Iteration 1/6, stage analyze, attempt 1." in prompt
             ):
                 form = json.loads(response.text)
-                form["run_analyses"] = []  # Force rollback and central repair.
-                response.text = json.dumps(form)
+                form["run_analyses"] = ["H999"]  # Force rollback and central repair.
+                response = replace(response, text=json.dumps(form))
             return response
 
     made = providers(monkeypatch, pairs[0], LedgerReader)
@@ -377,11 +354,6 @@ def test_results_are_citable_when_first_shown_and_roles_have_study_context(
         assert pairs[0].outcomes[0].name in system
         assert "explore (propose comparisons)" in system
         assert "scientist for the" not in system
-        if "Before this stage, direct the sites." in prompt:
-            assert system.startswith("You are the federated research orchestrator.")
-            assert "not yet acted" in system
-            saw.add("planner")
-            continue
         # Task instructions are visible before the schema/large claim ledger.
         assert prompt.index("Study instructions:") < prompt.index('{"schema":')
         if "federation" in payload:
@@ -414,8 +386,105 @@ def test_results_are_citable_when_first_shown_and_roles_have_study_context(
             # Assessments using omitted evidence resolve to these displayed R IDs.
             assert payload["assessments_due"]
             saw.add("appraise")
-    assert saw == {"planner", "site", "analyze", "analyze_retry", "appraise"}
+    assert saw == {"site", "analyze", "analyze_retry", "appraise"}
     report = reports({"runs": [result]})[0]
     assert report["coordination"]["scope_audits"]["site_1"]["agent_calls"] == (
         72 if mode == "deliberative" else 24
     )
+
+
+@pytest.mark.parametrize("mode", ["persistent", "sequential", "deliberative"])
+@pytest.mark.parametrize("exhaust", [False, True])
+def test_site_reference_repairs_and_fallback_preserve_shared_science(tmp_path, mode, exhaust):
+    from types import SimpleNamespace
+
+    from onc_co_scientist.expected_surprising.federation import FederatedCoordinator
+    from onc_co_scientist.expected_surprising.prompting import build_prompt, translate
+    from onc_co_scientist.expected_surprising.schemas import ValidationPolicy
+    from onc_co_scientist.expected_surprising.workflow import WorkflowController
+    from onc_co_scientist.harness.experiment import ResourceBudget, WorkflowSpec, default_stages
+
+    spec = pair()
+    controller = WorkflowController(
+        spec,
+        "expected",
+        sample(spec, "expected", seed=123),
+        ValidationPolicy.default(spec.profile, 6),
+        "repeat",
+    )
+
+    class BadSite(FederatedScientist):
+        def chat(self, messages, **kwargs):
+            response = super().chat(messages, **kwargs)
+            prompt = messages[-1].content
+            payload, _ = json.JSONDecoder().raw_decode(prompt[prompt.index('{"schema":') :])
+            if payload.get("federation", {}).get("site") == "site_1":
+                form = json.loads(response.text)
+                if "stage analyze," in prompt:
+                    # Recommendations do not bind the center or reduce site data coverage.
+                    form["run_analyses"] = []
+                if "stage appraise," in prompt and (
+                    exhaust or "Repair the site form:" not in prompt
+                ):
+                    form["assessments"][0]["evidence"] = ["R999"]
+                response = replace(response, text=json.dumps(form))
+            return response
+
+    provider = BadSite(spec)
+    federation = FederatedCoordinator(
+        provider,
+        WorkflowSpec(id=mode, mode=mode, agents_per_stage=2 if mode == "deliberative" else 1),
+        default_stages(),
+        SimpleNamespace(
+            max_tokens_per_call=1000,
+            max_retries_per_stage=2,
+            persistent_history_chars=None,
+            peer_failure_policy="chair_with_available",
+        ),
+        ResourceBudget(max_agent_calls=100),
+        tmp_path,
+        FederationCell(sites=2),
+    )
+    context = {"instructions": "Investigate clinical outcomes", "variables": {}, "outcomes": []}
+    federation.bind(controller, context)
+    for stage in ("explore", "analyze", "appraise"):
+        prompt = build_prompt(controller, context, 1, 6, stage, 1, {}, None)
+        response = federation.respond(prompt, iteration=1, stage=stage, attempt=1)
+        record, _, _ = translate(controller, stage, 1, json.loads(response.text))
+        controller.apply(record)
+        federation.commit()
+    assert controller.frame.empty
+    assert len(controller.state["hypotheses"]) == len(spec.discoveries)
+    assert len([rid for rid in controller.state["results"] if rid.startswith("analysis-")]) == len(
+        spec.discoveries
+    )
+    assert len(controller.service.state["voluntary_keys"]) == 1
+    assert (
+        federation.site_discovery["site_1"]
+        == federation.prepared["i001-analyze"]["local_results"]["site_1"]
+    )
+    assert federation.site_discovery["site_1"]  # Included despite recommending no analyses.
+    assert len(federation.handoff_errors) == (3 if exhaust else 1)
+    handoff = federation.prepared["i001-appraise"]["handoffs"]["site_1"]
+    assert handoff["unavailable"] is exhaust
+    assert "R999" not in json.dumps(handoff)
+    # Only successfully selected site forms enter persistent memory.
+    assert len(federation.sites["site_1"].committed_stages) == (2 if exhaust else 3)
+    for coordinator in (federation.central, *federation.sites.values()):
+        assert coordinator.workflow.mode == mode
+        assert bool(coordinator.history) is (mode == "persistent")
+
+
+def test_handoff_storage_failure_is_infrastructure_not_a_scientific_retry(tmp_path, monkeypatch):
+    from onc_co_scientist.expected_surprising import federation as module
+    from onc_co_scientist.expected_surprising.workflow import WorkflowInfrastructureError
+
+    fed = object.__new__(module.FederatedCoordinator)
+    fed.root = tmp_path
+
+    def fail(*args):
+        raise OSError("unavailable storage")
+
+    monkeypatch.setattr(module, "atomic_write_json", fail)
+    with pytest.raises(WorkflowInfrastructureError, match="Handoff persistence failed"):
+        fed._write_handoff("i001-analyze", "site_1", {})

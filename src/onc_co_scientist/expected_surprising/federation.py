@@ -1,21 +1,16 @@
 """Stage-wise hub-and-spoke science using a single authoritative budget and ledger.
 
 The LLM orchestrator never receives rows. Site LLMs receive only their own aggregate
-context, the shared aggregate ledger, and central directions. Trusted Python executes
+context and the shared aggregate ledger. Trusted Python executes
 all site queries; only the central selected form changes the common scientific record.
 """
 
-import hashlib
 import json
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
-
-from ..harness.durable_io import atomic_write_json
-from ..harness.experiment import WorkflowSpec
-from ..providers.base import ChatMessage
+from ..harness.durable_io import StorageUnavailable, atomic_write_json
 from .coordination import StageCoordinator
-from .prompting import FORMS, SCIENTIFIC_GUIDANCE, STAGE_INSTRUCTIONS, direct_results, references
+from .prompting import STAGE_INSTRUCTIONS, direct_results, references, repair_message, translate
 from .research import json_response
 from .scoring import comparison_key
 from .site_statistics import (
@@ -28,13 +23,6 @@ from .site_statistics import (
 from .workflow import WorkflowInfrastructureError
 
 
-class Direction(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    goal: str = ""
-    site_instructions: dict[str, str] = Field(default_factory=dict)
-    analyses: list[str] = Field(default_factory=list, max_length=12)
-
-
 class FederatedCoordinator:
     def __init__(
         self, provider, workflow, stages, source, budget, run_dir, cell, *, central_provider=None
@@ -44,7 +32,7 @@ class FederatedCoordinator:
         self.shared_budget = {"calls": 0}
         self.central = StageCoordinator(
             central_provider or provider,
-            WorkflowSpec(id="orchestrator", mode="persistent"),
+            workflow,
             stages,
             source,
             budget,
@@ -74,6 +62,14 @@ class FederatedCoordinator:
         self.site_discovery = {site: {} for site in self.sites}
         self.handoff_errors = []
         self.active = None
+
+    def _write_handoff(self, key, site, handoff):
+        try:
+            atomic_write_json(self.root / "handoffs" / f"{key}-{site}.json", handoff)
+        except (OSError, StorageUnavailable) as error:
+            raise WorkflowInfrastructureError(
+                f"Handoff persistence failed: {key}/{site}"
+            ) from error
 
     def bind(self, controller, task_context):
         self.controller = controller
@@ -116,10 +112,16 @@ class FederatedCoordinator:
 
     def _analysis(self, _frame, hypothesis, **kwargs):
         hs, _ = references(self.controller)
-        allowed = self.prepared[self.active]["direction"]["analyses"]
+        allowed = self.prepared[self.active]["analyses"]
         if hypothesis.id not in {hs[ref] for ref in allowed}:
             raise ValueError("The orchestrator cannot execute an analysis not sent to the sites")
-        return combine_statistics(list(self._stats(hypothesis).values()), hypothesis, **kwargs)
+        statistics = self._stats(hypothesis)
+        ref = next(ref for ref, hid in hs.items() if hid == hypothesis.id)
+        for site, stats in statistics.items():
+            self.prepared[self.active]["local_results"][site][ref] = public_result(
+                combine_statistics([stats], hypothesis, **kwargs)
+            )
+        return combine_statistics(list(statistics.values()), hypothesis, **kwargs)
 
     def _validation(self, frame, hypothesis, **kwargs):
         parts, _ = partition_frame(
@@ -136,45 +138,6 @@ class FederatedCoordinator:
             "combined": public_result(result),
         }
         return result
-
-    def _direction(self, prompt, iteration, stage, attempt):
-        marker = prompt.index('{"schema":')
-        payload = json.loads(prompt[marker:])
-        self.central.task_context = payload["task"]
-        payload["schema"] = Direction.model_json_schema()
-        request = (
-            "Before this stage, direct the sites. Return only the Direction JSON form below. "
-            "Use site_instructions for optional site-specific scientific directions. "
-            "Only analyze may set analyses: choose existing H references, at most 12. "
-            "All sites evaluate each selected comparison so coverage is comparable. "
-            "Other stages must return analyses=[]. This planning call does not change the ledger.\n"
-            + prompt.splitlines()[0]
-            + "\n"
-            + SCIENTIFIC_GUIDANCE
-            + "\n"
-            + json.dumps(payload, separators=(",", ":"))
-        )
-        response = self.central._call(
-            f"i{iteration:03d}-{stage}-direction-a{attempt}",
-            [self.central._system(stage, "planner"), ChatMessage("user", request)],
-            session="orchestrator",
-            authoritative=False,
-            iteration=iteration,
-            stage=stage,
-            kind="direction",
-        )
-        direction = Direction.model_validate(json_response(response.text))
-        hs, _ = references(self.controller)
-        if set(direction.site_instructions) - self.sites.keys():
-            raise ValueError("Unknown site in site_instructions")
-        if (
-            len(set(direction.analyses)) != len(direction.analyses)
-            or set(direction.analyses) - hs.keys()
-        ):
-            raise ValueError("analyses must contain distinct existing H references")
-        if stage != "analyze" and direction.analyses:
-            raise ValueError("Only the analyze stage can direct analyses")
-        return direction.model_dump()
 
     def _committed_local_results(self, site):
         hs, rs = references(self.controller)
@@ -210,17 +173,16 @@ class FederatedCoordinator:
             if rid in reverse_r
         }
 
-    def _site_prompt(self, prompt, site, direction, stage):
+    def _site_prompt(self, prompt, site, stage):
         marker = prompt.index('{"schema":')
         payload = json.loads(prompt[marker:])
         payload["task"] = self.contexts[site]
+        shared_notes = payload["research_notes"]
         payload["research_notes"] = self.site_memory[site].get("notes", "")
         payload["latest_stage_narratives"] = self.site_memory[site].get("narratives", {})
         payload["federation"] = {
             "site": site,
-            "goal": direction["goal"],
-            "directions": direction["site_instructions"].get(site, ""),
-            "approved_analyses": direction["analyses"],
+            "shared_research_notes": shared_notes,
             "local_analyses": self._committed_local_results(site),
             "local_validation": {
                 key: value["sites"][site]
@@ -237,17 +199,12 @@ class FederatedCoordinator:
         )
         if stage == "analyze":
             instructions += (
-                "Set run_analyses to exactly approved_analyses. "
-                "Trusted local execution follows your form. "
+                "Recommend up to 12 comparisons in run_analyses. The central team selects "
+                "the shared set after considering every site's recommendations. Trusted "
+                "execution then tests that set at every site; assess the registered results "
+                "in appraise. "
             )
-        prefix = prompt[:marker]
-        if stage == "analyze":
-            prefix = prefix.replace(
-                STAGE_INSTRUCTIONS[stage],
-                "Record exactly the approved_analyses in run_analyses. "
-                "Their results will be available for assessment in appraise.",
-            )
-        return prefix + instructions + "\n" + json.dumps(payload, separators=(",", ":"))
+        return prompt[:marker] + instructions + "\n" + json.dumps(payload, separators=(",", ":"))
 
     def respond(self, prompt, *, iteration, stage, attempt):
         key = f"i{iteration:03d}-{stage}"
@@ -263,25 +220,28 @@ class FederatedCoordinator:
         }
         if key not in self.prepared:
             self.prepared[key] = {
-                "direction": self._direction(prompt, iteration, stage, attempt),
                 "handoffs": {},
                 "prompt": prompt,
             }
         entry = self.prepared[key]
+        # A repaired central candidate may choose different comparisons. Keep all
+        # provisional results private until the ordinary controller commits.
+        entry["analyses"] = []
+        entry["local_results"] = {site: {} for site in self.sites}
         for site, coordinator in self.sites.items():
             if site in entry["handoffs"]:
                 continue
-            site_prompt = self._site_prompt(entry["prompt"], site, entry["direction"], stage)
+            site_prompt = self._site_prompt(entry["prompt"], site, stage)
             for repair in range(1, self.source.max_retries_per_stage + 2):
                 try:
                     response = coordinator.respond(
                         site_prompt, iteration=iteration, stage=stage, attempt=repair
                     )
-                    form = FORMS[stage].model_validate(json_response(response.text))
-                    if stage == "analyze" and set(form.run_analyses) != set(
-                        entry["direction"]["analyses"]
-                    ):
-                        raise ValueError("Use exactly the approved_analyses references")
+                    # Check shared H/R links without applying the recommendation or
+                    # allocating IDs, changing assessments, or spending validation.
+                    _, form, _ = translate(
+                        self.controller, stage, iteration, json_response(response.text)
+                    )
                     break
                 except WorkflowInfrastructureError:
                     raise
@@ -297,29 +257,30 @@ class FederatedCoordinator:
                         }
                     )
                     if repair > self.source.max_retries_per_stage:
-                        raise ValueError(f"{site} exhausted stage retries: {error}") from error
-                    site_prompt += "\nRepair the site form: " + str(error)
+                        if getattr(self.source, "peer_failure_policy", "require_all") != (
+                            "chair_with_available"
+                        ):
+                            raise ValueError(f"{site} exhausted stage retries: {error}") from error
+                        form = None
+                        break
+                    site_prompt += "\nRepair the site form: " + repair_message(
+                        self.controller, str(error)
+                    )
             handoff = {
                 "site": site,
-                "form": form.model_dump(by_alias=True),
+                "form": form.model_dump(by_alias=True) if form is not None else None,
+                "unavailable": form is None,
+                "notice": (
+                    "Site recommendation unavailable after repairs; do not infer agreement. "
+                    "Trusted analysis still includes this site's aggregate statistics."
+                    if form is None
+                    else ""
+                ),
                 "site_summary": self.contexts[site],
                 "analysis_results": {},
             }
-            if stage == "analyze":
-                hs, _ = references(self.controller)
-                for ref in entry["direction"]["analyses"]:
-                    h = self.controller.state["hypotheses"][hs[ref]]
-                    kwargs = dict(
-                        delta=self.controller.outcomes[h.outcome].delta,
-                        alpha=0.05,
-                        result_id="site-analysis-"
-                        + hashlib.sha256((site + comparison_key(h)).encode()).hexdigest()[:16],
-                    )
-                    handoff["analysis_results"][ref] = public_result(
-                        combine_statistics([self._stats(h)[site]], h, **kwargs)
-                    )
             entry["handoffs"][site] = handoff
-            atomic_write_json(self.root / "handoffs" / f"{key}-{site}.json", handoff)
+            self._write_handoff(key, site, handoff)
         # New numerical results cannot be assessed until controller.apply registers
         # them. Keep this stage's computed handoffs in the audit, but expose only
         # committed results to agents. Appraise sees the new R references and sites.
@@ -330,13 +291,13 @@ class FederatedCoordinator:
         if stage == "analyze":
             prompt = prompt.replace(
                 STAGE_INSTRUCTIONS[stage],
-                "Confirm the centrally approved comparisons in run_analyses. "
+                "Select up to 12 shared comparisons in run_analyses. "
                 "Their new results will enter the ledger after this form commits; "
                 "assess them in appraise. Use only already registered evidence now.",
                 1,
             )
         central_prompt = (
-            prompt + "\nAll sites completed this stage. Their recommendations and previously "
+            prompt + "\nSite consultation is complete. Available recommendations and previously "
             "committed local discovery summaries:\n"
             + json.dumps(visible_handoffs)
             + "\nIndependent validation site summaries:\n"
@@ -347,8 +308,10 @@ class FederatedCoordinator:
             "Return the ordinary stage form. "
             + (
                 "New results are withheld until this form commits; assess them in appraise, "
-                "when they have registered R references. Confirm the approved comparisons "
-                "in run_analyses: " + json.dumps(entry["direction"]["analyses"])
+                "when they have registered R references. Select run_analyses using the "
+                "shared ledger and site recommendations. The controller executes each "
+                "selected comparison at every site, including sites with unavailable "
+                "recommendations; this spends one shared comparison per selected claim."
                 if stage == "analyze"
                 else STAGE_INSTRUCTIONS[stage]
             )
@@ -356,21 +319,23 @@ class FederatedCoordinator:
         response = self.central.respond(
             central_prompt, iteration=iteration, stage=stage, attempt=attempt
         )
+        _, form, _ = translate(self.controller, stage, iteration, json_response(response.text))
         if stage == "analyze":
-            form = FORMS[stage].model_validate(json_response(response.text))
-            if set(form.run_analyses) != set(entry["direction"]["analyses"]):
-                raise ValueError(
-                    "Central run_analyses must record exactly the site-executed comparisons"
-                )
+            entry["analyses"] = form.run_analyses
         return response
 
     def commit(self):
         self.central.commit()
         for site, coordinator in self.sites.items():
-            coordinator.commit()
-            handoff = self.prepared[self.active]["handoffs"][site]
-            form = handoff["form"]
+            entry = self.prepared[self.active]
+            handoff = entry["handoffs"][site]
+            handoff["analysis_results"] = entry["local_results"][site]
+            self._write_handoff(self.active, site, handoff)
             self.site_discovery[site].update(handoff["analysis_results"])
+            if handoff["form"] is None:
+                continue
+            coordinator.commit()
+            form = handoff["form"]
             if form.get("research_notes") is not None:
                 self.site_memory[site]["notes"] = form["research_notes"]
             stage = self.active.split("-", 1)[1]
@@ -398,6 +363,7 @@ class FederatedCoordinator:
         return {
             **central,
             "workflow": self.workflow.model_dump(),
+            "federation_protocol": "workflow-preserving-2",
             "federation": self.partition_audit,
             "resource_comparison": "shared scientific comparisons and validation; "
             "all site and central calls counted",

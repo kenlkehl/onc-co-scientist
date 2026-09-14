@@ -21,6 +21,49 @@ def now():
     return datetime.now(UTC).isoformat()
 
 
+def review_selection(selection, grid, blocks):
+    """Require complete paired conditions before admitting a bounded review cohort."""
+    if blocks < 1 or 4 * blocks > len(selection):
+        raise ValueError("Review blocks must select 1 or more complete four-run blocks")
+    lookup = {(r["condition"], r["run_id"]): r for r in grid}
+    selected = selection[: 4 * blocks]
+    if len({(r["condition"], r["run_id"]) for r in selected}) != len(selected):
+        raise ValueError("Duplicate run in review selection")
+    for offset in range(0, len(selected), 4):
+        rows = [lookup[r["condition"], r["run_id"]] for r in selected[offset : offset + 4]]
+        keys = {
+            (
+                r["model_profile"],
+                r["workflow_id"],
+                r["site_count"],
+                r["partition_id"],
+                r["replicate"],
+            )
+            for r in rows
+        }
+        conditions = {(r["condition"], r["semantic_condition"]) for r in rows}
+        if len(keys) != 1 or conditions != {
+            (c, s) for c in ("named", "masked") for s in ("expected", "surprising")
+        }:
+            raise ValueError("Review selection is not a matched four-condition block")
+    return selected
+
+
+def validate_review_resume(previous, blocks):
+    old = previous.get("review_blocks")
+    if old == blocks:
+        return
+    if (
+        old is not None
+        and blocks is not None
+        and blocks > old
+        and previous.get("completed_at")
+        and not previous.get("active")
+    ):
+        return  # Explicitly extend a finished cohort after review.
+    raise ValueError("Resume must retain the review limit or explicitly extend a finished cohort")
+
+
 def verify_predecessor(transition):
     """Never admit a replacement bundle while original calls can still be active."""
     if not transition:
@@ -49,6 +92,9 @@ def main():
     parser.add_argument("--model", required=True)
     parser.add_argument("--workers", type=int, default=10)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--review-blocks", type=int, help="Run this many matched four-run blocks, then pause"
+    )
     args = parser.parse_args()
     root = args.root.resolve()
     if not 1 <= args.workers <= 30:
@@ -79,11 +125,18 @@ def main():
         plans[r["condition"]][r["run_id"]].model.id != args.model for r in selection
     ):
         raise ValueError("Selection does not match requested model")
+    held_outside_review = 0
+    if args.review_blocks is not None:
+        selected = review_selection(
+            selection, json.loads((root / "grid.json").read_text()), args.review_blocks
+        )
+        held_outside_review = len(selection) - len(selected)
+        selection = selected
     fingerprints = {c: s.fingerprint() for c, s in specs.items()}
     if path.exists():
-        atomic_write_json(
-            control / f"execution-before-{os.getpid()}.json", json.loads(path.read_text())
-        )
+        previous = json.loads(path.read_text())
+        validate_review_resume(previous, args.review_blocks)
+        atomic_write_json(control / f"execution-before-{os.getpid()}.json", previous)
     state = dict(
         started_at=now(),
         pid=os.getpid(),
@@ -92,6 +145,8 @@ def main():
         selected_runs=len(selection),
         resume=args.resume,
         source=module.__file__,
+        review_blocks=args.review_blocks,
+        held_outside_review=held_outside_review,
     )
     pending, active, finished = list(selection), {}, []
 
@@ -115,6 +170,7 @@ def main():
             f"# {args.model}: federated grid",
             "",
             f"Updated {now()}",
+            f"Runs held outside this review cohort: {held_outside_review}",
             "",
             "2 and 4 random sites; 25 iterations; 10 repeats; three workflows.",
             "",
@@ -153,7 +209,9 @@ def main():
     state.update(
         completed_at=now(),
         status=(
-            "completed"
+            "paused_for_review"
+            if held_outside_review
+            else "completed"
             if all(r["status"] == "completed" for r in finished)
             else "completed_with_failures"
         ),
