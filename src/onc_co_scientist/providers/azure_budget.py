@@ -217,7 +217,9 @@ class AzureBudget:
                 or usage["output_tokens"] > attempt["output_bound"]
             ):
                 self.state["hold_reason"] = "Azure usage exceeded the conservative reservation"
-            if cache_prefix:
+            if isinstance(cache_prefix, dict):
+                self._observe_cache_v2(attempt, usage, cache_prefix)
+            elif cache_prefix:
                 key = attempt["model"] + ":" + cache_prefix
                 history = self.state.setdefault("cache_prefixes", {}).setdefault(
                     key, {"seen": 0, "misses": 0}
@@ -232,3 +234,31 @@ class AzureBudget:
             self.save()
             # Return the received science result. The hold applies to the next dispatch.
             return cost
+
+    def _observe_cache_v2(self, attempt, usage, prefix):
+        """Count misses only after observed eligible writes/reads within their TTL."""
+        now = datetime.now(UTC)
+        key = attempt["model"] + ":v2:" + prefix["key"]
+        history = self.state.setdefault("cache_prefixes", {}).setdefault(
+            key, {"seen": 0, "misses": 0}
+        )
+        previous = history.get("last_eligible_at")
+        age = (now - datetime.fromisoformat(previous)).total_seconds() if previous else None
+        eligible_read = usage["cached_input_tokens"] >= 1024
+        eligible_write = usage["cache_write_input_tokens"] >= 1024
+        if age is None or age > prefix["ttl_seconds"] or eligible_read:
+            history["misses"] = 0
+        else:
+            history["misses"] += 1
+        history.update(
+            seen=history["seen"] + 1,
+            last_gap_seconds=age,
+            cached_input_tokens=usage["cached_input_tokens"],
+            cache_write_input_tokens=usage["cache_write_input_tokens"],
+            input_tokens=usage["input_tokens"],
+        )
+        if eligible_read or eligible_write:
+            history["last_eligible_at"] = now.isoformat()
+        attempt["cache_observation"] = dict(history, prefix=prefix["key"])
+        if history["misses"] >= self.policy["max_reusable_prefix_misses"]:
+            self.state["hold_reason"] = "Repeated eligible prefixes missed within the cache TTL"

@@ -433,3 +433,49 @@ def test_completed_call_replay_does_not_touch_azure_or_budget(tmp_path):
     )
     assert response.text == result["text"] and c.replayed_calls == 1
     assert path.read_bytes() == old
+
+
+def test_v2_cache_guard_observes_eligible_usage_and_expiry(policy):
+    gate = AzureBudget(policy)
+    prefix = {"key": "actual-marked-prefix", "version": 2, "ttl_seconds": 1800}
+    body = {"max_output_tokens": 100}
+
+    def settle(name, cached=0, written=0):
+        gate.reserve(name, MODEL, body)
+        return gate.settle(
+            name,
+            dict(
+                input_tokens=3000,
+                output_tokens=10,
+                cached_input_tokens=cached,
+                cache_write_input_tokens=written,
+                reasoning_output_tokens=0,
+            ),
+            prefix,
+        )
+
+    # An uncacheable request does not establish an expected hit.
+    settle("short1")
+    settle("short2")
+    state_path = policy.with_name("spend_state.json")
+    key = MODEL + ":v2:actual-marked-prefix"
+    assert json.loads(state_path.read_text())["cache_prefixes"][key]["misses"] == 0
+    settle("write", written=2000)
+    settle("miss1", written=2000)
+    with gate.locked():
+        assert gate.state["cache_prefixes"][key]["misses"] == 1
+        gate.state["cache_prefixes"][key]["last_eligible_at"] = (
+            datetime.now(UTC) - timedelta(hours=1)
+        ).isoformat()
+        gate.save()
+    settle("expired", written=2000)
+    assert json.loads(state_path.read_text())["cache_prefixes"][key]["misses"] == 0
+    settle("hit", cached=2000)
+    settle("miss2", written=2000)
+    settle("miss3", written=2000)
+    state = json.loads(state_path.read_text())
+    assert "within the cache TTL" in state["hold_reason"]
+    assert state["attempts"]["miss3"]["status"] == "settled"
+    assert state["attempts"]["miss3"]["cache_observation"]["misses"] == 2
+    with pytest.raises(ExperimentPaused):
+        gate.reserve("held", MODEL, body)

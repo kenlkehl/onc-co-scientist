@@ -10,6 +10,7 @@ from pathlib import Path
 
 from ..harness.durable_io import StorageUnavailable, atomic_write_json
 from .coordination import StageCoordinator
+from .federated_history import FederatedHistoryCoordinator
 from .prompting import STAGE_INSTRUCTIONS, direct_results, references, repair_message, translate
 from .research import json_response
 from .scoring import comparison_key
@@ -30,7 +31,12 @@ class FederatedCoordinator:
         self.cell, self.workflow, self.source = cell, workflow, source
         self.root = Path(run_dir)
         self.shared_budget = {"calls": 0}
-        self.central = StageCoordinator(
+        coordinator_type = (
+            FederatedHistoryCoordinator
+            if cell.context_policy == "federated_v2"
+            else StageCoordinator
+        )
+        self.central = coordinator_type(
             central_provider or provider,
             workflow,
             stages,
@@ -41,7 +47,7 @@ class FederatedCoordinator:
         )
         self.central.federation_role = "orchestrator"
         self.sites = {
-            f"site_{i + 1}": StageCoordinator(
+            f"site_{i + 1}": coordinator_type(
                 provider,
                 workflow,
                 stages,

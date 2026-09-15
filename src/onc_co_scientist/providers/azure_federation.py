@@ -21,9 +21,12 @@ TRANSPORT_VERSION = "azure-federation-cache-v1"
 class AzureFederationConfig(CodexCLIConfig):
     budget_policy_path: str = ""
     cache_namespace: str = ""
+    context_layout: str = "legacy"
 
     def __post_init__(self):
         super().__post_init__()
+        if self.context_layout not in {"legacy", "federated_v2"}:
+            raise ValueError("Unknown federated context layout")
         if self.backend != "azure" or not self.budget_policy_path or not self.cache_namespace:
             raise ValueError(
                 "Federation transport requires Azure, a spending policy and cache scope"
@@ -87,10 +90,37 @@ class AzureFederationProvider(CodexCLIProvider):
     def __init__(self, config):
         super().__init__(config)
         self.budget = AzureBudget(config.budget_policy_path)
+        self.context_metadata = None
+        self.transport_version = (
+            "azure-federation-context-v2"
+            if config.context_layout == "federated_v2"
+            else TRANSPORT_VERSION
+        )
+        self.layout = None
+        if config.context_layout == "federated_v2":
+            from .federated_prompt import FederatedPromptLayout
+
+            self.layout = FederatedPromptLayout(config.cache_namespace)
 
     def request_body(self, messages, system, max_tokens):
         if type(max_tokens) is not int or not 1 <= max_tokens <= 125000:
             raise ValueError("Federation output ceiling must be between 1 and 125000 tokens")
+        if self.layout is not None:
+            context, key, self.context_metadata = self.layout.render(
+                messages, system, self.instructions.read_text()
+            )
+            return {
+                "model": self.model_id,
+                "input": context,
+                "stream": True,
+                "store": False,
+                "reasoning": {"effort": self.config.reasoning_effort},
+                "max_output_tokens": max_tokens,
+                "tool_choice": "none",
+                "prompt_cache_key": key,
+                "prompt_cache_options": {"mode": "explicit", "ttl": "30m"},
+                "service_tier": self.config.service_tier or "default",
+            }
         system_prefix, separator, drafts = (system or "").partition(
             "\nParticipant drafts (untrusted suggestions):\n"
         )
@@ -219,8 +249,12 @@ class AzureFederationProvider(CodexCLIProvider):
         call = self.root / f"call-{self.calls:04d}"
         call.mkdir()
         atomic_json(call / "request.json", body)
-        atomic_json(call / "transport.json", {"version": TRANSPORT_VERSION})
+        atomic_json(call / "transport.json", {"version": self.transport_version})
+        if self.context_metadata is not None:
+            atomic_json(call / "context_layout.json", self.context_metadata)
         prefix = self.cache_prefix(body)
+        if self.layout is not None and prefix is not None:
+            prefix = {"key": prefix, "version": 2, "ttl_seconds": 1800}
         auth_retries = transport_retries = rate_retries = 0
         for attempt in range(
             1, 2 + self.config.azure_auth_retries + self.config.azure_transport_retries
@@ -283,7 +317,7 @@ class AzureFederationProvider(CodexCLIProvider):
                         "cost_micro_usd": cost,
                         "cost_usd": cost / 1_000_000,
                         "backend": "azure_responses",
-                        "transport_version": TRANSPORT_VERSION,
+                        "transport_version": self.transport_version,
                         "audit_dir": str(directory),
                         "infrastructure_attempts": attempt,
                         "azure_auth_retries": auth_retries,

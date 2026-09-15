@@ -143,6 +143,22 @@ def _provenance(spec, plan, fingerprint):
     }
 
 
+def _cell_provider(config, plan):
+    if (
+        plan.federation is not None
+        and plan.federation.sites > 1
+        and plan.federation.context_policy == "federated_v2"
+        and config.get("kind") == "codex_cli"
+        and config.get("backend") == "azure"
+    ):
+        from ..providers.azure_federation import AzureFederationConfig, AzureFederationProvider
+
+        options = {k: v for k, v in config.items() if k != "kind"}
+        options.update(context_layout="federated_v2", cache_namespace=options["audit_dir"])
+        return AzureFederationProvider(AzureFederationConfig(**options))
+    return get_provider(config)
+
+
 def run_cell(spec, plan, root, fingerprint, *, resume):
     """Replay cached participant calls to reconstruct state after an interruption.
 
@@ -201,7 +217,7 @@ def run_cell(spec, plan, root, fingerprint, *, resume):
         config["audit_dir"] = str(run_dir / "provider_audit")
         config["resume_audit"] = resume
     try:
-        provider = get_provider(config)
+        provider = _cell_provider(config, plan)
     except Exception as exc:
         result = {
             **plan.public_dict(),
@@ -233,7 +249,7 @@ def run_cell(spec, plan, root, fingerprint, *, resume):
             if central_config["kind"] == "codex_cli":
                 central_config["audit_dir"] = str(run_dir / "central_provider_audit")
                 central_config["resume_audit"] = resume
-            central_provider = get_provider(central_config)
+            central_provider = _cell_provider(central_config, plan)
         coordinator = FederatedCoordinator(
             provider,
             plan.workflow,

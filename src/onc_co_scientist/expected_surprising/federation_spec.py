@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 
 class SitePartition(BaseModel):
@@ -26,6 +26,14 @@ class FederationCell(BaseModel):
     sites: int = Field(ge=1)
     partition: SitePartition = Field(default_factory=SitePartition)
     seed: int = 0
+    context_policy: Literal["legacy", "federated_v2"] = "legacy"
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
+        if self.context_policy == "legacy":
+            data.pop("context_policy", None)
+        return data
 
     @property
     def label(self):
@@ -38,6 +46,14 @@ class FederationGrid(BaseModel):
     partitions: list[SitePartition] = Field(default_factory=lambda: [SitePartition()], min_length=1)
     seed: int = 0
     orchestrator_model_profile: str | None = None
+    context_policy: Literal["legacy", "federated_v2"] = "legacy"
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        data = handler(self)
+        if self.context_policy == "legacy":
+            data.pop("context_policy", None)
+        return data
 
     @model_validator(mode="after")
     def check(self):
@@ -51,7 +67,12 @@ class FederationGrid(BaseModel):
 
     def cells(self):
         return [
-            FederationCell(sites=n, partition=p, seed=self.seed)
+            FederationCell(
+                sites=n,
+                partition=p,
+                seed=self.seed,
+                context_policy=self.context_policy if n > 1 else "legacy",
+            )
             for n in self.site_counts
             for p in ([SitePartition()] if n == 1 else self.partitions)
         ]
