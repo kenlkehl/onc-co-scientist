@@ -22,9 +22,12 @@ class AzureFederationConfig(CodexCLIConfig):
     budget_policy_path: str = ""
     cache_namespace: str = ""
     context_layout: str = "legacy"
+    prompt_caching: bool = True
 
     def __post_init__(self):
         super().__post_init__()
+        if type(self.prompt_caching) is not bool:
+            raise ValueError("prompt_caching must be a boolean")
         if self.context_layout not in {"legacy", "federated_v2"}:
             raise ValueError("Unknown federated context layout")
         if self.backend != "azure" or not self.budget_policy_path or not self.cache_namespace:
@@ -103,6 +106,17 @@ class AzureFederationProvider(CodexCLIProvider):
             self.layout = FederatedPromptLayout(config.cache_namespace)
 
     def request_body(self, messages, system, max_tokens):
+        body = self._request_body(messages, system, max_tokens)
+        if not self.config.prompt_caching:
+            # Explicit mode without breakpoints performs no cache reads or writes.
+            # Keep the scientific messages and output ceiling exactly unchanged.
+            for message in body["input"]:
+                if isinstance(message["content"], list):
+                    for block in message["content"]:
+                        block.pop("prompt_cache_breakpoint", None)
+        return body
+
+    def _request_body(self, messages, system, max_tokens):
         if type(max_tokens) is not int or not 1 <= max_tokens <= 125000:
             raise ValueError("Federation output ceiling must be between 1 and 125000 tokens")
         if self.layout is not None:
@@ -213,6 +227,7 @@ class AzureFederationProvider(CodexCLIProvider):
                     retry_after = 0
                 raise AzureHTTPError(response.status, retry_after)
             data = []
+            output_activity = False
             with (attempt_dir / "events.jsonl").open("w") as journal:
                 while True:
                     remaining = self.config.timeout_s - (time.monotonic() - started)
@@ -233,12 +248,44 @@ class AzureFederationProvider(CodexCLIProvider):
                         data = []
                         journal.write(json.dumps(event) + "\n")
                         journal.flush()
+                        if event.get("type") not in {
+                            "response.created",
+                            "response.in_progress",
+                            "error",
+                            "response.failed",
+                        }:
+                            output_activity = True
+                        if (event.get("response") or {}).get("output"):
+                            output_activity = True
                         if event.get("type") in {
                             "response.completed",
                             "response.incomplete",
                             "response.failed",
                         }:
-                            return event["response"]
+                            terminal = event["response"]
+                            if (
+                                event["type"] == "response.failed"
+                                and terminal.get("status") == "failed"
+                                and (terminal.get("error") or {}).get("code")
+                                == "rate_limit_exceeded"
+                                and terminal.get("usage") is None
+                                and not output_activity
+                            ):
+                                # Azure can reject admission inside a successful HTTP
+                                # stream. Retain the receipt and use the same bounded
+                                # pacing/token-refresh path as an HTTP 429 rejection.
+                                atomic_json(attempt_dir / "response.json", terminal)
+                                atomic_json(
+                                    attempt_dir / "rate_rejection.json",
+                                    {
+                                        "source": "response.failed",
+                                        "http_status": 200,
+                                        "code": "rate_limit_exceeded",
+                                        "output_activity": False,
+                                    },
+                                )
+                                raise AzureHTTPError(429, retry_after=60)
+                            return terminal
         finally:
             connection.close()
 

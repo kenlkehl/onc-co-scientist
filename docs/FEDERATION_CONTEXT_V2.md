@@ -38,6 +38,25 @@ PYTHONPATH=src python scripts/expected_surprising/audit_federation_context_v2.py
 
 On the 653 archived continuation requests, current-ledger reconstruction passed for every request. About 51.2% of formatted text is in the reusable catalog. Total formatted text was approximately 7.8% larger for these historical inputs, which retain whatever history was originally present. These are character counts, not token counts or measured savings. Coordinator tests separately check preservation of prior complete responses under large ledger pressure, accepted/rejected decisions, deterministic replay, and unchanged legacy/one-site behavior.
 
-Before a paid batch restart, a representative isolated canary should cover Sol, Terra, and Luna; 2/4 sites; persistent, sequential, and deliberative calls; stage/role changes; added and sign-oriented evidence; and 3/8/15-minute gaps. Compare cached input fraction and actual dollars with the original layout. Require complete usage receipts, exact ledger reconstruction, valid scientific forms, and useful savings on realistic full-size contexts; an immediate cache hit alone is insufficient. Charge any such diagnostic to the remaining authorized allowance. Keep the batch held on failure.
+When cache savings are required for admission, a representative isolated canary should cover Sol, Terra, and Luna; 2/4 sites; persistent, sequential, and deliberative calls; stage/role changes; added and sign-oriented evidence; and 3/8/15-minute gaps. Compare cached input fraction and actual dollars with the original layout. Require complete usage receipts, exact ledger reconstruction, valid scientific forms, and useful savings on realistic full-size contexts; an immediate cache hit alone is insufficient. Charge any such diagnostic to the remaining authorized allowance. Keep the batch held on failure.
 
 The prior six completed runs, 24 paused runs, existing cost ledger, and release gates are not changed by this implementation. No model calls are made by tests or trace auditing.
+
+## Run without caching as an admission requirement
+
+For an explicitly authorized uncached batch, set each Azure federation provider's
+`prompt_caching: false` and its budget policy's `cache_miss_pause_enabled: false`.
+The first setting removes cache breakpoints while retaining explicit mode, the full
+scientific messages, and the output ceiling. The second makes cache observations
+nonblocking. Both default to the previous behavior; single-site providers are unchanged.
+Actual usage, reservations, missing-usage holds, price validity and spending caps remain
+mandatory. Streamed admission rejections (`response.failed`, `rate_limit_exceeded`, no
+usage and no output activity) use the bounded HTTP-429 retry/pacing path. Failures after
+output activity retain their unknown-usage reservations.
+
+`scripts/expected_surprising/launch_federation_science_v2.py` freezes a separately
+versioned copy of the original initial-30 identities, datasets and committed code.
+It transfers only the predecessor's remaining allowance into a new shared ledger,
+leaving every old receipt/result and unknown reservation accounted for. Its observer
+updates both the new bundle and the existing live-progress link, and closes release
+and spending gates after those 30 finish or pause. It never dispatches the next batch.

@@ -140,6 +140,8 @@ class AzureBudget:
         for field in ("max_unknown_attempts", "max_reusable_prefix_misses"):
             if type(self.policy[field]) is not int or self.policy[field] < 1:
                 raise ValueError("Spending circuit breakers must be positive integers")
+        if type(self.policy.get("cache_miss_pause_enabled", True)) is not bool:
+            raise ValueError("cache_miss_pause_enabled must be a boolean")
         rates = self.policy["rates"][model]
         for field in ("input", "cached", "write", "output"):
             if amount(rates["long"][field]) < amount(rates["short"][field]):
@@ -229,7 +231,9 @@ class AzureBudget:
                 elif history["seen"]:
                     history["misses"] += 1
                 history["seen"] += 1
-                if history["misses"] >= self.policy["max_reusable_prefix_misses"]:
+                if self.policy.get("cache_miss_pause_enabled", True) and (
+                    history["misses"] >= self.policy["max_reusable_prefix_misses"]
+                ):
                     self.state["hold_reason"] = "Repeated reusable prefixes received no cache reads"
             self.save()
             # Return the received science result. The hold applies to the next dispatch.
@@ -260,5 +264,7 @@ class AzureBudget:
         if eligible_read or eligible_write:
             history["last_eligible_at"] = now.isoformat()
         attempt["cache_observation"] = dict(history, prefix=prefix["key"])
-        if history["misses"] >= self.policy["max_reusable_prefix_misses"]:
+        if self.policy.get("cache_miss_pause_enabled", True) and (
+            history["misses"] >= self.policy["max_reusable_prefix_misses"]
+        ):
             self.state["hold_reason"] = "Repeated eligible prefixes missed within the cache TTL"

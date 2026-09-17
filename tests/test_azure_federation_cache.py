@@ -479,3 +479,101 @@ def test_v2_cache_guard_observes_eligible_usage_and_expiry(policy):
     assert state["attempts"]["miss3"]["cache_observation"]["misses"] == 2
     with pytest.raises(ExperimentPaused):
         gate.reserve("held", MODEL, body)
+
+
+def test_uncached_transport_preserves_scientific_content(tmp_path, policy):
+    cached = make_provider(tmp_path / "cached", policy)
+    off = make_provider(tmp_path / "off", policy, prompt_caching=False)
+    messages = [ChatMessage("user", prompt())]
+    expected = cached.request_body(messages, "goal", 125000)
+    actual = off.request_body(messages, "goal", 125000)
+    for m in expected["input"]:
+        if isinstance(m["content"], list):
+            for b in m["content"]:
+                b.pop("prompt_cache_breakpoint", None)
+    assert actual == expected
+    assert off.cache_prefix(actual) is None
+    assert actual["prompt_cache_options"]["mode"] == "explicit"
+
+
+@pytest.mark.parametrize("v2", [False, True])
+def test_cache_observation_can_be_nonblocking_without_disabling_spend_guard(policy, v2):
+    p = json.loads(policy.read_text())
+    p["cache_miss_pause_enabled"] = False
+    atomic_json(policy, p)
+    gate = AzureBudget(policy)
+    prefix = {"key": "stable", "version": 2, "ttl_seconds": 1800} if v2 else "stable"
+    for i in range(8):
+        gate.reserve(str(i), MODEL, {"max_output_tokens": 100, "input": []})
+        u = normalize_usage(usage())
+        u.update(input_tokens=2000, cache_write_input_tokens=1500)
+        gate.settle(str(i), u, prefix)
+    gate.check(MODEL)
+    state = json.loads(gate.state_path.read_text())
+    assert next(iter(state["cache_prefixes"].values()))["misses"] == 7
+    p["additional_budget_usd"] = state["spent_micro_usd"] / 1_000_000
+    atomic_json(policy, p)
+    with pytest.raises(ExperimentPaused, match="exhausted"):
+        gate.check(MODEL)
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_streamed_rate_limit_retries_only_before_output(tmp_path, policy, monkeypatch, partial):
+    p = make_provider(tmp_path, policy, azure_transport_retries=1)
+    monkeypatch.setattr(p, "request_slot", lambda *args: nullcontext(None))
+    tokens = []
+
+    def environment():
+        tokens.append(1)
+        return {"OCS_AZURE_ACCESS_TOKEN": "fake-only"}
+
+    monkeypatch.setattr(p, "environment", environment)
+    failed = {
+        "status": "failed",
+        "error": {"code": "rate_limit_exceeded"},
+        "usage": None,
+        "output": [],
+    }
+    streams = [[{"type": "response.created", "response": {"output": []}}]]
+    if partial:
+        streams[0].append({"type": "response.output_text.delta", "delta": "partial"})
+    streams[0] += [
+        {"type": "error", "code": "rate_limit_exceeded"},
+        {"type": "response.failed", "response": failed},
+    ]
+    streams.append([{"type": "response.completed", "response": completed()}])
+
+    class Connection:
+        sock = None
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def request(self, *args, **kwargs):
+            pass
+
+        def close(self):
+            pass
+
+        def getresponse(self):
+            r = io.BytesIO(
+                "".join("data: " + json.dumps(e) + "\n\n" for e in streams.pop(0)).encode()
+            )
+            r.status = 200
+            r.getheader = lambda *args: None
+            return r
+
+    monkeypatch.setattr(
+        "onc_co_scientist.providers.azure_federation.http.client.HTTPSConnection", Connection
+    )
+    if partial:
+        with pytest.raises(ExperimentPaused, match="usage"):
+            p.chat([ChatMessage("user", "aggregate context")])
+    else:
+        result = p.chat([ChatMessage("user", "aggregate context")])
+        assert result.raw["metrics"]["azure_rate_limit_retries"] == 1
+        assert len(tokens) == 2
+    attempts = list(
+        json.loads((policy.parent / "spend_state.json").read_text())["attempts"].values()
+    )
+    assert [a["status"] for a in attempts] == (["unknown"] if partial else ["rejected", "settled"])
