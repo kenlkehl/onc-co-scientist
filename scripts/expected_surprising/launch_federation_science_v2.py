@@ -1,6 +1,7 @@
 """Frozen, bounded initial-30 federation run with uncached Azure inference."""
 
 import argparse
+import ast
 import copy
 import fcntl
 import hashlib
@@ -273,27 +274,90 @@ def run_model(root, model, workers):
             save()
 
 
-def launch(root, workers):
+def install_transport_override(root, path):
+    """Audit a transport-only replacement without changing frozen science."""
+    from onc_co_scientist.providers import azure_federation as provider
+
+    baseline = Path(provider.__file__)
+    trees = [ast.parse(p.read_text()) for p in (baseline, path)]
+    methods = []
+    for tree in trees:
+        cls = next(
+            n
+            for n in tree.body
+            if isinstance(n, ast.ClassDef) and n.name == "AzureFederationProvider"
+        )
+        method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_send")
+        cls.body.remove(method)
+        methods.append(method)
+    if ast.dump(trees[0]) != ast.dump(trees[1]):
+        raise ValueError("Override changes more than the HTTP transport method")
+    receipt = {
+        "baseline_sha256": sha(baseline),
+        "override_path": str(path.resolve()),
+        "override_sha256": sha(path),
+        "launcher_sha256": sha(Path(__file__)),
+        "scope": "AzureFederationProvider._send only; scientific code and requests unchanged",
+    }
+    record = root / "control/transport_override.json"
+    if record.exists():
+        if read(record) != receipt:
+            raise ValueError("Previously recorded transport override changed")
+    else:
+        atomic_json(record, receipt)
+    namespace = dict(vars(provider))
+    module = ast.Module(body=[methods[1]], type_ignores=[])
+    exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
+    provider.AzureFederationProvider._send = namespace["_send"]
+
+
+def prepare_resume(root):
+    previous = read(root / "control/processes.json")
+    if any(alive(p) for p in previous["drivers"]):
+        raise ValueError("Drain existing drivers before resuming")
+    with (root / "control/observer.lock").open("a") as observer_lock:
+        fcntl.flock(observer_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    if read(root / "control/spend_policy.json")["enabled"]:
+        raise ValueError("Resume requires a held spending gate")
+    if read(root / "control/allocation.json")["status"] != "transferred":
+        raise ValueError("Resume must retain an existing budget allocation")
+    archive = root / "control" / ("before_resume_" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ"))
+    archive.mkdir()
+    for path in (root / "control").glob("*.json"):
+        shutil.copy2(path, archive / path.name)
+    for model in MODELS:
+        path = root / "control" / model / "execution.json"
+        shutil.copy2(path, archive / f"{model}.json")
+        atomic_json(path, {"status": "starting", "active": [], "queued_runs": 10, "finished": []})
+
+
+def launch(root, workers, *, resume=False, transport_override=None):
     manifest, _, _ = verify(root)
+    if (root / "control/transport_override.json").exists() and transport_override is None:
+        raise ValueError("Recorded transport override is required for this continuation")
     with (root / "control/launch.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        if (root / "control/processes.json").exists():
+        if (root / "control/processes.json").exists() and not resume:
             raise ValueError("Already dispatched; inspect before a deliberate resume")
-        old_path = Path(manifest["predecessor"]) / "control/cache_fix_v1/spend_policy.json"
-        gate = AzureBudget(old_path)
-        with gate.locked():
-            if remaining_micro(gate.policy, gate.state) != manifest["allocated_micro_usd"]:
-                raise ValueError("Predecessor spending changed since preparation")
-            prior = gate.policy
-            prior.update(
-                additional_budget_usd=gate.state["spent_micro_usd"] / 1e6,
-                transferred_allocation_usd=manifest["allocated_micro_usd"] / 1e6,
-                transferred_to=str(root),
-            )
-            atomic_json(old_path, prior)
-        atomic_json(root / "control/allocation.json", {"status": "transferred", **manifest})
+        if resume:
+            prepare_resume(root)
+        else:
+            old_path = Path(manifest["predecessor"]) / "control/cache_fix_v1/spend_policy.json"
+            gate = AzureBudget(old_path)
+            with gate.locked():
+                if remaining_micro(gate.policy, gate.state) != manifest["allocated_micro_usd"]:
+                    raise ValueError("Predecessor spending changed since preparation")
+                prior = gate.policy
+                prior.update(
+                    additional_budget_usd=gate.state["spent_micro_usd"] / 1e6,
+                    transferred_allocation_usd=manifest["allocated_micro_usd"] / 1e6,
+                    transferred_to=str(root),
+                )
+                atomic_json(old_path, prior)
+            atomic_json(root / "control/allocation.json", {"status": "transferred", **manifest})
         policy = read(root / "control/spend_policy.json")
         policy["enabled"] = True
+        policy.pop("maintenance_reason", None)
         atomic_json(root / "control/spend_policy.json", policy)
         atomic_json(
             root / "release_policy.json",
@@ -316,7 +380,12 @@ def launch(root, workers):
         env = {**os.environ, "PYTHONPATH": str(root / "source/src")}
         for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "OCS_AZURE_ACCESS_TOKEN"):
             env.pop(key, None)
-        runner = str(root / "source/scripts/expected_surprising/launch_federation_science_v2.py")
+        runner = str(Path(__file__).resolve())
+        override_args = (
+            ["--transport-override", str(transport_override.resolve())]
+            if transport_override
+            else []
+        )
         for model in MODELS:
             folder = root / "control" / model
             folder.mkdir(exist_ok=True)
@@ -331,6 +400,7 @@ def launch(root, workers):
                         model,
                         "--workers",
                         str(workers),
+                        *override_args,
                     ],
                     env=env,
                     stdout=log,
@@ -498,6 +568,10 @@ def observe(root):
                 f"\n"
                 f"[Versioned experiment]({root}) · [Spending policy]({root / 'control/spend_policy.json'}) · [Frozen provenance]({root / 'frozen_manifest.json'})\n"  # noqa: E501
             )
+            if (root / "control/transport_override.json").exists():
+                page += (
+                    "\nTransport retry fix active; frozen science and completed calls retained.\n"
+                )
             (root / "LIVE_PROGRESS.md").write_text(page)
             old_page.write_text(page)
             atomic_json(predecessor / "live_progress.json", summary)
@@ -517,8 +591,12 @@ def main():
     modes.add_argument("--run-model", choices=MODELS)
     modes.add_argument("--observe", action="store_true")
     parser.add_argument("--workers", type=int, choices=range(1, 11), default=3)
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--transport-override", type=Path)
     args = parser.parse_args()
     root = args.root.resolve()
+    if args.transport_override:
+        install_transport_override(root, args.transport_override.resolve())
     if args.prepare:
         if not args.predecessor:
             parser.error("--predecessor required")
@@ -527,7 +605,7 @@ def main():
         verify(root)
         print(json.dumps({"verified": True, "model_calls": 0, "selected_runs": 30}))
     elif args.launch:
-        launch(root, args.workers)
+        launch(root, args.workers, resume=args.resume, transport_override=args.transport_override)
     elif args.run_model:
         run_model(root, args.run_model, args.workers)
     else:

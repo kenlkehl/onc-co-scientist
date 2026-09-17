@@ -60,3 +60,17 @@ It transfers only the predecessor's remaining allowance into a new shared ledger
 leaving every old receipt/result and unknown reservation accounted for. Its observer
 updates both the new bundle and the existing live-progress link, and closes release
 and spending gates after those 30 finish or pause. It never dispatches the next batch.
+
+Streamed `server_error`/`internal_server_error` failures with missing or invalid
+usage now follow the bounded HTTP-500 retry path, including when inference began.
+Their full unknown-cost reservations remain charged against admission. Retry-count,
+unknown-attempt and spending limits still stop dispatch; completed responses with
+invalid usage remain held rather than becoming scientific results.
+
+For a transport-only continuation, drain drivers with the spending gate held,
+then use `--launch --resume --transport-override PATH`. The override must match the
+frozen provider's parsed source except for `_send`; its hash and the continuation
+launcher's hash are recorded separately in `control/transport_override.json`.
+Frozen source/configuration, per-run provenance, completed-call journals and the
+shared spending ledger remain intact. Prior driver states are archived before
+resume. Resumption neither transfers another allocation nor clears budget holds.

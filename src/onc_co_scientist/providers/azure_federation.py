@@ -267,6 +267,31 @@ class AzureFederationProvider(CodexCLIProvider):
                                 event["type"] == "response.failed"
                                 and terminal.get("status") == "failed"
                                 and (terminal.get("error") or {}).get("code")
+                                in {"server_error", "internal_server_error"}
+                            ):
+                                try:
+                                    normalize_usage(terminal.get("usage") or {})
+                                except ValueError:
+                                    # A streamed server failure can follow partial
+                                    # inference. Preserve its receipt and route it
+                                    # through the bounded HTTP-500 retry path, which
+                                    # retains the unknown-cost reservation in full.
+                                    atomic_json(attempt_dir / "response.json", terminal)
+                                    atomic_json(
+                                        attempt_dir / "stream_failure.json",
+                                        {
+                                            "source": "response.failed",
+                                            "http_status": 200,
+                                            "retry_status": 500,
+                                            "code": terminal["error"]["code"],
+                                            "output_activity": output_activity,
+                                        },
+                                    )
+                                    raise AzureHTTPError(500) from None
+                            if (
+                                event["type"] == "response.failed"
+                                and terminal.get("status") == "failed"
+                                and (terminal.get("error") or {}).get("code")
                                 == "rate_limit_exceeded"
                                 and terminal.get("usage") is None
                                 and not output_activity

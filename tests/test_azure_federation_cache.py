@@ -577,3 +577,80 @@ def test_streamed_rate_limit_retries_only_before_output(tmp_path, policy, monkey
         json.loads((policy.parent / "spend_state.json").read_text())["attempts"].values()
     )
     assert [a["status"] for a in attempts] == (["unknown"] if partial else ["rejected", "settled"])
+
+
+@pytest.mark.parametrize("stop", [None, "retry_limit", "unknown_limit", "budget"])
+@pytest.mark.parametrize("receipt", [None, {}])
+def test_streamed_server_error_retains_cost_and_retries_bounded(
+    tmp_path, policy, monkeypatch, stop, receipt
+):
+    config = json.loads(policy.read_text())
+    if stop == "unknown_limit":
+        config["max_unknown_attempts"] = 1
+    if stop == "budget":
+        config["additional_budget_usd"] = 0.4
+    atomic_json(policy, config)
+    p = make_provider(tmp_path, policy, azure_transport_retries=0 if stop == "retry_limit" else 1)
+    monkeypatch.setattr(p, "request_slot", lambda *args: nullcontext(None))
+    tokens, bodies, sleeps = [], [], []
+
+    def environment():
+        tokens.append(1)
+        return {"OCS_AZURE_ACCESS_TOKEN": "fake-only"}
+
+    monkeypatch.setattr(p, "environment", environment)
+    monkeypatch.setattr("onc_co_scientist.providers.azure_federation.time.sleep", sleeps.append)
+    failed = {
+        "status": "failed",
+        "error": {"code": "server_error"},
+        "usage": receipt,
+        "output": [{"type": "reasoning", "content": []}],
+    }
+    streams = [
+        [
+            {"type": "response.output_item.added", "item": {"type": "reasoning"}},
+            {"type": "response.failed", "response": failed},
+        ],
+        [{"type": "response.completed", "response": completed()}],
+    ]
+
+    class Connection:
+        sock = None
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def request(self, *args, **kwargs):
+            bodies.append(kwargs["body"])
+
+        def close(self):
+            pass
+
+        def getresponse(self):
+            r = io.BytesIO(
+                "".join("data: " + json.dumps(e) + "\n\n" for e in streams.pop(0)).encode()
+            )
+            r.status = 200
+            r.getheader = lambda *args: None
+            return r
+
+    monkeypatch.setattr(
+        "onc_co_scientist.providers.azure_federation.http.client.HTTPSConnection", Connection
+    )
+    if stop:
+        with pytest.raises(ExperimentPaused):
+            p.chat([ChatMessage("user", "aggregate context")])
+    else:
+        result = p.chat([ChatMessage("user", "aggregate context")])
+        assert result.raw["metrics"]["azure_transport_retries"] == 1
+        assert bodies[0] == bodies[1]
+        assert len(tokens) == 2
+        assert sleeps == [0]
+    state = json.loads((policy.parent / "spend_state.json").read_text())
+    attempts = list(state["attempts"].values())
+    assert [a["status"] for a in attempts] == (["unknown"] if stop else ["unknown", "settled"])
+    assert attempts[0]["reserved_micro_usd"] > 0
+    assert len(bodies) == (1 if stop else 2)
+    first = p.root / "call-0001/attempt-0001"
+    assert json.loads((first / "response.json").read_text()) == failed
+    assert json.loads((first / "stream_failure.json").read_text())["output_activity"]
