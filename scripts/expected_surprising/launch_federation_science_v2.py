@@ -274,41 +274,76 @@ def run_model(root, model, workers):
             save()
 
 
-def install_transport_override(root, path):
-    """Audit a transport-only replacement without changing frozen science."""
-    from onc_co_scientist.providers import azure_federation as provider
-
+def install_method_override(root, path, provider, class_name, method_names, record_name, scope):
+    """Allow only named infrastructure methods; retain immutable override receipts."""
     baseline = Path(provider.__file__)
     trees = [ast.parse(p.read_text()) for p in (baseline, path)]
     methods = []
     for tree in trees:
-        cls = next(
-            n
-            for n in tree.body
-            if isinstance(n, ast.ClassDef) and n.name == "AzureFederationProvider"
-        )
-        method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_send")
-        cls.body.remove(method)
-        methods.append(method)
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == class_name)
+        selected = [
+            n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in method_names
+        ]
+        if {n.name for n in selected} != set(method_names):
+            raise ValueError("Missing required override methods")
+        cls.body = [n for n in cls.body if n not in selected]
+        methods.append(selected)
     if ast.dump(trees[0]) != ast.dump(trees[1]):
-        raise ValueError("Override changes more than the HTTP transport method")
+        raise ValueError("Override changes more than the allowed infrastructure methods")
     receipt = {
         "baseline_sha256": sha(baseline),
         "override_path": str(path.resolve()),
         "override_sha256": sha(path),
         "launcher_sha256": sha(Path(__file__)),
-        "scope": "AzureFederationProvider._send only; scientific code and requests unchanged",
+        "scope": scope,
     }
-    record = root / "control/transport_override.json"
+    record = root / "control" / record_name
     if record.exists():
-        if read(record) != receipt:
-            raise ValueError("Previously recorded transport override changed")
+        prior = read(record)
+        if any(prior[k] != receipt[k] for k in receipt if k != "launcher_sha256"):
+            raise ValueError("Previously recorded infrastructure override changed")
     else:
         atomic_json(record, receipt)
+    audit = (
+        root
+        / "control/override_receipts"
+        / (record.stem + "-" + receipt["launcher_sha256"] + ".json")
+    )
+    if not audit.exists():
+        atomic_json(audit, receipt)
     namespace = dict(vars(provider))
-    module = ast.Module(body=[methods[1]], type_ignores=[])
+    module = ast.Module(body=methods[1], type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
-    provider.AzureFederationProvider._send = namespace["_send"]
+    for name in method_names:
+        setattr(getattr(provider, class_name), name, namespace[name])
+
+
+def install_transport_override(root, path):
+    from onc_co_scientist.providers import azure_federation as provider
+
+    install_method_override(
+        root,
+        path,
+        provider,
+        "AzureFederationProvider",
+        ["_send"],
+        "transport_override.json",
+        "AzureFederationProvider._send only; scientific code and requests unchanged",
+    )
+
+
+def install_budget_override(root, path):
+    from onc_co_scientist.providers import azure_budget as provider
+
+    install_method_override(
+        root,
+        path,
+        provider,
+        "AzureBudget",
+        ["_check", "unknown", "settle"],
+        "budget_override.json",
+        "Consecutive missing-usage guard; reservations and scientific code retained",
+    )
 
 
 def prepare_resume(root):
@@ -331,10 +366,12 @@ def prepare_resume(root):
         atomic_json(path, {"status": "starting", "active": [], "queued_runs": 10, "finished": []})
 
 
-def launch(root, workers, *, resume=False, transport_override=None):
+def launch(root, workers, *, resume=False, transport_override=None, budget_override=None):
     manifest, _, _ = verify(root)
     if (root / "control/transport_override.json").exists() and transport_override is None:
         raise ValueError("Recorded transport override is required for this continuation")
+    if (root / "control/budget_override.json").exists() and budget_override is None:
+        raise ValueError("Recorded budget override is required for this continuation")
     with (root / "control/launch.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if (root / "control/processes.json").exists() and not resume:
@@ -386,6 +423,8 @@ def launch(root, workers, *, resume=False, transport_override=None):
             if transport_override
             else []
         )
+        if budget_override:
+            override_args += ["--budget-override", str(budget_override.resolve())]
         for model in MODELS:
             folder = root / "control" / model
             folder.mkdir(exist_ok=True)
@@ -508,9 +547,12 @@ def observe(root):
                 for a in budget["attempts"].values()
                 if a["status"] in ("reserved", "unknown")
             )
-            remaining = (
-                manifest["allocated_micro_usd"] - budget["spent_micro_usd"] - reserved
-            ) / 1e6
+            policy = read(root / "control/spend_policy.json")
+            allocation = round(
+                policy.get("additional_budget_usd", manifest["allocated_micro_usd"] / 1e6) * 1e6
+            )
+            authorized = policy.get("total_authorized_additional_budget_usd", 1000)
+            remaining = (allocation - budget["spent_micro_usd"] - reserved) / 1e6
             if done:
                 gate = AzureBudget(root / "control/spend_policy.json")
                 with gate.locked():
@@ -535,6 +577,7 @@ def observe(root):
                 updated_at=now(),
                 root=str(root),
                 totals=dict(totals),
+                authorized_total_usd=authorized,
                 new_spend_usd=budget["spent_micro_usd"] / 1e6,
                 new_reserved_usd=reserved / 1e6,
                 remaining_usd=remaining,
@@ -554,7 +597,7 @@ def observe(root):
                 f"\n"
                 f"These are scientific runs, not canary calls. This is a fresh version of the original 30 identities with federated v2 memory. Earlier results remain in the [previous snapshot]({archive}). Results across versions are kept separate. Only Sol/Terra/Luna are released; the initial 30 pause for review, with no next batch.\n"  # noqa: E501
                 f"\n"
-                f"Cache writes are disabled; cache misses never pause this batch. The $1,000 additional allowance includes prior recorded spending **${summary['prior_recorded_usd']:.2f}** and prior unknown reservations **${summary['prior_unknown_usd']:.2f}**. New scientific spending **${summary['new_spend_usd']:.2f}**, in-flight/unknown reservations **${summary['new_reserved_usd']:.2f}**, conservatively remaining **${remaining:.2f}**.\n"  # noqa: E501
+                f"Cache writes are disabled; cache misses never pause this batch. The ${authorized:,.0f} additional allowance includes prior recorded spending **${summary['prior_recorded_usd']:.2f}** and prior unknown reservations **${summary['prior_unknown_usd']:.2f}**. New scientific spending **${summary['new_spend_usd']:.2f}**, in-flight/unknown reservations **${summary['new_reserved_usd']:.2f}**, conservatively remaining **${remaining:.2f}**.\n"  # noqa: E501
                 f"\n"
                 f"Status: {'paused for review' if done else 'running'}. Budget hold: {budget.get('hold_reason') or 'none'}.\n"  # noqa: E501
                 f"\n"
@@ -593,10 +636,13 @@ def main():
     parser.add_argument("--workers", type=int, choices=range(1, 11), default=3)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--transport-override", type=Path)
+    parser.add_argument("--budget-override", type=Path)
     args = parser.parse_args()
     root = args.root.resolve()
     if args.transport_override:
         install_transport_override(root, args.transport_override.resolve())
+    if args.budget_override:
+        install_budget_override(root, args.budget_override.resolve())
     if args.prepare:
         if not args.predecessor:
             parser.error("--predecessor required")
@@ -605,7 +651,13 @@ def main():
         verify(root)
         print(json.dumps({"verified": True, "model_calls": 0, "selected_runs": 30}))
     elif args.launch:
-        launch(root, args.workers, resume=args.resume, transport_override=args.transport_override)
+        launch(
+            root,
+            args.workers,
+            resume=args.resume,
+            transport_override=args.transport_override,
+            budget_override=args.budget_override,
+        )
     elif args.run_model:
         run_model(root, args.run_model, args.workers)
     else:

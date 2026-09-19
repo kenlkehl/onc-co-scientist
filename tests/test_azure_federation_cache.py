@@ -654,3 +654,55 @@ def test_streamed_server_error_retains_cost_and_retries_bounded(
     first = p.root / "call-0001/attempt-0001"
     assert json.loads((first / "response.json").read_text()) == failed
     assert json.loads((first / "stream_failure.json").read_text())["output_activity"]
+
+
+def consecutive_policy(policy):
+    data = json.loads(policy.read_text())
+    data["unknown_attempt_limit_scope"] = "consecutive_per_model"
+    data["cache_miss_pause_enabled"] = False
+    atomic_json(policy, data)
+
+
+def test_consecutive_usage_guard_resets_without_releasing_unknown_costs(tmp_path, policy):
+    consecutive_policy(policy)
+    gate = AzureBudget(policy)
+    for n in range(5):
+        gate.reserve(f"bad-{n}", MODEL, {"max_output_tokens": 100})
+        gate.unknown(f"bad-{n}", "server error")
+        gate.unknown(f"bad-{n}", "duplicate notification")
+        state = json.loads((policy.parent / "spend_state.json").read_text())
+        assert state["unknown_usage_streaks"][MODEL] == 1
+        gate.reserve(f"good-{n}", MODEL, {"max_output_tokens": 100})
+        gate.settle(f"good-{n}", normalize_usage(usage()), None)
+        gate.check(MODEL)
+    state = json.loads((policy.parent / "spend_state.json").read_text())
+    assert state["unknown_usage_streaks"][MODEL] == 0
+    unknown = [a for a in state["attempts"].values() if a["status"] == "unknown"]
+    assert len(unknown) == 5
+    reserved = sum(a["reserved_micro_usd"] for a in unknown)
+    assert reserved > 0
+    data = json.loads(policy.read_text())
+    data["additional_budget_usd"] = (state["spent_micro_usd"] + reserved + 1) / 1e6
+    atomic_json(policy, data)
+    with pytest.raises(ExperimentPaused, match="cannot cover"):
+        gate.reserve("unfunded", MODEL, {"max_output_tokens": 100})
+
+
+def test_consecutive_guard_is_per_model_and_latches(tmp_path, policy):
+    consecutive_policy(policy)
+    other = "gpt-5.6-terra"
+    data = json.loads(policy.read_text())
+    data["rates"][other] = RATES
+    data["model_profiles"][other] = "terra_medium"
+    atomic_json(policy, data)
+    atomic_json(tmp_path / "release.json", {"released_models": ["sol_medium", "terra_medium"]})
+    gate = AzureBudget(policy)
+    for n in range(3):
+        gate.reserve(f"other-{n}", other, {"max_output_tokens": 100})
+        gate.settle(f"other-{n}", normalize_usage(usage()), None)
+        gate.reserve(f"bad-{n}", MODEL, {"max_output_tokens": 100})
+        gate.unknown(f"bad-{n}", "server error")
+    with pytest.raises(ExperimentPaused, match="Consecutive.*sol"):
+        AzureBudget(policy).check(other)
+    state = json.loads((policy.parent / "spend_state.json").read_text())
+    assert state["unknown_usage_streaks"] == {MODEL: 3, other: 0}

@@ -140,6 +140,11 @@ class AzureBudget:
         for field in ("max_unknown_attempts", "max_reusable_prefix_misses"):
             if type(self.policy[field]) is not int or self.policy[field] < 1:
                 raise ValueError("Spending circuit breakers must be positive integers")
+        if self.policy.get("unknown_attempt_limit_scope", "lifetime") not in {
+            "lifetime",
+            "consecutive_per_model",
+        }:
+            raise ValueError("Unknown usage guard scope is invalid")
         if type(self.policy.get("cache_miss_pause_enabled", True)) is not bool:
             raise ValueError("cache_miss_pause_enabled must be a boolean")
         rates = self.policy["rates"][model]
@@ -199,10 +204,25 @@ class AzureBudget:
         with self.locked():
             attempt = self.state["attempts"][request_id]
             if attempt["status"] == "reserved":
-                attempt.update(status="unknown", reason=reason)
-            unknown = sum(a["status"] == "unknown" for a in self.state["attempts"].values())
-            if unknown >= self.policy["max_unknown_attempts"]:
-                self.state["hold_reason"] = "Unknown Azure usage reached the configured limit"
+                attempt.update(
+                    status="unknown", reason=reason, accounted_at=datetime.now(UTC).isoformat()
+                )
+                streaks = self.state.setdefault("unknown_usage_streaks", {})
+                streaks[attempt["model"]] = streaks.get(attempt["model"], 0) + 1
+            if (
+                self.policy.get("unknown_attempt_limit_scope", "lifetime")
+                == "consecutive_per_model"
+            ):
+                unknown = self.state.get("unknown_usage_streaks", {}).get(attempt["model"], 0)
+                if unknown >= self.policy["max_unknown_attempts"]:
+                    self.state["hold_reason"] = (
+                        "Consecutive missing Azure usage receipts reached the configured limit "
+                        f"for {attempt['model']}"
+                    )
+            else:
+                unknown = sum(a["status"] == "unknown" for a in self.state["attempts"].values())
+                if unknown >= self.policy["max_unknown_attempts"]:
+                    self.state["hold_reason"] = "Unknown Azure usage reached the configured limit"
             self.save()
 
     def settle(self, request_id, usage, cache_prefix):
@@ -211,7 +231,13 @@ class AzureBudget:
             if attempt["status"] != "reserved":
                 raise ExperimentPaused("Request accounting already finalized")
             cost = usage_cost_micro(usage, attempt["rates"])
-            attempt.update(status="settled", cost_micro_usd=cost, usage=usage)
+            attempt.update(
+                status="settled",
+                cost_micro_usd=cost,
+                usage=usage,
+                accounted_at=datetime.now(UTC).isoformat(),
+            )
+            self.state.setdefault("unknown_usage_streaks", {})[attempt["model"]] = 0
             self.state["spent_micro_usd"] += cost
             if (
                 cost > attempt["reserved_micro_usd"]

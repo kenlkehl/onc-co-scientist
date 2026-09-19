@@ -36,7 +36,10 @@ def test_preparation_refuses_conflicting_or_unfunded_predecessor(change):
         launch.remaining_micro(policy, state)
 
 
-def test_observer_closes_release_and_spending_at_initial30_completion(tmp_path, monkeypatch):
+@pytest.mark.parametrize("allowance", [1000, 2000])
+def test_observer_closes_release_and_spending_at_initial30_completion(
+    tmp_path, monkeypatch, allowance
+):
     old = tmp_path / "old"
     old.mkdir()
     (old / "LIVE_PROGRESS.md").write_text("old results")
@@ -51,7 +54,14 @@ def test_observer_closes_release_and_spending_at_initial30_completion(tmp_path, 
             "previous_unknown_micro_usd": 10631125,
         },
     )
-    atomic_json(root / "control/spend_policy.json", {"enabled": True})
+    atomic_json(
+        root / "control/spend_policy.json",
+        {
+            "enabled": True,
+            "additional_budget_usd": 896.763964 + allowance - 1000,
+            "total_authorized_additional_budget_usd": allowance,
+        },
+    )
     atomic_json(root / "control/spend_state.json", {"spent_micro_usd": 0, "attempts": {}})
     processes = []
     grid = []
@@ -84,6 +94,10 @@ def test_observer_closes_release_and_spending_at_initial30_completion(tmp_path, 
     assert launch.read(root / "control/review_ready.json")["totals"] == {"completed": 30}
     assert "Completed 30" in (old / "LIVE_PROGRESS.md").read_text()
     assert (root / "PREVIOUS_LIVE_PROGRESS.md").read_text() == "old results"
+    summary = launch.read(root / "live_progress.json")
+    assert summary["authorized_total_usd"] == allowance
+    assert summary["remaining_usd"] == pytest.approx(896.763964 + allowance - 1000)
+    assert f"${allowance:,.0f} additional allowance" in (old / "LIVE_PROGRESS.md").read_text()
 
 
 def test_transport_override_is_limited_and_audited(tmp_path, monkeypatch):
@@ -100,12 +114,12 @@ def test_transport_override_is_limited_and_audited(tmp_path, monkeypatch):
     assert receipt["override_sha256"] == launch.sha(override)
     launch.install_transport_override(tmp_path, override)
     override.write_text(source.replace('"One HTTP attempt,', '"Another HTTP attempt,'))
-    with pytest.raises(ValueError, match="recorded transport override changed"):
+    with pytest.raises(ValueError, match="recorded infrastructure override changed"):
         launch.install_transport_override(tmp_path, override)
     override.write_text(
         source.replace("prompt_caching: bool = True", "prompt_caching: bool = False")
     )
-    with pytest.raises(ValueError, match="more than the HTTP transport"):
+    with pytest.raises(ValueError, match="more than the allowed infrastructure"):
         launch.install_transport_override(tmp_path, override)
 
 
@@ -127,3 +141,21 @@ def test_resume_retains_ledger_and_archives_previous_driver_states(tmp_path, mon
     assert len(archives) == 1
     assert launch.read(archives[0] / "sol_medium.json")["status"] == "paused"
     assert launch.read(tmp_path / "control/sol_medium/execution.json")["status"] == "starting"
+
+
+def test_budget_override_cannot_change_reservation_logic(tmp_path, monkeypatch):
+    from onc_co_scientist.providers import azure_budget as provider
+
+    for name in ("_check", "unknown", "settle"):
+        monkeypatch.setattr(provider.AzureBudget, name, getattr(provider.AzureBudget, name))
+    source = Path(provider.__file__).read_text()
+    override = tmp_path / "budget.py"
+    override.write_text(
+        source.replace('"Consecutive missing Azure usage', '"Repeated missing Azure usage')
+    )
+    launch.install_budget_override(tmp_path, override)
+    receipt = launch.read(tmp_path / "control/budget_override.json")
+    assert receipt["override_sha256"] == launch.sha(override)
+    override.write_text(source.replace(" + 32768", " + 1"))
+    with pytest.raises(ValueError, match="more than the allowed infrastructure"):
+        launch.install_budget_override(tmp_path, override)

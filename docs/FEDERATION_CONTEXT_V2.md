@@ -74,3 +74,17 @@ launcher's hash are recorded separately in `control/transport_override.json`.
 Frozen source/configuration, per-run provenance, completed-call journals and the
 shared spending ledger remain intact. Prior driver states are archived before
 resume. Resumption neither transfers another allocation nor clears budget holds.
+
+The optional `unknown_attempt_limit_scope: consecutive_per_model` policy counts
+consecutive missing-usage responses separately for each deployment. A settled
+usage receipt resets only that model's streak; repeated marking of one unknown
+attempt is idempotent. Three consecutive errors still latch the shared review
+hold. Lifetime unknown reservations remain fully counted against the spending
+cap. The default scope remains `lifetime` for existing policies.
+
+A frozen continuation can apply `--budget-override PATH`, restricted to the
+budget's `_check`, `unknown`, and `settle` methods. Reservation calculations and
+scientific implementation cannot change through this override. Immutable receipts
+record each continuation launcher and provider hash. The observer reads current
+authorized allowances from the spending policy while retaining the original
+frozen manifest and all prior accounting.
