@@ -263,11 +263,19 @@ class AzureFederationProvider(CodexCLIProvider):
                             "response.failed",
                         }:
                             terminal = event["response"]
+                            error = terminal.get("error") or {}
+                            upstream_disconnect = error.get("code") == "unknown" and str(
+                                error.get("message", "")
+                            ).lower().startswith(
+                                "upstream connect error or disconnect/reset before headers"
+                            )
                             if (
                                 event["type"] == "response.failed"
                                 and terminal.get("status") == "failed"
-                                and (terminal.get("error") or {}).get("code")
-                                in {"server_error", "internal_server_error"}
+                                and (
+                                    error.get("code") in {"server_error", "internal_server_error"}
+                                    or upstream_disconnect
+                                )
                             ):
                                 try:
                                     normalize_usage(terminal.get("usage") or {})
@@ -284,6 +292,7 @@ class AzureFederationProvider(CodexCLIProvider):
                                             "http_status": 200,
                                             "retry_status": 500,
                                             "code": terminal["error"]["code"],
+                                            "upstream_disconnect": upstream_disconnect,
                                             "output_activity": output_activity,
                                         },
                                     )

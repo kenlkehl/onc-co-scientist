@@ -88,3 +88,9 @@ scientific implementation cannot change through this override. Immutable receipt
 record each continuation launcher and provider hash. The observer reads current
 authorized allowances from the spending policy while retaining the original
 frozen manifest and all prior accounting.
+
+Azure's streamed `code: unknown` response is also retryable when its message
+specifically identifies an upstream connection error or disconnect/reset before
+headers. It follows the existing bounded server-error retry path, retaining the
+full uncertain-cost reservation even when partial output appeared. Unrelated
+unknown errors and application errors remain held; they are not blanket retried.

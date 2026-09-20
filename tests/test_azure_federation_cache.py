@@ -581,8 +581,9 @@ def test_streamed_rate_limit_retries_only_before_output(tmp_path, policy, monkey
 
 @pytest.mark.parametrize("stop", [None, "retry_limit", "unknown_limit", "budget"])
 @pytest.mark.parametrize("receipt", [None, {}])
+@pytest.mark.parametrize("failure_kind", ["server", "upstream", "unrelated", "wrong_code"])
 def test_streamed_server_error_retains_cost_and_retries_bounded(
-    tmp_path, policy, monkeypatch, stop, receipt
+    tmp_path, policy, monkeypatch, stop, receipt, failure_kind
 ):
     config = json.loads(policy.read_text())
     if stop == "unknown_limit":
@@ -606,6 +607,18 @@ def test_streamed_server_error_retains_cost_and_retries_bounded(
         "usage": receipt,
         "output": [{"type": "reasoning", "content": []}],
     }
+    if failure_kind != "server":
+        failed["error"] = {
+            "code": "unknown" if failure_kind != "wrong_code" else "invalid_request_error",
+            "message": (
+                "upstream connect error or disconnect/reset before headers. "
+                "reset reason: connection termination"
+                if failure_kind != "unrelated"
+                else "unrecognized application error"
+            ),
+        }
+    retryable = failure_kind in {"server", "upstream"}
+    should_stop = bool(stop) or not retryable
     streams = [
         [
             {"type": "response.output_item.added", "item": {"type": "reasoning"}},
@@ -637,7 +650,7 @@ def test_streamed_server_error_retains_cost_and_retries_bounded(
     monkeypatch.setattr(
         "onc_co_scientist.providers.azure_federation.http.client.HTTPSConnection", Connection
     )
-    if stop:
+    if should_stop:
         with pytest.raises(ExperimentPaused):
             p.chat([ChatMessage("user", "aggregate context")])
     else:
@@ -648,12 +661,19 @@ def test_streamed_server_error_retains_cost_and_retries_bounded(
         assert sleeps == [0]
     state = json.loads((policy.parent / "spend_state.json").read_text())
     attempts = list(state["attempts"].values())
-    assert [a["status"] for a in attempts] == (["unknown"] if stop else ["unknown", "settled"])
+    assert [a["status"] for a in attempts] == (
+        ["unknown"] if should_stop else ["unknown", "settled"]
+    )
     assert attempts[0]["reserved_micro_usd"] > 0
-    assert len(bodies) == (1 if stop else 2)
+    assert len(bodies) == (1 if should_stop else 2)
     first = p.root / "call-0001/attempt-0001"
     assert json.loads((first / "response.json").read_text()) == failed
-    assert json.loads((first / "stream_failure.json").read_text())["output_activity"]
+    if retryable:
+        marker = json.loads((first / "stream_failure.json").read_text())
+        assert marker["output_activity"]
+        assert marker["upstream_disconnect"] == (failure_kind == "upstream")
+    else:
+        assert not (first / "stream_failure.json").exists()
 
 
 def consecutive_policy(policy):
