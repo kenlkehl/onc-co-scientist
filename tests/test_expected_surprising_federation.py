@@ -356,6 +356,9 @@ def test_results_are_citable_when_first_shown_and_roles_have_study_context(
         assert "scientist for the" not in system
         # Task instructions are visible before the schema/large claim ledger.
         assert prompt.index("Study instructions:") < prompt.index('{"schema":')
+        assert "A parent-linked refinement requires at least one available motivating R" in prompt
+        assert "register the comparison independently" in prompt
+        assert "omitted motivating_evidence attaches the\nparent's displayed evidence" not in prompt
         if "federation" in payload:
             assert system.startswith("You are a scientist on one federated site team.")
             assert "only the central orchestrator" in system.lower()

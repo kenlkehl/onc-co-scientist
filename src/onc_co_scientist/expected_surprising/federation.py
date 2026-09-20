@@ -23,6 +23,31 @@ from .site_statistics import (
 )
 from .workflow import WorkflowInfrastructureError
 
+REFINEMENT_GUIDANCE = (
+    "A parent-linked refinement requires at least one available motivating R reference. "
+    "Omitting motivating_evidence attaches the parent's displayed evidence only when that "
+    "evidence is nonempty. If the parent has no evidence yet, either supply other available "
+    "R references that support the refinement, or omit parent and motivating_evidence and "
+    "register the comparison independently. You can explain its conceptual relationship "
+    "in narrative. Do not invent evidence, use an empty list for a parent-linked refinement, "
+    "or treat a pending analysis as a result. A related comparison can be registered "
+    "independently while the earlier comparison is still untested. "
+    "Automatic evidence links record supplied evidence, not proof that you discussed or "
+    "understood every result."
+)
+
+
+def refinement_prompt(prompt):
+    """Clarify the evidence precondition only for federated participants."""
+    return prompt.replace(
+        "For a refinement, parent identifies the earlier claim; omitted motivating_evidence "
+        "attaches the\nparent's displayed evidence. These automatic links record evidence "
+        "supplied for your assessment\nor refinement, not proof that you discussed or "
+        "understood every result.",
+        REFINEMENT_GUIDANCE,
+        1,
+    )
+
 
 class FederatedCoordinator:
     def __init__(
@@ -213,6 +238,7 @@ class FederatedCoordinator:
         return prompt[:marker] + instructions + "\n" + json.dumps(payload, separators=(",", ":"))
 
     def respond(self, prompt, *, iteration, stage, attempt):
+        prompt = refinement_prompt(prompt)
         key = f"i{iteration:03d}-{stage}"
         if self.active is not None and self.active != key:
             for coordinator in self.sites.values():

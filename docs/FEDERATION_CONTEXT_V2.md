@@ -94,3 +94,26 @@ specifically identifies an upstream connection error or disconnect/reset before
 headers. It follows the existing bounded server-error retry path, retaining the
 full uncertain-cost reservation even when partial output appeared. Unrelated
 unknown errors and application errors remain held; they are not blanket retried.
+
+Federated refinement instructions explicitly require nonempty available motivating
+evidence for a parent link. Automatic evidence attachment cannot supply evidence
+for an untested parent. Agents may cite other available supporting results or
+register a related comparison independently and explain the relationship in prose.
+This clarification is applied only by the federated coordinator; single-site
+prompts and scientific validation rules are unchanged.
+
+`scripts/expected_surprising/recover_federation_run.py` prepares a separate Terra
+recovery with its own newly authorized allocation (at most $500). It preserves
+the original failed record and copies only participant calls before the first
+unrecovered iteration. The old coordinator reconstructs that prefix with exact
+request and response-hash checks, and missing prefix calls cannot trigger paid
+inference. From the failed iteration onward the clarified coordinator makes fresh
+decisions; later original responses are not reused. `--check` performs that prefix
+reconstruction without new model calls. The recovery source, inputs, driver,
+prefix artifacts, and original report are hash-checked before execution.
+
+Run the frozen recovery driver with its own `source/src` on `PYTHONPATH`. Its
+`LIVE_PROGRESS.md` records current requests and new spending. The original batch,
+its active drivers, and its spending/release policies remain unchanged. Recovered
+results are a separately identified scientific version, not replacements silently
+counted as original-batch completions.
