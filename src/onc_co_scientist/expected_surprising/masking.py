@@ -13,16 +13,17 @@ from ..synthetic.anonymize import build_column_mapping, build_value_mapping, mas
 from .evaluation import WorkflowValidationService
 from .generation import base_frame, conditional_means, sample
 from .packaging import sha256
+from .prompting import ASSAY_DESCRIPTION, LEGACY_ASSAY_DESCRIPTION
 from .review_policy import require_current_pair
 from .schemas import Hypothesis, PairSpec
 from .scoring import comparison_key
 
-MASKING_VERSION = "columns-and-text-levels-v1"
+MASKING_VERSION = "columns-and-text-levels-v2"
 
 
 class SemanticMask:
     def __init__(self, payload):
-        if payload["version"] != MASKING_VERSION:
+        if payload["version"] not in {"columns-and-text-levels-v1", MASKING_VERSION}:
             raise ValueError("Unknown semantic masking version")
         self.payload = payload
         self.columns = payload["columns"]
@@ -175,11 +176,8 @@ def mask_package(source: Path, out: Path, *, seed: int = 20260910):
                 o["name"] = masking.columns.get(o["name"], o["name"])
             (public / "task.json").write_text(json.dumps(task, indent=2))
             instructions = (original / "instructions.md").read_text()
-            # Remove semantic descriptions of the now-opaque research assays.
-            start = instructions.find("Research signatures are")
-            end = instructions.find("A mean_difference", start)
-            if start >= 0 and end >= 0:
-                instructions = instructions[:start] + instructions[end:]
+            # Preserve measurement context and translate assay names with the other columns.
+            instructions = instructions.replace(LEGACY_ASSAY_DESCRIPTION, ASSAY_DESCRIPTION)
             for name, alias in sorted(masking.columns.items(), key=lambda x: -len(x[0])):
                 instructions = instructions.replace(name, alias)
             instructions += (

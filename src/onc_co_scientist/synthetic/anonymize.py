@@ -25,7 +25,7 @@ import pandas as pd
 from .generator import DatasetBundle, GeneratorConfig
 from .schemas import AssociationSpec, DatasetManifest, SubgroupSpec
 
-DEFAULT_ID_COLUMNS: tuple[str, ...] = ("patient_id",)
+DEFAULT_ID_COLUMNS: tuple[str, ...] = ("patient_id", "cell_line_id")
 DEPMAP_MASKING_VERSION = "depmap-features-and-outcomes-v1"
 
 

@@ -8,6 +8,7 @@ import json
 import pandas as pd
 
 from ..providers.base import ChatMessage
+from ..synthetic.anonymize import DEFAULT_ID_COLUMNS
 from .evaluation import WorkflowValidationService
 from .generation import version_discoveries
 from .packaging import sha256
@@ -564,20 +565,26 @@ def run_workflow(
         controller.service = MaskedValidationService(
             spec, version, replicate_id or run_id, policy, semantic_mask
         )
-    compact = versions["prompt"] == "ledger-1.0.0"
-    from .prompting import build_prompt, references, repair_message, translate
+    compact = versions["prompt"] in {"ledger-1.0.0", "ledger-1.1.0"}
+    from .prompting import build_prompt, public_outcomes, references, repair_message, translate
 
     memory, repair_feedback = {}, None
+    identifiers = set(DEFAULT_ID_COLUMNS)
+    if masking is not None:
+        identifiers.update(semantic_mask.columns.get(name, name) for name in DEFAULT_ID_COLUMNS)
+    summary = json.loads(
+        frame.drop(columns=list(identifiers), errors="ignore")
+        .describe(include="all")
+        .fillna("")
+        .to_json()
+    )
+    task = {**task, "outcomes": public_outcomes(controller.spec.outcomes)}
     task_context = {
         "instructions": (public / "instructions.md").read_text(),
         "outcomes": task["outcomes"],
         "observations": len(frame),
         "variables": {
-            name: {k: v for k, v in stats.items() if v != ""}
-            for name, stats in json.loads(
-                frame.describe(include="all").fillna("").to_json()
-            ).items()
-            if name not in {"patient_id", "cell_line_id"}
+            name: {k: v for k, v in stats.items() if v != ""} for name, stats in summary.items()
         },
     }
     if stage_executor is not None and hasattr(stage_executor, "bind"):
@@ -586,7 +593,7 @@ def run_workflow(
         {
             "task": task,
             "instructions": (public / "instructions.md").read_text(),
-            "summary": json.loads(frame.describe(include="all").fillna("").to_json()),
+            "summary": summary,
         }
     ]
     errors, exhausted, recovered = [], [], []
@@ -742,7 +749,8 @@ def run_workflow(
                         "instruction": (
                             "Nothing in the failed attempt was committed. Return a corrected "
                             "complete form for this stage. The ledger is unchanged."
-                            " Return exactly one JSON object, with no thinking tags or commentary outside JSON."
+                            " Return exactly one JSON object, with no thinking tags or commentary "
+                            "outside JSON."
                         ),
                     }
                     history.append(feedback)

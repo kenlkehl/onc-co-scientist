@@ -324,8 +324,8 @@ EvidenceClass = Literal["supported", "excluded", "ambiguous"]
 
 
 class WorkflowVersions(StrictModel):
-    workflow: Literal["appraisal-3.1.0", "appraisal-3.2.0"] = "appraisal-3.2.0"
-    prompt: Literal["exploration-3.1.0", "ledger-1.0.0"] = "ledger-1.0.0"
+    workflow: Literal["appraisal-3.1.0", "appraisal-3.2.0", "appraisal-3.3.0"] = "appraisal-3.3.0"
+    prompt: Literal["exploration-3.1.0", "ledger-1.0.0", "ledger-1.1.0"] = "ledger-1.1.0"
     schema_version: Literal["stage-3.0.0", "stage-forms-1.0.0"] = "stage-forms-1.0.0"
     validation_policy: Literal["delayed-3.0.0"] = "delayed-3.0.0"
     scoring: Literal["profile-3.0.0"] = "profile-3.0.0"
@@ -333,11 +333,11 @@ class WorkflowVersions(StrictModel):
 
     @model_validator(mode="after")
     def consistent_interface(self):
-        expected = (
-            ("exploration-3.1.0", "stage-3.0.0")
-            if self.workflow == "appraisal-3.1.0"
-            else ("ledger-1.0.0", "stage-forms-1.0.0")
-        )
+        expected = {
+            "appraisal-3.1.0": ("exploration-3.1.0", "stage-3.0.0"),
+            "appraisal-3.2.0": ("ledger-1.0.0", "stage-forms-1.0.0"),
+            "appraisal-3.3.0": ("ledger-1.1.0", "stage-forms-1.0.0"),
+        }[self.workflow]
         if (self.prompt, self.schema_version) != expected:
             raise ValueError("Workflow, prompt and response form versions must agree")
         return self

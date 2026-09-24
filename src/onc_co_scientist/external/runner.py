@@ -17,7 +17,13 @@ import pandas as pd
 
 from ..expected_surprising.experiment import import_tasks
 from ..expected_surprising.packaging import sha256
-from ..expected_surprising.prompting import SCIENTIFIC_GUIDANCE, Judgment, Proposal
+from ..expected_surprising.prompting import (
+    SCIENTIFIC_GUIDANCE,
+    Judgment,
+    Proposal,
+    effect_size_guidance,
+    public_outcomes,
+)
 from ..expected_surprising.review_policy import require_current_pair
 from ..expected_surprising.schemas import PairSpec, ValidationPolicy, WorkflowVersions
 from ..expected_surprising.workflow import finalize_workflow
@@ -56,7 +62,7 @@ class BiomniRunner:
                 raise
 
 
-def task_prompt(rounds, *, masked=False):
+def task_prompt(rounds, *, outcomes, masked=False):
     prompt = f"""Investigate diverse, scientifically meaningful comparisons in
 /public/dataset.parquet.
 Use previous results to allocate investigation. Broad exploration and focused follow-up are both
@@ -66,6 +72,7 @@ are constructed assays with no assigned clinical or biological role.
 A mean_difference is exposed minus comparator within eligibility and subgroup. An interaction
 subtracts that comparison in the subgroup complement in the same eligible population.
 {SCIENTIFIC_GUIDANCE}
+{effect_size_guidance(outcomes)}
 Use your native planning, code, data lake, research tools and scientific judgment. Retain code,
 results, null findings and a final narrative in /work. External knowledge informs interpretation;
 claims about this dataset must be supported by its evidence.
@@ -101,12 +108,10 @@ Proposal schema: {json.dumps(Proposal.model_json_schema())}
 Judgment schema: {json.dumps(Judgment.model_json_schema())}
 """
     if masked:
-        prompt = prompt.replace(
-            "Research signatures and markers\n"
-            "are constructed assays with no assigned clinical or biological role.",
-            "Predictor names and text categorical values use opaque labels. "
+        prompt += (
+            "\nPredictor names and text categorical values use opaque labels. "
             "Levels are nominal, not ordered numbers. Numeric values, outcome scales, "
-            "and missingness are preserved.",
+            "and missingness are preserved."
         )
     return prompt
 
@@ -372,7 +377,11 @@ def run_cell(spec, task, pair, policy, replicate, digest, *, resume=False, runne
             "reasoning_effort": spec.reasoning_effort,
             "request_timeout": spec.request_timeout,
             "tool_timeout": spec.tool_timeout,
-            "prompt": task_prompt(spec.rounds, masked=masking is not None),
+            "prompt": task_prompt(
+                spec.rounds,
+                outcomes=public_outcomes(controller.spec.outcomes),
+                masked=masking is not None,
+            ),
             "run_id": run_id,
             "resume": native_resume,
         },

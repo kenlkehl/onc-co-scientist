@@ -49,6 +49,7 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
             "Every planned run must have exactly one result; missing runs are not failures"
         )
     groups = defaultdict(list)
+    prompt_versions = set()
     for plan in plans:
         result = by_id[plan.run_id]
         if result["status"] not in {"completed", "failed"}:
@@ -62,6 +63,8 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
         ):
             raise ValueError("Scientific report checksum changed")
         report = json.loads(Path(path).read_text()) if path else None
+        if report and report.get("versions", {}).get("prompt"):
+            prompt_versions.add(report["versions"]["prompt"])
         if result["status"] == "completed" and report is None:
             raise ValueError("Completed expected/surprising run is missing its scientific report")
         groups[
@@ -204,6 +207,7 @@ def summarize_matrix(spec, plans, results, *, bootstrap_replicates=2000, seed=0)
             )
     return {
         "conditions": conditions,
+        "prompt_versions": sorted(prompt_versions),
         "workflow_contrasts": contrasts,
         "primary_failure_rule": (
             "Scientific recovery is retained after stage failures; "
@@ -387,7 +391,7 @@ def render_markdown(spec, summary):
         "",
         "B = 100 × (supported agreement + excluded agreement + ambiguous agreement) / 3. "
         "The evaluator calls validation supported when its lower interval bound exceeds "
-        "the private cutoff (credit for accept), excluded when its upper bound is below "
+        "the outcome-specific cutoff (credit for accept), excluded when its upper bound is below "
         "the cutoff (credit for reject), and ambiguous otherwise (credit for unresolved). "
         "Intervals are oriented to the claim. The assessment is scored two iterations after "
         "delivery. Class agreement fractions are calculated within runs, then averaged over "
@@ -396,7 +400,14 @@ def render_markdown(spec, summary):
         "reached or budgeted iterations are excluded. An absent class makes B unavailable.",
         "",
     ]
-    if "clinical_significance_10pct" in spec.experiment_id:
+    if summary.get("prompt_versions") == ["ledger-1.1.0"]:
+        lines += [
+            "Agents were given outcome-specific absolute effect-size thresholds from the "
+            "evaluator specification, in the supplied outcome units. These are not relative "
+            "percentages. Agents still judge uncertainty and conclusions.",
+            "",
+        ]
+    elif "clinical_significance_10pct" in spec.experiment_id:
         lines += [
             "Agents were told that a relative outcome difference of 10% or greater is "
             "clinically significant, without log-scale calculations or mechanical decision "

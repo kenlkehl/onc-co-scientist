@@ -515,7 +515,7 @@ def test_native_run_writes_scores_token_curve_and_verifies_resume(
                 assert all(c in g.controller.frame for c in mapping.columns.values())
                 prompt = json.loads(config_path.read_text())["prompt"]
                 assert "opaque labels" in prompt
-                assert "Research signatures and markers" not in prompt
+                assert "Research signatures and markers" in prompt
             counter = 0
 
             def send(action, payload=None):

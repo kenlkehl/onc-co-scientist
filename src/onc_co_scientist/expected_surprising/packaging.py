@@ -7,21 +7,20 @@ import json
 import shutil
 from pathlib import Path
 
-from .prompting import schemas
+from .prompting import ASSAY_DESCRIPTION, public_outcomes, schemas
 from .schemas import FULL_RUN_ITERATIONS, PairSpec, ValidationPolicy, WorkflowVersions
 
-PUBLIC_INSTRUCTIONS = """Investigate diverse, scientifically meaningful comparisons and use previous
-results to allocate further investigation. Broad exploration and focused follow-up are both useful
-throughout the run. Assess discoveries in this supplied dataset and use independent validation when
-useful. Biological interpretation and generalizability may remain uncertain.
+PUBLIC_INSTRUCTIONS = f"""Investigate diverse, scientifically meaningful comparisons and use
+previous results to allocate further investigation. Broad exploration and focused follow-up are
+both useful throughout the run. Assess discoveries in this supplied dataset and use independent
+validation when useful. Biological interpretation and generalizability may remain uncertain.
 
 Register comparisons, anticipated directions, and initial assessments before requesting analyses.
 The controller assigns claim references. For a changed claim, propose a new comparison and link
 refinements to the earlier parent claim.
 Clinical log_pfs_months is natural log progression-free survival in months, fully observed without
 censoring. Dependency scores are continuous; more negative values mean stronger dependency.
-Research signatures are constructed standardized assays in arbitrary units. Research markers D, E,
-and F are constructed binary assays with no assigned gene, pathway, or clinical role.
+{ASSAY_DESCRIPTION}
 A mean_difference is exposed minus comparator within eligibility and subgroup. An interaction
 subtracts that comparison in the subgroup complement in the same eligible population.
 Use your scientific judgment to assess the size, uncertainty, and importance of each effect
@@ -85,10 +84,8 @@ def repackage(source: Path, out: Path) -> dict:
             for name in ("dataset.parquet", "data_dictionary.json"):
                 shutil.copyfile(original / name, public / name)
             task = json.loads((original / "task.json").read_text())
-            # Effect-size cutoffs belong only to the evaluator, never to the agent's task.
-            task["outcomes"] = [
-                {key: outcome[key] for key in ("name", "units")} for outcome in task["outcomes"]
-            ]
+            # Use the evaluator's reviewed specification as the source of public thresholds.
+            task["outcomes"] = public_outcomes(spec.outcomes)
             # Repackaging upgrades historical cell-line tasks as well as fresh generation.
             task["iterations"] = FULL_RUN_ITERATIONS
             policy = ValidationPolicy.default(spec.profile, task["iterations"])

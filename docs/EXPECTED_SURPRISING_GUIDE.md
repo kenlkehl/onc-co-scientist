@@ -10,7 +10,7 @@ The central comparison uses **a pair of datasets**. They contain the same synthe
 
 This guide describes the implementation on the `expected-or-surprising` branch as of September 7, 2026, using the **v2 development release**. It contains the evaluator's discovery definitions and pair assignments. The evaluated agent receives only its assigned task and the analysis history described below. Expert adjudication of the literature classifications and formal task locking remain pending.
 
-The [workflow and scoring refactor](EXPECTED_SURPRISING_REFACTOR_PLAN.md) is implemented as `appraisal-3.2.0`, with numerical DGP **v2 unchanged**. New packages copy all 20 original Parquet files byte for byte. The [historical guide](EXPECTED_SURPRISING_GUIDE_LEGACY.md) describes the earlier voluntary-only protocol; historical packages continue to select that implementation. Fresh task packages use 25 iterations for both clinical and cell-line data. Existing packages and runs retain their recorded budgets. The separate named/masked workflow is unchanged.
+The [workflow and scoring refactor](EXPECTED_SURPRISING_REFACTOR_PLAN.md), with the [public-context fixes](EXPECTED_SURPRISING_PROMPTING.md), is implemented as `appraisal-3.3.0`, with numerical DGP **v2 unchanged**. New named packages copy all 20 original Parquet files byte for byte. The [historical guide](EXPECTED_SURPRISING_GUIDE_LEGACY.md) describes the earlier voluntary-only protocol; historical packages continue to select that implementation. Fresh task packages use 25 iterations for both clinical and cell-line data. Existing packages and runs retain their recorded budgets. Corrected masked packages use `columns-and-text-levels-v2`; existing frozen campaigns are not rewritten.
 
 The provider-independent controller uses the repository's `LLMProvider` interface. No server address or model is built into its workflow, validation, or scoring logic. The configured vLLM endpoint is used for live smoke testing.
 
@@ -149,7 +149,7 @@ The [technical reference](EXPECTED_SURPRISING.md#generation-and-literature-revie
 
 One run evaluates one provider/model on one assigned public task. It receives public instructions, the response schema, outcome scales and units, column summaries, a current claim/evidence ledger, its persistent research notes, latest stage narratives, and required assessments. Full prior JSON responses and failed attempts are retained in the audit transcript rather than repeated in every prompt. It receives no target inventory, literature categories, private DGP, selection pool, or unreleased selection. The full frame stays with the Python controller. There are no arbitrary-code, browsing, filesystem, or subagent tools in the evaluated harness.
 
-The public instructions encourage diverse comparisons and evidence-informed follow-up throughout the run. They explain signed contrasts and ask the agent to use its own scientific judgment about effect sizes, uncertainty, and conclusions. They prescribe no minimum effect or numerical accept/reject rule. Public task metadata and every numerical result sent to the provider omit evaluator effect-size cutoffs, including cached, automatically delivered, and reoriented results. Numerical reference decisions and cutoffs remain private scoring rules.
+The public instructions encourage diverse comparisons and evidence-informed follow-up throughout the run. They explain signed contrasts and ask the agent to use its own scientific judgment about effect sizes, uncertainty, and conclusions. Public task metadata and prompts now state the evaluator's outcome-specific absolute effect-size thresholds, while prescribing no mechanical accept/reject rule. Numerical results omit internal scoring fields, including cached, automatically delivered, and reoriented results. Planted targets and numerical reference decisions remain private.
 
 | Stage | Agent action | Controller action |
 |---|---|---|
@@ -170,7 +170,7 @@ See [the prompting refactor and examples](EXPECTED_SURPRISING_PROMPTING.md) for 
 
 Claim identity includes direction. Comparison identity ignores direction and normalizes exposure/comparator recoding. A family retains the endpoint, exposure levels, contrast, eligibility restrictions, and subgroup variable names. A new name earns no new claim, test, or sample credit. Opposite claims are distinct scientific decisions sharing one comparison's numerical evidence. The controller returns evidence oriented to each new opposite claim and explicitly marks its registration as already exposed to direct evidence. Related prior evidence is recorded separately from direct exposure.
 
-Signed results are `direction × raw contrast`. A mean difference is exposed minus comparator within eligibility and subgroup. An interaction subtracts that difference in the subgroup complement. For example, a raw difference of −0.4 under direction −1 appears as +0.4. Cell sizes follow the indicated exposure/comparator ordering. Clinical PFS is fully observed and analyzed on the natural-log months scale; more negative raw dependency scores indicate greater dependency. The evaluator privately retains reference cutoffs of 0.10 clinical units and 0.15 dependency-score units for scoring, without prescribing these to the agent. Every comparison cell needs at least 20 observations.
+Signed results are `direction × raw contrast`. A mean difference is exposed minus comparator within eligibility and subgroup. An interaction subtracts that difference in the subgroup complement. For example, a raw difference of −0.4 under direction −1 appears as +0.4. Cell sizes follow the indicated exposure/comparator ordering. Clinical PFS is fully observed and analyzed on the natural-log months scale; more negative raw dependency scores indicate greater dependency. The reference cutoffs of 0.10 natural-log PFS units and 0.15 dependency-score units are published to the agent and used unchanged for scoring. Every comparison cell needs at least 20 observations.
 
 ### Validation delivery
 
@@ -192,8 +192,8 @@ Sample seeds are derived from SHA-256 of `es-workflow-v1:PAIR_ID:REPLICATE_ID:NA
 
 | Contract | Version |
 |---|---|
-| Workflow | `appraisal-3.2.0` |
-| Public prompt | `ledger-1.0.0` |
+| Workflow | `appraisal-3.3.0` |
+| Public prompt | `ledger-1.1.0` |
 | Response schema | `stage-forms-1.0.0` |
 | Validation policy | `delayed-3.0.0` |
 | Scoring | `profile-3.0.0` |

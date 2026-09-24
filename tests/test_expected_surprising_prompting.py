@@ -322,7 +322,7 @@ def test_compact_workflow_is_selected_by_package_for_every_provider(
         iterations=6,
     )
     assert report["successful_stages"] == 24
-    assert report["versions"]["prompt"] == "ledger-1.0.0"
+    assert report["versions"]["prompt"] == "ledger-1.1.0"
     assert not report["protocol_errors"]
 
 

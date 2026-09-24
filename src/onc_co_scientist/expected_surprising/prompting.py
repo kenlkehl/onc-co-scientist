@@ -73,11 +73,36 @@ FORMS = dict(
 )
 
 SCIENTIFIC_GUIDANCE = (
-    "For this task, a relative difference in outcome of 10% or greater is considered clinically "
-    "significant.\nUse your judgment about uncertainty and conclusions in light of this clinical "
-    "significance threshold. Acceptance does not require\nindependent validation first. "
+    "Scientifically meaningful effects exceed the stated outcome-specific effect-size threshold "
+    "in the claimed direction. Thresholds are absolute differences on the supplied outcome scale, "
+    "not percentages of the outcome mean. Use your judgment about uncertainty and conclusions "
+    "in light of these thresholds. Acceptance does not require independent validation first. "
     "Explain your reasoning in narrative."
 )
+
+LEGACY_ASSAY_DESCRIPTION = (
+    "Research signatures are constructed standardized assays in arbitrary units. "
+    "Research markers D, E,\nand F are constructed binary assays with no assigned gene, "
+    "pathway, or clinical role."
+)
+ASSAY_DESCRIPTION = (
+    "Research signatures (research_signature_a, research_signature_b, research_signature_c) "
+    "are constructed standardized assays in arbitrary units. Research markers "
+    "(research_marker_d_positive, research_marker_e_positive, research_marker_f_positive) "
+    "are constructed binary assays with no assigned gene, pathway, or clinical role."
+)
+
+
+def public_outcomes(outcomes):
+    """Publish measurement units and cutoffs, without generation parameters or target labels."""
+    return [dict(name=o.name, units=o.units, effect_size_threshold=o.delta) for o in outcomes]
+
+
+def effect_size_guidance(outcomes):
+    return "Outcome-specific absolute effect-size thresholds:\n" + "\n".join(
+        f"- {o['name']}: {o['effect_size_threshold']:g} {o['units']}" for o in outcomes
+    )
+
 
 COMMON = (
     """You are investigating the supplied research dataset. Return one JSON object using
@@ -258,6 +283,8 @@ def build_prompt(controller, task_context, iteration, iterations, stage, attempt
         + task_context.get("instructions", "")
         + "\n\n"
         + COMMON
+        + "\n"
+        + effect_size_guidance(public_outcomes(controller.spec.outcomes))
         + "\nYour action now: "
         + STAGE_INSTRUCTIONS[stage]
         + "\n"

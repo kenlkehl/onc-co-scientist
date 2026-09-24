@@ -122,14 +122,15 @@ def test_package_private_map_and_public_nonleakage(masked_package):
         mask_package(SOURCE, root)
 
 
-def test_masked_matrix_all_workflows_and_public_prompts(tmp_path, monkeypatch):
+@pytest.mark.parametrize("profile", ["nsclc_clinical", "nsclc_depmap"])
+def test_masked_matrix_all_workflows_and_public_prompts(tmp_path, monkeypatch, profile):
     import yaml
 
     from onc_co_scientist.harness.experiment import load_experiment_spec
     from onc_co_scientist.harness.orchestrator import run_experiment
     from tests.test_expected_surprising_experiment import config, providers, reports
 
-    _, pairs, raw, config_path = config(tmp_path)
+    _, pairs, raw, config_path = config(tmp_path, profiles=(profile,))
     mask_package(tmp_path / "packages", tmp_path / "opaque")
     private = next((tmp_path / "opaque/private").iterdir())
     masking = SemanticMask(json.loads((private / "masking.json").read_text()))
@@ -145,6 +146,9 @@ def test_masked_matrix_all_workflows_and_public_prompts(tmp_path, monkeypatch):
         assert all(r["scores"] == group[0]["scores"] for r in group)
     for provider in made:
         text = "\n".join(m.content for call in provider.messages for m in call)
+        assert "patient_id" not in text and "cell_line_id" not in text
+        assert "absolute differences on the supplied outcome scale" in text
+        assert "standardized assays in arbitrary units" in text
         assert not any(column in text for column in masking.columns)
         assert not any(
             value in text
