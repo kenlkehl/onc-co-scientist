@@ -241,7 +241,8 @@ def frozen_campaign(tmp_path):
     root = tmp_path / "campaign"
     frozen = campaign.prepare(out=root, named=tmp_path / "packages", masked=tmp_path / "masked",
         base_config=path, server_manifest=tmp_path / "manifest.json",
-        arms=["gemma4-control", "gemma4-caa"], replicates=1, rationale="unvalidated unit fixture")
+        arms=["gemma4-control", "gemma4-caa"], replicates=1, rationale="unvalidated unit fixture",
+        base_url="http://127.0.0.1:18765/v1/")
     return root, frozen, pairs[0]
 
 
@@ -254,6 +255,7 @@ def test_freeze_balances_all_conditions_and_detects_tampering(frozen_campaign):
     raw = yaml.safe_load((root / "masked/config.yaml").read_text())
     assert raw["models"][0]["provider_config"]["json_object_output"] is False
     assert raw["models"][0]["provider_config"]["kind"] == "caa_openai"
+    assert raw["models"][0]["provider_config"]["base_url"] == "http://127.0.0.1:18765/v1"
     with (root / "masked/config.yaml").open("a") as stream:
         stream.write("\n# change\n")
     with pytest.raises(ValueError, match="changed"):

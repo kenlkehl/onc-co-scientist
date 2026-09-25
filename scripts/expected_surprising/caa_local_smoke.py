@@ -18,6 +18,19 @@ from onc_co_scientist.interventions.discovery_pairs import discovery_pairs, trai
 from onc_co_scientist.interventions.prompts import write_contrast_pairs
 
 
+def validate_generation(generated):
+    """Completion alone is insufficient: require a stopped, correct JSON answer."""
+    try:
+        correct_json = json.loads(str(generated)) == {"status": "ready"}
+    except (ValueError, TypeError):
+        correct_json = False
+    return {
+        "stopped": generated.finish_reason == "stop",
+        "correct_json": correct_json,
+        "positive_token_counts": generated.prompt_tokens > 0 and generated.completion_tokens > 0,
+    }
+
+
 def main():
     # Leave useful thread diagnostics if cached checkpoint loading stalls.
     faulthandler.enable()
@@ -26,12 +39,15 @@ def main():
     parser.add_argument("--model", required=True)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--max-tokens", type=int, default=128)
+    parser.add_argument("--attention", choices=["sdpa", "eager"], default="sdpa")
+    parser.add_argument("--inter-gpu-transfer", choices=["direct", "cpu"], default="direct")
     parser.add_argument("--stage-local", type=Path,
                         help="Copy the exact checkpoint to a new local temporary directory")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=False)
     result = {"status": "started", "purpose": "engineering smoke, not scientific efficacy",
-              "model": args.model, "dtype": "bfloat16"}
+              "model": args.model, "dtype": "bfloat16", "attention": args.attention,
+              "inter_gpu_transfer": args.inter_gpu_transfer}
 
     def save():
         (args.out / "smoke.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -67,12 +83,16 @@ def main():
         started = time.monotonic()
         processor, model = load_transformers_text_model(
             model_path, dtype="bfloat16", device_map="balanced", local_files_only=True,
+            attn_implementation=args.attention,
+            inter_gpu_transfer=args.inter_gpu_transfer,
         )
         result["load_seconds"] = time.monotonic() - started
         faulthandler.cancel_dump_traceback_later()
         result["device_map"] = {k: str(v) for k, v in model.hf_device_map.items()}
         if any(str(v) in {"cpu", "disk"} for v in model.hf_device_map.values()):
             raise RuntimeError("Model did not fit entirely on the GPUs")
+        result["stage"] = "deriving_vectors"
+        save()
         print(f"Model loaded in {result['load_seconds']:.1f}s", flush=True)
         pairs = training_pairs()
         write_contrast_pairs(pairs, args.out / "train.jsonl")
@@ -89,6 +109,8 @@ def main():
         bundle.metadata["validation_status"] = "unvalidated_constructed_appraisal_candidate"
         bundle.save(args.out / "vectors.npz")
         result["derivation_seconds"] = time.monotonic() - started
+        result["stage"] = "generating"
+        save()
         print(f"26 contrast pairs derived in {result['derivation_seconds']:.1f}s", flush=True)
         aliases = [CaaModelAlias("gemma4-control", "control"),
                    CaaModelAlias("gemma4-caa", "candidate", scale=-0.05),
@@ -98,6 +120,8 @@ def main():
         engine = CAAInferenceEngine(
             model_path=model_path, vector_file=args.out / "vectors.npz", dtype="bfloat16",
             device_map="balanced", cache_implementation="dynamic", compact_agent_context=False,
+            attn_implementation=args.attention,
+            inter_gpu_transfer=args.inter_gpu_transfer,
             aliases={a.model_id: a for a in aliases},
         )
         engine.model, engine.processor, engine.vector_bundle = model, processor, bundle
@@ -117,12 +141,16 @@ def main():
             result["generations"].append({"alias": alias.model_id, "thinking": thinking,
                 "text": str(generated), "raw_text": generated.raw_text,
                 "finish_reason": generated.finish_reason, "usage": generated.usage,
+                "validation": validate_generation(generated),
                 "seconds": seconds, "tokens_per_second": generated.completion_tokens / seconds})
             print(f"{alias.model_id}: {generated.finish_reason}, {seconds:.1f}s", flush=True)
             save()
         result["peak_gpu_gib"] = [torch.cuda.max_memory_allocated(i) / 2**30
                                   for i in range(torch.cuda.device_count())]
+        if not all(all(row["validation"].values()) for row in result["generations"]):
+            raise RuntimeError("Smoke generation validation failed; inspect the recorded responses")
         result["status"] = "completed"
+        result["stage"] = "completed"
     except (Exception, KeyboardInterrupt) as exc:
         result.update(status="failed", error_type=type(exc).__name__, error=str(exc))
         raise

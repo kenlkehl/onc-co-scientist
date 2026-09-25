@@ -1,0 +1,1666 @@
+"""Top-level Typer CLI: ``ocs``.
+
+Three subcommand groups mirror the pipeline stages:
+
+- ``ocs synth generate`` — produce a synthetic dataset bundle (Aim 1.1).
+- ``ocs harness build-task`` — materialize a harness-agnostic task bundle (Aim 1.2).
+- ``ocs score run`` — score a harness transcript against a dataset manifest (Aim 1.2).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from enum import StrEnum
+from pathlib import Path
+from typing import Annotated
+
+import numpy as np
+import pandas as pd
+import typer
+import yaml
+from pydantic import ValidationError
+from rich.console import Console
+
+from .expected_surprising.cli import app as expected_surprising_app
+from .harness.experiment import load_experiment_spec
+from .harness.orchestrator import build_run_plans, run_experiment
+from .harness.supervisor import SupervisorConfig, supervise_experiment
+from .harness.task_spec import (
+    INSTRUCTIONS_FILENAME,
+    TASK_DATASET_LINK,
+    build_task,
+    build_tasks,
+)
+from .harness.transcript import Transcript
+from .interventions import (
+    VectorBundle,
+    default_contrast_pairs,
+    metadata_path_for,
+    read_contrast_pairs,
+    write_contrast_pairs,
+)
+from .scoring import (
+    AnthropicVertexJudge,
+    ClaudeCliJudge,
+    CodexCliJudge,
+    Judge,
+    JudgeCache,
+    ReplicateScore,
+    StubJudge,
+    aggregate_batch,
+    aggregate_replicates,
+    default_cache_dir,
+    score_buried,
+    score_novelty,
+    wrap_single,
+    write_batch_report,
+)
+from .scoring.structured_batch import SCORER_VERSION, score_transcript, write_structured_report
+from .synthetic.cancer_types import CancerType, all_cancer_types
+from .synthetic.generator import GeneratorConfig
+from .synthetic.io import (
+    ANONYMIZED_SUBDIR,
+    MANIFEST_FILENAME,
+    discover_bundles,
+    load_column_mapping,
+    read_manifest,
+)
+from .synthetic.multi import (
+    generate_multi_dataset,
+    write_multi_bundle,
+    write_multi_bundle_pair,
+)
+from .synthetic.schemas import DatasetManifest
+
+
+class DatasetVariant(StrEnum):
+    """How many variants of the dataset to materialize."""
+
+    named = "named"
+    anonymized = "anonymized"
+    both = "both"
+
+
+class JudgeBackend(StrEnum):
+    """LLM backend powering novelty + match judgments."""
+
+    claude_cli = "claude-cli"
+    codex_cli = "codex-cli"
+    gemini_vertex = "gemini-vertex"
+    anthropic_vertex = "anthropic-vertex"
+    stub = "stub"
+
+
+class SteeringMode(StrEnum):
+    """How to apply a CAA vector at generation time."""
+
+    add = "add"
+    ablate = "ablate"
+
+
+app = typer.Typer(
+    help="Oncology Co-Scientist Benchmark CLI.",
+    no_args_is_help=True,
+    add_completion=False,
+)
+app.add_typer(expected_surprising_app, name="expected-surprising")
+synth_app = typer.Typer(help="Synthetic dataset generation (Aim 1.1).", no_args_is_help=True)
+harness_app = typer.Typer(help="Harness task bundle builder (Aim 1.2).", no_args_is_help=True)
+score_app = typer.Typer(help="Transcript scoring (Aim 1.2).", no_args_is_help=True)
+caa_app = typer.Typer(
+    help="Contrastive activation addition prototype (Aim 2.2).",
+    no_args_is_help=True,
+)
+app.add_typer(synth_app, name="synth")
+app.add_typer(harness_app, name="harness")
+app.add_typer(score_app, name="score")
+app.add_typer(caa_app, name="caa")
+
+console = Console()
+
+
+def _load_generator_config(
+    config_path: Path,
+    seed_override: int | None,
+    n_extra_covariates_override: int | None = None,
+) -> GeneratorConfig:
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise typer.BadParameter(
+            f"Expected a YAML mapping at {config_path}, got {type(raw).__name__}."
+        )
+    if seed_override is not None:
+        raw["seed"] = seed_override
+    if n_extra_covariates_override is not None:
+        raw["n_extra_covariates"] = n_extra_covariates_override
+    return GeneratorConfig(**raw)
+
+
+def _parse_cancer_types(raw: str) -> list[CancerType]:
+    """Resolve ``--cancer-types`` into a list of ``CancerType`` enum values.
+
+    ``"all"`` (case-insensitive) expands to every registered cancer type in
+    declaration order. Otherwise the input is split on commas and each token
+    is validated against ``CancerType``. Whitespace and case around tokens
+    are tolerated; duplicates are de-duplicated while preserving order.
+    """
+    text = raw.strip()
+    if not text or text.lower() == "all":
+        return all_cancer_types()
+    seen: set[CancerType] = set()
+    chosen: list[CancerType] = []
+    for token in text.split(","):
+        name = token.strip().lower()
+        if not name:
+            continue
+        try:
+            ct = CancerType(name)
+        except ValueError as exc:
+            valid = ", ".join(c.value for c in all_cancer_types())
+            raise typer.BadParameter(
+                f"Unknown cancer type {name!r}. Valid choices: {valid} (or 'all')."
+            ) from exc
+        if ct not in seen:
+            seen.add(ct)
+            chosen.append(ct)
+    if not chosen:
+        raise typer.BadParameter(
+            "No cancer types selected. Pass 'all' or a comma-separated list such as "
+            "'nsclc_clinical,crc_depmap'."
+        )
+    return chosen
+
+
+@synth_app.command("generate")
+def synth_generate(
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="YAML config matching GeneratorConfig.",
+        ),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            help="Output directory. One subfolder is written per dataset "
+            "profile (e.g. <out>/nsclc_clinical/, <out>/crc_depmap/, ...).",
+        ),
+    ],
+    cancer_types: Annotated[
+        str,
+        typer.Option(
+            "--cancer-types",
+            help="Comma-separated cancer profiles to generate, such as "
+            "nsclc_clinical, crc_clinical, breast_depmap, aml_depmap. "
+            "Default 'all' generates every registered profile. Each goes "
+            "under its own <out>/<cancer_type>/ subfolder.",
+        ),
+    ] = "all",
+    seed: Annotated[
+        int | None,
+        typer.Option("--seed", help="Override the seed from the config."),
+    ] = None,
+    n_extra_covariates: Annotated[
+        int | None,
+        typer.Option(
+            "--n-extra-covariates",
+            min=0,
+            help="Override the number of realistic distractor covariates "
+            "appended to the dataset (independent of outcomes). Max is the "
+            "size of DEFAULT_DISTRACTOR_POOL in "
+            "src/onc_co_scientist/synthetic/distractors.py.",
+        ),
+    ] = None,
+    variant: Annotated[
+        DatasetVariant,
+        typer.Option(
+            "--variant",
+            help="Which variant(s) to materialize. 'both' writes named/ and "
+            "anonymized/ subdirs under each cancer-type folder (same rows, "
+            "same buried finding, only feature column names differ). "
+            "'named' or 'anonymized' writes a single bundle directly into "
+            "each cancer-type folder.",
+            case_sensitive=False,
+        ),
+    ] = DatasetVariant.both,
+    anon_seed: Annotated[
+        int,
+        typer.Option(
+            "--anon-seed",
+            help="Seed used to shuffle column-name assignments in the "
+            "anonymized variant. Independent from the data-generation seed.",
+        ),
+    ] = 0,
+    verbose: Annotated[bool, typer.Option("--verbose/--quiet")] = False,
+) -> None:
+    """Generate one or more synthetic dataset bundles, keyed by cancer type.
+
+    By default this generates all registered dataset profiles (clinical and
+    CRISPR/DepMap profiles for NSCLC, CRC, breast, prostate, and AML), each
+    into its own subfolder of ``--out``. Pass
+    ``--cancer-types nsclc_clinical,crc_depmap`` (etc.) to restrict the run
+    to a subset.
+    The base ``dataset_id`` from the YAML is auto-suffixed with the cancer
+    type so each bundle's manifest carries a distinct identifier.
+    """
+    if verbose:
+        logging.basicConfig(level=logging.INFO)
+    selected = _parse_cancer_types(cancer_types)
+    base_config = _load_generator_config(
+        config, seed, n_extra_covariates_override=n_extra_covariates
+    )
+    bundles = generate_multi_dataset(base_config, selected)
+
+    if variant is DatasetVariant.both:
+        written = write_multi_bundle_pair(bundles, out, anon_seed=anon_seed)
+        for ct, (named_dir, anon_dir) in written.items():
+            bundle = bundles[ct]
+            counts = _associations_by_class(bundle.manifest.associations)
+            console.print(
+                f"[green]Wrote[/green] [bold]{bundle.manifest.dataset_id}[/bold] "
+                f"({ct.value}, n={bundle.manifest.patient_n}, "
+                f"associations={counts})\n"
+                f"  named:      {named_dir}\n"
+                f"  anonymized: {anon_dir}"
+            )
+    else:
+        anonymize = variant is DatasetVariant.anonymized
+        written = write_multi_bundle(bundles, out, anonymize=anonymize, anon_seed=anon_seed)
+        label = "anonymized" if anonymize else "named"
+        for ct, out_path in written.items():
+            bundle = bundles[ct]
+            counts = _associations_by_class(bundle.manifest.associations)
+            console.print(
+                f"[green]Wrote[/green] {label} dataset "
+                f"[bold]{bundle.manifest.dataset_id}[/bold] ({ct.value}) "
+                f"to {out_path} (n={bundle.manifest.patient_n}, "
+                f"associations={counts})"
+            )
+
+
+def _associations_by_class(associations) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for spec in associations:
+        counts[spec.paradigm_class.value] = counts.get(spec.paradigm_class.value, 0) + 1
+    return counts
+
+
+@harness_app.command("build-task")
+def harness_build_task(
+    dataset: Annotated[
+        Path,
+        typer.Option(
+            "--dataset",
+            exists=True,
+            file_okay=False,
+            help="A dataset bundle directory (single-bundle mode) or a synth "
+            "output root containing one or more bundles in subfolders "
+            "(batch mode — one task bundle is written per discovered bundle, "
+            "mirroring the relative path under --out).",
+        ),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            help="Directory to write the harness task bundle(s) into. In batch "
+            "mode, per-bundle task dirs are written under here mirroring the "
+            "input tree (e.g. <out>/nsclc_clinical/anonymized/).",
+        ),
+    ],
+    max_iterations: Annotated[
+        int,
+        typer.Option("--max-iterations", "-n", min=1, help="Iteration cap N for the agent."),
+    ] = 5,
+    python_env: Annotated[
+        Path | None,
+        typer.Option(
+            "--python-env",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            help="Path to a uv-managed Python environment the agent should use for "
+            "code execution. Embedded verbatim in agent_instructions.md.",
+        ),
+    ] = None,
+) -> None:
+    """Build an agent-facing task bundle (brief, schema, example, dataset copy).
+
+    If ``--dataset`` points at a single bundle (a directory containing
+    ``manifest.json``), one task bundle is written into ``--out``. Otherwise
+    ``--dataset`` is treated as a synth output root and one task bundle is
+    written per discovered bundle, mirroring the input tree under ``--out``.
+    """
+    if (dataset / MANIFEST_FILENAME).is_file():
+        task = build_task(dataset, out, max_iterations=max_iterations, python_env=python_env)
+        console.print(
+            f"[green]Wrote[/green] task bundle to {task.task_dir}\n"
+            f"  instructions: {task.instructions_path}\n"
+            f"  schema:       {task.schema_path}\n"
+            f"  example:      {task.example_path}\n"
+            f"  dataset:      {task.dataset_path}\n"
+            f"  description:  {task.description_path}"
+        )
+        return
+
+    try:
+        tasks = build_tasks(dataset, out, max_iterations=max_iterations, python_env=python_env)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"{exc} Point --dataset at a bundle directory, or run `ocs synth generate` first."
+        ) from exc
+    for task in tasks:
+        console.print(f"[green]Wrote[/green] task bundle to {task.task_dir}")
+    console.print(f"[green]Built {len(tasks)} task bundle(s)[/green] under {out}")
+
+
+@harness_app.command("validate-experiment")
+def harness_validate_experiment(
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Co-scientist experiment YAML manifest.",
+        ),
+    ],
+) -> None:
+    """Validate and expand a co-scientist experiment matrix without running agents."""
+
+    try:
+        spec = load_experiment_spec(config)
+        plans = build_run_plans(spec)
+    except (ValueError, ValidationError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    console.print(
+        f"[green]Valid experiment[/green] {spec.experiment_id}: "
+        f"{len(spec.tasks)} task(s) × {len(spec.workflows)} workflow(s) × "
+        f"{len(spec.models)} model profile(s) × {spec.replicates} replicate(s) "
+        + (f"× {len(spec.federation.cells())} site/partition condition(s) " if spec.federation else "")
+        + f"= {len(plans)} run(s)"
+    )
+
+
+@harness_app.command("run-experiment")
+def harness_run_experiment(
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Co-scientist experiment YAML manifest.",
+        ),
+    ],
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Optional output-root override."),
+    ] = None,
+    resume: Annotated[
+        bool,
+        typer.Option("--resume", help="Reuse completed cells with the same spec fingerprint."),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Write the expanded plan without invoking agents."),
+    ] = False,
+    max_parallel: Annotated[
+        int | None,
+        typer.Option("--max-parallel", min=1, help="Optional run-level concurrency override."),
+    ] = None,
+    resume_compatible_implementation_sha256: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--resume-compatible-implementation-sha256",
+            help=(
+                "Explicitly allow a prior checkpoint implementation SHA-256 for an "
+                "audited resilience-only migration. Repeat for multiple versions."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Run persistent, sequential, deliberative, and federated experiment cells."""
+
+    try:
+        spec = load_experiment_spec(config)
+        summary = run_experiment(
+            spec,
+            output_root=out,
+            resume=resume,
+            dry_run=dry_run,
+            max_parallel=max_parallel,
+            compatible_resume_implementation_sha256s=(
+                resume_compatible_implementation_sha256 or []
+            ),
+        )
+    except (ValueError, ValidationError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    label = "Planned" if dry_run else "Finished"
+    console.print(
+        f"[green]{label}[/green] {summary['n_runs']} run(s) under {summary['output_root']}"
+    )
+    if not dry_run:
+        console.print(
+            f"completed={summary['n_completed']} failed={summary['n_failed']} "
+            f"resumed={summary['n_resumed']}"
+        )
+
+
+@harness_app.command("supervise-experiment")
+def harness_supervise_experiment(
+    config: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Co-scientist experiment YAML manifest.",
+        ),
+    ],
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Optional output-root override."),
+    ] = None,
+    max_parallel: Annotated[
+        int | None,
+        typer.Option("--max-parallel", min=1, help="Run-level concurrency override."),
+    ] = None,
+    resume_compatible_implementation_sha256: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--resume-compatible-implementation-sha256",
+            help="Explicitly allow an audited resilience-only checkpoint migration.",
+        ),
+    ] = None,
+    poll_seconds: Annotated[
+        float,
+        typer.Option("--poll-seconds", min=1.0, help="Supervisor polling interval."),
+    ] = 30.0,
+    probe_timeout_seconds: Annotated[
+        float,
+        typer.Option(
+            "--probe-timeout-seconds",
+            min=1.0,
+            help="Hard timeout for isolated artifact-mount inspection.",
+        ),
+    ] = 20.0,
+    max_consecutive_probe_timeouts: Annotated[
+        int,
+        typer.Option(
+            "--max-consecutive-probe-timeouts",
+            min=1,
+            help="Consecutive isolated mount-probe hangs allowed before restart.",
+        ),
+    ] = 3,
+    orphan_grace_seconds: Annotated[
+        float,
+        typer.Option(
+            "--orphan-grace-seconds",
+            min=1.0,
+            help="Time a running cell may lack an adapter child before restart.",
+        ),
+    ] = 600.0,
+    hard_stale_grace_seconds: Annotated[
+        float,
+        typer.Option(
+            "--hard-stale-grace-seconds",
+            min=0.0,
+            help="Grace added to the experiment's per-call timeout.",
+        ),
+    ] = 900.0,
+    restart_backoff_seconds: Annotated[
+        float,
+        typer.Option("--restart-backoff-seconds", min=0.0),
+    ] = 60.0,
+    max_restarts: Annotated[
+        int,
+        typer.Option("--max-restarts", min=0),
+    ] = 12,
+    status_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--status-path",
+            help="Host-local supervisor status JSON (recommended for SSHFS outputs).",
+        ),
+    ] = None,
+) -> None:
+    """Run a resumable controller with mount-hang and orphan-call recovery."""
+
+    result = supervise_experiment(
+        SupervisorConfig(
+            config_path=config,
+            output_root=out,
+            max_parallel=max_parallel,
+            compatible_resume_implementation_sha256s=tuple(
+                resume_compatible_implementation_sha256 or []
+            ),
+            poll_seconds=poll_seconds,
+            probe_timeout_seconds=probe_timeout_seconds,
+            max_consecutive_probe_timeouts=max_consecutive_probe_timeouts,
+            orphan_grace_seconds=orphan_grace_seconds,
+            hard_stale_grace_seconds=hard_stale_grace_seconds,
+            restart_backoff_seconds=restart_backoff_seconds,
+            max_restarts=max_restarts,
+            status_path=status_path,
+        )
+    )
+    color = "green" if result["status"] == "completed" else "yellow"
+    console.print(
+        f"[{color}]Supervisor {result['status']}[/{color}] "
+        f"after {result['restart_count']} restart(s); status={result['status_path']}"
+    )
+    if result["status"] != "completed":
+        raise typer.Exit(code=1)
+
+
+def _build_judge(
+    backend: JudgeBackend,
+    *,
+    judge_cli: str,
+    judge_model: str | None,
+    batch_size: int,
+    cache_dir: Path | None,
+    stub_config_path: Path | None,
+) -> Judge:
+    if backend is JudgeBackend.stub:
+        if stub_config_path is None:
+            return StubJudge()
+        raw = json.loads(stub_config_path.read_text(encoding="utf-8"))
+        novel_phrases = frozenset(raw.get("novel_phrases", []))
+        match_phrases_raw = raw.get("match_phrases", {})
+        match_phrases = {key: frozenset(values) for key, values in match_phrases_raw.items()}
+        return StubJudge(novel_phrases=novel_phrases, match_phrases=match_phrases)
+    cache = JudgeCache(cache_dir=cache_dir)
+    if backend is JudgeBackend.gemini_vertex:
+        from .scoring.judge import GeminiVertexJudge
+        return GeminiVertexJudge(
+            model_id=judge_model or "gemini-3.8-flash", batch_size=batch_size, cache=cache,
+        )
+    if backend is JudgeBackend.codex_cli:
+        return CodexCliJudge(
+            cli="codex" if judge_cli == "auto" else judge_cli,
+            model_id=judge_model,
+            batch_size=batch_size,
+            cache=cache,
+        )
+    if backend is JudgeBackend.anthropic_vertex:
+        if judge_model is None:
+            return AnthropicVertexJudge(
+                batch_size=batch_size,
+                cache=cache,
+            )
+        return AnthropicVertexJudge(
+            model_id=judge_model,
+            batch_size=batch_size,
+            cache=cache,
+        )
+    return ClaudeCliJudge(
+        cli="claude" if judge_cli == "auto" else judge_cli,
+        batch_size=batch_size,
+        cache=cache,
+    )
+
+
+def _score_replicate(
+    manifest,
+    transcript: Transcript,
+    judge: Judge,
+    *,
+    variant: str,
+    column_mapping: dict[str, str] | None = None,
+) -> ReplicateScore:
+    # Novelty is paradigm-consensus-anchored and therefore meaningless on
+    # anonymized hypotheses (which only mention feature_NNN columns); only
+    # buried matching applies to the anonymized variant.
+    novelty = score_novelty(transcript, judge) if variant == "named" else None
+    buried = score_buried(
+        manifest, transcript, judge, variant=variant, column_mapping=column_mapping
+    )
+    return ReplicateScore(
+        dataset_id=manifest.dataset_id,
+        variant=variant,
+        model_id=transcript.model_id,
+        harness_id=transcript.harness_id,
+        max_iterations=transcript.max_iterations,
+        novelty=novelty,
+        buried=buried,
+    )
+
+
+def _infer_variant(bundle_dir: Path) -> str:
+    """Variant is named/anonymized based on the bundle directory's name."""
+    if bundle_dir.name == ANONYMIZED_SUBDIR:
+        return "anonymized"
+    return "named"
+
+
+JudgeOption = Annotated[
+    JudgeBackend,
+    typer.Option(
+        "--judge",
+        help="LLM backend for optional novelty or explicit legacy matching. 'claude-cli' shells "
+        "out to `claude --dangerously-skip-permissions -p` (uses existing "
+        "Claude Code auth on the host; note: the CLI's pre-screen classifier "
+        "may refuse oncology hypothesis prompts). 'codex-cli' shells out to "
+        "`codex exec` (uses existing Codex CLI auth). 'gemini-vertex' calls Gemini via GCP ADC. "
+        "'anthropic-vertex' calls "
+        "the Anthropic SDK directly via AnthropicVertex (requires "
+        "CLOUD_ML_REGION + ANTHROPIC_VERTEX_PROJECT_ID + ADC). 'stub' is a "
+        "deterministic test-only backend driven by --stub-config.",
+        case_sensitive=False,
+    ),
+]
+JudgeCliOption = Annotated[
+    str,
+    typer.Option(
+        "--judge-cli",
+        help="Judge CLI binary. Use 'auto' for claude with --judge=claude-cli "
+        "and codex with --judge=codex-cli.",
+    ),
+]
+JudgeModelOption = Annotated[
+    str | None,
+    typer.Option(
+        "--judge-model",
+        help="Optional model id for --judge=anthropic-vertex, --judge=gemini-vertex "
+        "or --judge=codex-cli. "
+        "Omit to use the backend default.",
+    ),
+]
+JudgeBatchSizeOption = Annotated[
+    int,
+    typer.Option(
+        "--judge-batch-size",
+        min=1,
+        help="How many hypotheses to bundle into one judge call.",
+    ),
+]
+CacheDirOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--cache-dir",
+        help="Disk cache directory for judge responses. Default ~/.cache/onc-co-scientist/judge.",
+    ),
+]
+NoJudgeCacheOption = Annotated[
+    bool,
+    typer.Option(
+        "--no-judge-cache/--judge-cache",
+        help="Disable the on-disk judge cache (forces every call to hit the LLM).",
+    ),
+]
+StubConfigOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--stub-config",
+        exists=True,
+        dir_okay=False,
+        help="JSON config for --judge=stub: "
+        '{"novel_phrases": [...], "match_phrases": {"<assoc-key>": [...]}}.',
+    ),
+]
+
+
+def _resolve_cache_dir(cache_dir: Path | None, no_cache: bool) -> Path | None:
+    if no_cache:
+        return None
+    return cache_dir if cache_dir is not None else default_cache_dir()
+
+
+def _load_transcript(path: Path) -> Transcript:
+    try:
+        return Transcript.model_validate_json(path.read_text(encoding="utf-8-sig"))
+    except ValidationError as exc:
+        errors = exc.errors(include_input=False, include_url=False)
+        detail = "; ".join(str(err.get("msg", err)) for err in errors[:3])
+        raise typer.BadParameter(f"Invalid transcript JSON at {path}: {detail}") from exc
+    except UnicodeError as exc:
+        raise typer.BadParameter(f"Transcript is not valid UTF-8 at {path}: {exc}") from exc
+
+
+def _discover_task_bundle_dirs(root: Path) -> list[Path]:
+    """Find task bundle dirs without treating them as scoreable source bundles."""
+    return sorted(
+        path.parent
+        for path in root.rglob(INSTRUCTIONS_FILENAME)
+        if (path.parent / TASK_DATASET_LINK).is_file()
+    )
+
+
+def _no_source_bundles_message(synth_root: Path, tasks_root: Path) -> str:
+    message = (
+        f"No source dataset bundles found under {synth_root}. Each must contain "
+        f"manifest.json and public/dataset.parquet."
+    )
+    task_bundles = _discover_task_bundle_dirs(synth_root)
+    task_root_hint = synth_root
+    if not task_bundles and tasks_root != synth_root:
+        task_bundles = _discover_task_bundle_dirs(tasks_root)
+        task_root_hint = tasks_root
+    if task_bundles:
+        message += (
+            f" Found {len(task_bundles)} task bundle(s) under {task_root_hint}.\n"
+            "task bundles intentionally omit manifest.json so agents cannot "
+            "see the ground truth. Pass the synth output root to --synth-root "
+            "(or set SYNTH_ROOT when using scripts/resume.sh), not a task-only tree."
+        )
+    return message
+
+
+def _structured_cli_score(
+    bundle: Path,
+    transcript: Transcript,
+    *,
+    evaluation_path: Path | None,
+    novelty_judge: Judge | None = None,
+    recovery_version: str = SCORER_VERSION,
+) -> dict:
+    mapping = load_column_mapping(bundle)
+    inverse = {v: k for k, v in (mapping or {}).items()}
+    raw = read_manifest(bundle).model_dump(mode="json")
+    for key in (
+        "columns",
+        "treatment_columns",
+        "outcome_columns",
+        "covariate_columns",
+        "id_columns",
+    ):
+        raw[key] = [inverse.get(x, x) for x in raw[key]]
+    for spec in raw["associations"]:
+        spec["variables"] = [inverse.get(x, x) for x in spec["variables"]]
+        spec["outcome"] = inverse.get(spec["outcome"], spec["outcome"])
+        if spec.get("subgroup"):
+            spec["subgroup"]["predicate"] = {
+                inverse.get(k, k): v for k, v in spec["subgroup"]["predicate"].items()
+            }
+    frame_path = evaluation_path or bundle / "public" / "dataset.parquet"
+    frame = pd.read_parquet(frame_path).rename(columns=inverse)
+    result = score_transcript(
+        DatasetManifest.model_validate(raw),
+        transcript,
+        frame,
+        column_mapping=mapping,
+        scorer_version=recovery_version,
+        evidence_design="user_supplied_evaluation_data"
+        if evaluation_path
+        else "in_sample_reconfirmation",
+    )
+    result["variant"] = _infer_variant(bundle)
+    if novelty_judge is not None and result["variant"] == "named":
+        result["novelty"] = score_novelty(transcript, novelty_judge).to_dict()
+    return result
+
+
+@score_app.command("run")
+def score_run(
+    dataset: Annotated[
+        Path,
+        typer.Option(
+            "--dataset",
+            exists=True,
+            file_okay=False,
+            help="Dataset bundle directory (provides the ground-truth manifest).",
+        ),
+    ],
+    transcript_path: Annotated[
+        Path,
+        typer.Option(
+            "--transcript",
+            exists=True,
+            dir_okay=False,
+            help="Path to the transcript.json emitted by the external harness.",
+        ),
+    ],
+    out: Annotated[Path, typer.Option("--out", help="Directory for the scoring report.")],
+    recovery_version: Annotated[
+        str,
+        typer.Option(
+            "--recovery-version",
+            help="structured-recovery-v2 (default) or structured-recovery-v1 "
+            "for frozen older criteria.",
+        ),
+    ] = SCORER_VERSION,
+    judge_backend: JudgeOption = JudgeBackend.claude_cli,
+    judge_cli: JudgeCliOption = "auto",
+    judge_model: JudgeModelOption = None,
+    judge_batch_size: JudgeBatchSizeOption = 10,
+    cache_dir: CacheDirOption = None,
+    no_judge_cache: NoJudgeCacheOption = False,
+    stub_config: StubConfigOption = None,
+    legacy_llm_matching: Annotated[
+        bool,
+        typer.Option(
+            "--legacy-llm-matching", help="Explicitly reproduce archived prose-based LLM matching."
+        ),
+    ] = False,
+    score_novelty_flag: Annotated[
+        bool,
+        typer.Option(
+            "--score-novelty",
+            help="Also run the optional novelty judge; primary recovery stays deterministic.",
+        ),
+    ] = False,
+    evaluation_data: Annotated[
+        Path | None,
+        typer.Option(
+            "--evaluation-data",
+            exists=True,
+            dir_okay=False,
+            help=(
+                "Independent evaluation Parquet. Omit for explicitly labeled "
+                "in-sample reconfirmation."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Score structured recovery deterministically; optionally score novelty.
+
+    Variant is inferred from the bundle directory's name (``named`` or
+    ``anonymized``); novelty scoring is skipped for the anonymized variant.
+    """
+    if not legacy_llm_matching:
+        novelty_judge = (
+            _build_judge(
+                judge_backend,
+                judge_cli=judge_cli,
+                judge_model=judge_model,
+                batch_size=judge_batch_size,
+                cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
+                stub_config_path=stub_config,
+            )
+            if score_novelty_flag
+            else None
+        )
+        result = _structured_cli_score(
+            dataset,
+            _load_transcript(transcript_path),
+            evaluation_path=evaluation_data,
+            novelty_judge=novelty_judge,
+            recovery_version=recovery_version,
+        )
+        write_structured_report([result], out)
+        console.print_json(json.dumps({k: v for k, v in result.items() if k != "claim_scores"}))
+        console.print(f"[green]Deterministic report written to[/green] {out}")
+        return
+    manifest = read_manifest(dataset)
+    transcript = _load_transcript(transcript_path)
+    variant = _infer_variant(dataset)
+    column_mapping = load_column_mapping(dataset)
+    judge = _build_judge(
+        judge_backend,
+        judge_cli=judge_cli,
+        judge_model=judge_model,
+        batch_size=judge_batch_size,
+        cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
+        stub_config_path=stub_config,
+    )
+    replicate = _score_replicate(
+        manifest, transcript, judge, variant=variant, column_mapping=column_mapping
+    )
+    batch = wrap_single(replicate)
+    out_path = write_batch_report(batch, out)
+    console.print_json(json.dumps(batch.to_dict()))
+    console.print(f"[green]Report written to[/green] {out_path}")
+
+
+@score_app.command("batch")
+def score_batch(
+    synth_root: Annotated[
+        Path,
+        typer.Option(
+            "--synth-root",
+            exists=True,
+            file_okay=False,
+            help="Synth output root containing one or more dataset bundles "
+            "(each with manifest.json + public/dataset.parquet) in "
+            "<ct>/<variant>/ subfolders.",
+        ),
+    ],
+    tasks_root: Annotated[
+        Path,
+        typer.Option(
+            "--tasks-root",
+            exists=True,
+            file_okay=False,
+            help="Tasks root produced by `ocs harness build-task` and "
+            "populated by `scripts/run_harness.sh`. Per-bundle replicate "
+            "transcripts are read from "
+            "<tasks-root>/<ct>/<variant>/runs/run_*/transcript.json. "
+            "Both named and anonymized variants are scored for buried "
+            "discovery; novelty is computed for named only.",
+        ),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Directory for the batch scoring report."),
+    ],
+    recovery_version: Annotated[
+        str,
+        typer.Option(
+            "--recovery-version",
+            help="structured-recovery-v2 (default) or structured-recovery-v1 "
+            "for frozen older criteria.",
+        ),
+    ] = SCORER_VERSION,
+    judge_backend: JudgeOption = JudgeBackend.claude_cli,
+    judge_cli: JudgeCliOption = "auto",
+    judge_model: JudgeModelOption = None,
+    judge_batch_size: JudgeBatchSizeOption = 10,
+    cache_dir: CacheDirOption = None,
+    no_judge_cache: NoJudgeCacheOption = False,
+    stub_config: StubConfigOption = None,
+    legacy_llm_matching: Annotated[
+        bool,
+        typer.Option(
+            "--legacy-llm-matching", help="Explicitly reproduce archived prose-based LLM matching."
+        ),
+    ] = False,
+    score_novelty_flag: Annotated[
+        bool, typer.Option("--score-novelty", help="Run optional novelty judging separately.")
+    ] = False,
+    evaluation_root: Annotated[
+        Path | None,
+        typer.Option(
+            "--evaluation-root",
+            exists=True,
+            file_okay=False,
+            help="Independent data at <root>/<bundle-relative-path>/evaluation.parquet.",
+        ),
+    ] = None,
+) -> None:
+    """Batch-score structured recovery; LLM matching requires an explicit legacy flag.
+
+    By default, both naming conditions receive deterministic primary and strict
+    recovery scores and first supported discovery iterations. No LLM is built
+    or called. Optional novelty judging is enabled only by --score-novelty.
+    --legacy-llm-matching restores the archived LLM matching/reporting path.
+    """
+    bundles = discover_bundles(synth_root)
+    if not bundles:
+        raise typer.BadParameter(_no_source_bundles_message(synth_root, tasks_root))
+
+    if not legacy_llm_matching:
+        novelty_judge = (
+            _build_judge(
+                judge_backend,
+                judge_cli=judge_cli,
+                judge_model=judge_model,
+                batch_size=judge_batch_size,
+                cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
+                stub_config_path=stub_config,
+            )
+            if score_novelty_flag
+            else None
+        )
+        scores = []
+        for bundle in bundles:
+            rel = bundle.relative_to(synth_root)
+            for path in sorted((tasks_root / rel / "runs").glob("run_*/transcript.json")):
+                score = _structured_cli_score(
+                    bundle,
+                    _load_transcript(path),
+                    evaluation_path=evaluation_root / rel / "evaluation.parquet"
+                    if evaluation_root
+                    else None,
+                    novelty_judge=novelty_judge,
+                    recovery_version=recovery_version,
+                )
+                score["replicate"] = path.parent.name
+                scores.append(score)
+        if not scores:
+            raise typer.BadParameter(f"No replicate transcripts found under {tasks_root}.")
+        write_structured_report(scores, out)
+        console.print(
+            f"[green]Scored {len(scores)} runs deterministically[/green]; reports in {out}"
+        )
+        return
+
+    judge = _build_judge(
+        judge_backend,
+        judge_cli=judge_cli,
+        judge_model=judge_model,
+        batch_size=judge_batch_size,
+        cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
+        stub_config_path=stub_config,
+    )
+
+    bundle_scores = []
+    for bundle_dir in bundles:
+        rel = bundle_dir.relative_to(synth_root)
+        variant = _infer_variant(bundle_dir)
+        runs_dir = tasks_root / rel / "runs"
+        transcript_paths = sorted(runs_dir.glob("run_*/transcript.json"))
+        if not transcript_paths:
+            console.print(
+                f"[yellow]warning:[/yellow] no transcripts under {runs_dir}; skipping bundle {rel}"
+            )
+            continue
+        manifest = read_manifest(bundle_dir)
+        column_mapping = load_column_mapping(bundle_dir)
+        replicate_scores = []
+        for tp in transcript_paths:
+            transcript = _load_transcript(tp)
+            replicate_scores.append(
+                _score_replicate(
+                    manifest,
+                    transcript,
+                    judge,
+                    variant=variant,
+                    column_mapping=column_mapping,
+                )
+            )
+        bundle_scores.append(aggregate_replicates(replicate_scores))
+
+    if not bundle_scores:
+        raise typer.BadParameter(
+            f"No replicate transcripts found under {tasks_root} for any of the "
+            f"{len(bundles)} bundle(s) in {synth_root}."
+        )
+
+    batch = aggregate_batch(bundle_scores)
+    out_path = write_batch_report(batch, out)
+    console.print_json(json.dumps(batch.to_dict()))
+    console.print(
+        f"[green]Batch report written to[/green] {out_path} "
+        f"({batch.n_bundles} bundle(s), {batch.n_replicates_total} replicate(s))"
+    )
+
+
+@caa_app.command("write-pairs")
+def caa_write_pairs(
+    out: Annotated[
+        Path,
+        typer.Option(
+            "--out",
+            help="JSONL file to write synthetic bootstrap contrast pairs into.",
+        ),
+    ],
+    overwrite: Annotated[
+        bool,
+        typer.Option("--overwrite", help="Replace an existing pairs file."),
+    ] = False,
+) -> None:
+    """Write a small synthetic contrast-pair set for CAA smoke tests.
+
+    The generated pairs are a bootstrap fixture. For the grant-grade run,
+    replace or augment them with named-vs-anonymized agent traces and
+    cancer-vs-non-cancer abstract pairs.
+    """
+    if out.exists() and not overwrite:
+        raise typer.BadParameter(f"{out} already exists; pass --overwrite to replace it.")
+    pairs = default_contrast_pairs()
+    write_contrast_pairs(pairs, out)
+    by_concept: dict[str, int] = {}
+    for pair in pairs:
+        by_concept[pair.concept] = by_concept.get(pair.concept, 0) + 1
+    console.print(f"[green]Wrote[/green] {len(pairs)} contrast pairs to {out} ({by_concept})")
+
+
+@caa_app.command("derive")
+def caa_derive(
+    pairs_path: Annotated[
+        Path,
+        typer.Option(
+            "--pairs",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="JSONL contrast pairs from `ocs caa write-pairs` or trace curation.",
+        ),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Output .npz vector artifact path."),
+    ],
+    model_id: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            help="Transformers model ID or local model path.",
+        ),
+    ] = "google/gemma-4-31B-it",
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--cache-dir",
+            help="Hugging Face cache directory. Use ~/models for the local cache.",
+        ),
+    ] = Path("~/models"),
+    layers: Annotated[
+        str,
+        typer.Option(
+            "--layers",
+            help="Layer selection: all, middle, last:N, or comma list (e.g. 20,30,40,50).",
+        ),
+    ] = "middle",
+    position: Annotated[
+        str,
+        typer.Option(
+            "--position",
+            help="Activation pooling position: last or mean.",
+        ),
+    ] = "last",
+    local_files_only: Annotated[
+        bool,
+        typer.Option(
+            "--local-files-only/--allow-download",
+            help="Use only locally cached model files, or allow Hugging Face downloads.",
+        ),
+    ] = True,
+    dtype: Annotated[
+        str,
+        typer.Option("--dtype", help="Torch dtype: auto, bfloat16, float16, float32."),
+    ] = "auto",
+    device_map: Annotated[
+        str,
+        typer.Option("--device-map", help="Transformers device_map value."),
+    ] = "auto",
+    trust_remote_code: Annotated[
+        bool,
+        typer.Option("--trust-remote-code", help="Allow custom model code from HF."),
+    ] = False,
+    enable_thinking: Annotated[
+        bool,
+        typer.Option(
+            "--enable-thinking/--disable-thinking",
+            help="Pass Gemma thinking-mode preference through the chat template when supported.",
+        ),
+    ] = False,
+    add_generation_prompt: Annotated[
+        bool,
+        typer.Option(
+            "--add-generation-prompt/--no-generation-prompt",
+            help="Disable for assistant-response contrasts; retain for legacy prompt pairs.",
+        ),
+    ] = True,
+) -> None:
+    """Derive paradigm, knowledge, and orthogonalized CAA vectors."""
+    from .interventions.caa import (
+        derive_caa_vectors,
+        infer_num_layers,
+        load_transformers_text_model,
+        parse_layers,
+    )
+
+    if position not in {"last", "mean"}:
+        raise typer.BadParameter("--position must be 'last' or 'mean'.")
+    cache = cache_dir.expanduser() if cache_dir is not None else None
+    pairs = read_contrast_pairs(pairs_path)
+    processor, model = load_transformers_text_model(
+        model_id,
+        cache_dir=cache,
+        local_files_only=local_files_only,
+        dtype=dtype,
+        device_map=device_map,
+        trust_remote_code=trust_remote_code,
+    )
+    selected_layers = parse_layers(layers, n_layers=infer_num_layers(model))
+    bundle = derive_caa_vectors(
+        pairs,
+        processor=processor,
+        model=model,
+        layers=selected_layers,
+        position=position,  # type: ignore[arg-type]
+        enable_thinking=enable_thinking,
+        add_generation_prompt=add_generation_prompt,
+    )
+    bundle.metadata["requested_model"] = model_id
+    bundle.metadata["pairs_path"] = str(pairs_path)
+    from .caa_server import file_sha256
+    bundle.metadata["pairs_file_sha256"] = file_sha256(pairs_path)
+    bundle.save(out)
+    console.print(
+        f"[green]Wrote[/green] CAA vectors to {out}\n"
+        f"  metadata: {metadata_path_for(out)}\n"
+        f"  concepts: {', '.join(bundle.concepts())}\n"
+        f"  layers:   {selected_layers}"
+    )
+
+
+@caa_app.command("describe")
+def caa_describe(
+    vector_file: Annotated[
+        Path,
+        typer.Option("--vector-file", exists=True, dir_okay=False, readable=True),
+    ],
+) -> None:
+    """Print a compact summary of a vector artifact."""
+    bundle = VectorBundle.load(vector_file)
+    payload = {
+        "vector_file": str(vector_file),
+        "metadata_file": str(metadata_path_for(vector_file)),
+        "concepts": {
+            concept: {
+                "layers": bundle.layers_for(concept),
+                "norms": {
+                    str(layer): float(np.linalg.norm(bundle.vector(concept, layer)))
+                    for layer in bundle.layers_for(concept)
+                },
+            }
+            for concept in bundle.concepts()
+        },
+        "metadata": bundle.metadata,
+    }
+    console.print_json(json.dumps(payload))
+
+
+@caa_app.command("serve")
+def caa_serve(
+    vector_file: Annotated[
+        Path,
+        typer.Option(
+            "--vector-file",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="CAA vector artifact to load once at server startup.",
+        ),
+    ] = Path("data/caa/gemma4_31b_clinical_pubmed_layers20_30_40.npz"),
+    model_path: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            help="Transformers model ID or local Gemma snapshot path.",
+        ),
+    ] = (
+        "/data1/ken/models/models--google--gemma-4-31b-it/"
+        "snapshots/145dc2508c480a64b47242f160d286cff94a2343"
+    ),
+    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", min=1, max=65535)] = 8765,
+    dtype: Annotated[str, typer.Option("--dtype")] = "bfloat16",
+    device_map: Annotated[str, typer.Option("--device-map")] = "auto",
+    inter_gpu_transfer: Annotated[
+        str, typer.Option("--inter-gpu-transfer", help="Inter-GPU copies: direct or cpu staging.")
+    ] = "direct",
+    local_files_only: Annotated[
+        bool,
+        typer.Option("--local-files-only/--allow-download"),
+    ] = True,
+    trust_remote_code: Annotated[bool, typer.Option("--trust-remote-code")] = False,
+    attn_implementation: Annotated[
+        str,
+        typer.Option(
+            "--attn-implementation",
+            help="Transformers attention backend. Use 'none' to keep the model default.",
+        ),
+    ] = "sdpa",
+    cache_implementation: Annotated[
+        str,
+        typer.Option(
+            "--cache-implementation",
+            help="Generation KV-cache backend. Use 'none' to keep the Transformers default.",
+        ),
+    ] = "static",
+    compile_forward: Annotated[
+        bool,
+        typer.Option(
+            "--compile-forward/--no-compile-forward",
+            help="Opt-in torch.compile(model.forward) for repeated-generation experiments.",
+        ),
+    ] = False,
+    compile_mode: Annotated[
+        str,
+        typer.Option("--compile-mode", help="torch.compile mode when --compile-forward is set."),
+    ] = "reduce-overhead",
+    default_max_new_tokens: Annotated[
+        int,
+        typer.Option("--default-max-new-tokens", min=1),
+    ] = 4096,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option("--cache-dir", help="Optional Hugging Face cache directory."),
+    ] = None,
+    enable_thinking: Annotated[
+        bool,
+        typer.Option("--enable-thinking/--disable-thinking"),
+    ] = False,
+    compact_agent_context: Annotated[
+        bool,
+        typer.Option(
+            "--compact-agent-context",
+            help=(
+                "Opt-in adapter mode that truncates overlong agent context and tool schemas before "
+                "model generation. Default preserves the full request context."
+            ),
+        ),
+    ] = False,
+    alias_prefix: Annotated[
+        str,
+        typer.Option(
+            "--alias-prefix",
+            help="Model alias prefix exposed through /v1/models, e.g. gemma4-e4b.",
+        ),
+    ] = "gemma4-31b",
+    steering_layer: Annotated[
+        int,
+        typer.Option("--steering-layer", min=0, help="CAA layer used by steered aliases."),
+    ] = 40,
+    concept: Annotated[
+        str,
+        typer.Option("--concept", help="Vector concept used by steered aliases."),
+    ] = "paradigm_orthogonalized",
+    aliases_file: Annotated[
+        Path | None,
+        typer.Option("--aliases-file", exists=True, dir_okay=False,
+                     help="JSON arm definitions, including an unsteered control."),
+    ] = None,
+) -> None:
+    """Serve Gemma 31B CAA arms via OpenAI-compatible local endpoints."""
+
+    from .caa_server import serve
+
+    serve(
+        model_path=model_path,
+        vector_file=vector_file,
+        host=host,
+        port=port,
+        dtype=dtype,
+        device_map=device_map,
+        inter_gpu_transfer=inter_gpu_transfer,
+        local_files_only=local_files_only,
+        trust_remote_code=trust_remote_code,
+        attn_implementation=attn_implementation,
+        cache_implementation=cache_implementation,
+        compile_forward=compile_forward,
+        compile_mode=compile_mode,
+        default_max_new_tokens=default_max_new_tokens,
+        cache_dir=cache_dir.expanduser() if cache_dir is not None else None,
+        enable_thinking=enable_thinking,
+        compact_agent_context=compact_agent_context,
+        alias_prefix=alias_prefix,
+        steering_layer=steering_layer,
+        concept=concept,
+        aliases_file=aliases_file,
+    )
+
+
+@caa_app.command("run-ab")
+def caa_run_ab(
+    root: Annotated[
+        Path,
+        typer.Option("--root", help="AB output root."),
+    ] = Path("data/caa_ab/gemma31b"),
+    synth_root: Annotated[
+        Path,
+        typer.Option(
+            "--synth-root",
+            exists=True,
+            file_okay=False,
+            help="Clinical synth root used to build fresh task bundles.",
+        ),
+    ] = Path("example_data_clinical_all_claude/ds001"),
+    stage: Annotated[
+        str,
+        typer.Option(
+            "--stage",
+            help="Stage subdirectory. Use pilot/full to keep runs isolated; pass '' for flat arms.",
+        ),
+    ] = "pilot",
+    arms: Annotated[
+        str,
+        typer.Option("--arms", help="Comma-separated arms: control,neg002,neg005,neg010."),
+    ] = "control,neg002,neg005,neg010",
+    replicates: Annotated[
+        int | None,
+        typer.Option(
+            "--replicates",
+            min=1,
+            help="Target completed replicates per bundle. Defaults to 1 for pilot, 5 otherwise.",
+        ),
+    ] = None,
+    max_iterations: Annotated[
+        int | None,
+        typer.Option(
+            "--max-iterations",
+            min=1,
+            help="Task iteration cap. Defaults to 10 for pilot, 25 otherwise.",
+        ),
+    ] = None,
+    jobs: Annotated[int, typer.Option("--jobs", min=1)] = 1,
+    harness_spec: Annotated[str, typer.Option("--harness-spec")] = "codex",
+    harness_profile: Annotated[str, typer.Option("--harness-profile")] = "codex",
+    codex_profile_prefix: Annotated[
+        str,
+        typer.Option(
+            "--codex-profile-prefix",
+            help="Prefix for local-model Codex profiles, e.g. gemma-e4b-caa.",
+        ),
+    ] = "gemma-caa",
+    codex_extra_args: Annotated[
+        str,
+        typer.Option(
+            "--codex-extra-args",
+            help="Additional args appended after the arm-specific Codex profile.",
+        ),
+    ] = "",
+    model_alias_prefix: Annotated[
+        str,
+        typer.Option(
+            "--model-alias-prefix",
+            help="Prefix for served CAA model aliases, e.g. gemma4-e4b.",
+        ),
+    ] = "gemma4-31b",
+    steering_layer: Annotated[
+        int,
+        typer.Option("--steering-layer", min=0, help="CAA layer used by steered aliases."),
+    ] = 40,
+    python_env: Annotated[
+        Path | None,
+        typer.Option("--python-env", exists=True, file_okay=False, dir_okay=True),
+    ] = None,
+    judge_backend: JudgeOption = JudgeBackend.claude_cli,
+    judge_cli: JudgeCliOption = "auto",
+    judge_model: JudgeModelOption = None,
+    judge_batch_size: JudgeBatchSizeOption = 10,
+    cache_dir: CacheDirOption = None,
+    no_judge_cache: NoJudgeCacheOption = False,
+    build_only: Annotated[bool, typer.Option("--build-only")] = False,
+    skip_build: Annotated[bool, typer.Option("--skip-build")] = False,
+    skip_harness: Annotated[bool, typer.Option("--skip-harness")] = False,
+    skip_score: Annotated[bool, typer.Option("--skip-score")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    """Build isolated arm task roots, run Codex harness, and score each arm."""
+
+    from .caa_ab import parse_arm_names, run_ab_benchmark
+
+    stage_value = stage.strip() or None
+    effective_replicates = replicates
+    if effective_replicates is None:
+        effective_replicates = 1 if stage_value == "pilot" else 5
+    effective_max_iterations = max_iterations
+    if effective_max_iterations is None:
+        effective_max_iterations = 10 if stage_value == "pilot" else 25
+    arm_names = parse_arm_names(arms)
+    commands = run_ab_benchmark(
+        root=root,
+        synth_root=synth_root,
+        stage=stage_value,
+        arms=arm_names,
+        replicates=effective_replicates,
+        max_iterations=effective_max_iterations,
+        jobs=jobs,
+        harness_spec=harness_spec,
+        harness_profile=harness_profile,
+        codex_profile_prefix=codex_profile_prefix,
+        codex_extra_args=codex_extra_args,
+        model_alias_prefix=model_alias_prefix,
+        steering_layer=steering_layer,
+        python_env=python_env,
+        judge=judge_backend.value,
+        judge_cli=judge_cli,
+        judge_model=judge_model,
+        judge_batch_size=judge_batch_size,
+        cache_dir=_resolve_cache_dir(cache_dir, no_judge_cache),
+        no_judge_cache=no_judge_cache,
+        build_only=build_only,
+        skip_build=skip_build,
+        skip_harness=skip_harness,
+        skip_score=skip_score,
+        dry_run=dry_run,
+    )
+    if dry_run:
+        import shlex
+
+        for cmd in commands:
+            console.print(shlex.join(cmd))
+    console.print(
+        f"[green]AB stage prepared[/green] root={root} stage={stage_value or 'flat'} "
+        f"arms={','.join(arm_names)} replicates={effective_replicates} "
+        f"max_iterations={effective_max_iterations}"
+    )
+
+
+@caa_app.command("summarize-ab")
+def caa_summarize_ab(
+    root: Annotated[
+        Path,
+        typer.Option("--root", exists=True, file_okay=False, help="AB result root."),
+    ] = Path("data/caa_ab/gemma31b"),
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Directory for ab_summary.md/csv and per_bundle.csv."),
+    ] = Path("data/caa_ab/gemma31b/summary"),
+    stage: Annotated[
+        str | None,
+        typer.Option("--stage", help="Optional stage subdirectory to summarize."),
+    ] = None,
+) -> None:
+    """Synthesize arm-level AB metrics from score/batch_score.json files."""
+
+    from .caa_ab import summarize_ab
+
+    result = summarize_ab(root, out, stage=stage.strip() if stage else None)
+    console.print(
+        f"[green]Wrote[/green] AB summary to {out} "
+        f"({len(result['summary_rows'])} arm row(s), "
+        f"{len(result['per_bundle_rows'])} per-bundle row(s))"
+    )
+
+
+@caa_app.command("generate")
+def caa_generate(
+    vector_file: Annotated[
+        Path,
+        typer.Option("--vector-file", exists=True, dir_okay=False, readable=True),
+    ],
+    prompt: Annotated[
+        str,
+        typer.Option("--prompt", help="User prompt for steered generation."),
+    ],
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Optional path to write the generated text."),
+    ] = None,
+    system: Annotated[
+        str | None,
+        typer.Option("--system", help="Optional system prompt."),
+    ] = None,
+    concept: Annotated[
+        str,
+        typer.Option("--concept", help="Vector concept to apply."),
+    ] = "paradigm_orthogonalized",
+    mode: Annotated[
+        SteeringMode,
+        typer.Option(
+            "--mode",
+            help="'add' adds scale * vector; 'ablate' projects hidden states off the vector.",
+            case_sensitive=False,
+        ),
+    ] = SteeringMode.add,
+    scale: Annotated[
+        float | None,
+        typer.Option(
+            "--scale",
+            help="Steering strength. Defaults to -1.0 for add and 1.0 for ablate.",
+        ),
+    ] = None,
+    layers: Annotated[
+        str | None,
+        typer.Option(
+            "--layers",
+            help="Optional layer override: all, middle, last:N, or comma list.",
+        ),
+    ] = None,
+    model_id: Annotated[
+        str,
+        typer.Option("--model", help="Transformers model ID or local model path."),
+    ] = "google/gemma-4-31B-it",
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option("--cache-dir", help="Hugging Face cache directory."),
+    ] = Path("~/models"),
+    local_files_only: Annotated[
+        bool,
+        typer.Option("--local-files-only/--allow-download"),
+    ] = True,
+    dtype: Annotated[str, typer.Option("--dtype")] = "auto",
+    device_map: Annotated[str, typer.Option("--device-map")] = "auto",
+    max_new_tokens: Annotated[int, typer.Option("--max-new-tokens", min=1)] = 512,
+    temperature: Annotated[float, typer.Option("--temperature", min=0.0)] = 1.0,
+    top_p: Annotated[float, typer.Option("--top-p", min=0.0, max=1.0)] = 0.95,
+    top_k: Annotated[int, typer.Option("--top-k", min=0)] = 64,
+    trust_remote_code: Annotated[bool, typer.Option("--trust-remote-code")] = False,
+    enable_thinking: Annotated[
+        bool,
+        typer.Option("--enable-thinking/--disable-thinking"),
+    ] = False,
+) -> None:
+    """Run one steered generation with additive CAA or runtime ablation."""
+    from .interventions.caa import (
+        generate_with_vector,
+        infer_num_layers,
+        load_transformers_text_model,
+        parse_layers,
+    )
+
+    cache = cache_dir.expanduser() if cache_dir is not None else None
+    bundle = VectorBundle.load(vector_file)
+    processor, model = load_transformers_text_model(
+        model_id,
+        cache_dir=cache,
+        local_files_only=local_files_only,
+        dtype=dtype,
+        device_map=device_map,
+        trust_remote_code=trust_remote_code,
+    )
+    selected_layers = parse_layers(layers, n_layers=infer_num_layers(model)) if layers else None
+    effective_scale = scale
+    if effective_scale is None:
+        effective_scale = -1.0 if mode is SteeringMode.add else 1.0
+    text = generate_with_vector(
+        prompt=prompt,
+        system=system,
+        vector_bundle=bundle,
+        concept=concept,
+        layers=selected_layers,
+        processor=processor,
+        model=model,
+        mode=mode.value,  # type: ignore[arg-type]
+        scale=effective_scale,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+        enable_thinking=enable_thinking,
+    )
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+        console.print(f"[green]Wrote[/green] steered generation to {out}")
+    console.print(text)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    app()

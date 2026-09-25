@@ -1,0 +1,152 @@
+"""Read/write synthetic dataset bundles.
+
+Bundle layout on disk::
+
+    <bundle_dir>/
+    ├── manifest.json          # ground-truth; NEVER shown to the evaluated agent
+    └── public/                # agent-safe workspace — okay to run the agent here
+        ├── dataset.parquet
+        └── dataset_description.md
+
+Paired layout (named + anonymized twin) written by ``write_bundle_pair``::
+
+    <out_dir>/
+    ├── named/                 # real-name bundle (above layout)
+    └── anonymized/            # feature_NNN-renamed twin
+        ├── manifest.json
+        ├── column_mapping.json   # original -> anonymized name map
+        └── public/
+            ├── dataset.parquet
+            └── dataset_description.md
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pandas as pd
+
+from .anonymize import anonymize_bundle, build_value_mapping
+from .generator import DatasetBundle
+from .schemas import DatasetManifest
+
+MANIFEST_FILENAME = "manifest.json"
+DATASET_FILENAME = "dataset.parquet"
+DESCRIPTION_FILENAME = "dataset_description.md"
+COLUMN_MAPPING_FILENAME = "column_mapping.json"
+PUBLIC_SUBDIR = "public"
+NAMED_SUBDIR = "named"
+ANONYMIZED_SUBDIR = "anonymized"
+
+
+def public_dir(bundle_dir: Path | str) -> Path:
+    """Return the agent-safe subdirectory within a dataset bundle."""
+    return Path(bundle_dir) / PUBLIC_SUBDIR
+
+
+def write_bundle(bundle: DatasetBundle, out_dir: Path | str) -> Path:
+    out_path = Path(out_dir)
+    public = out_path / PUBLIC_SUBDIR
+    public.mkdir(parents=True, exist_ok=True)
+
+    (out_path / MANIFEST_FILENAME).write_text(
+        bundle.manifest.model_dump_json(indent=2) + "\n", encoding="utf-8"
+    )
+    bundle.frame.to_parquet(public / DATASET_FILENAME, index=False)
+    (public / DESCRIPTION_FILENAME).write_text(bundle.public_description + "\n", encoding="utf-8")
+    return out_path
+
+
+def read_manifest(bundle_dir: Path | str) -> DatasetManifest:
+    path = Path(bundle_dir) / MANIFEST_FILENAME
+    return DatasetManifest.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def read_frame(bundle_dir: Path | str) -> pd.DataFrame:
+    return pd.read_parquet(public_dir(bundle_dir) / DATASET_FILENAME)
+
+
+def read_description(bundle_dir: Path | str) -> str:
+    return (public_dir(bundle_dir) / DESCRIPTION_FILENAME).read_text(encoding="utf-8")
+
+
+def load_column_mapping(bundle_dir: Path | str) -> dict[str, str] | None:
+    """Locate the ``{clinical_name: feature_NNN}`` mapping for a bundle.
+
+    Looks first in ``bundle_dir/column_mapping.json`` (the anonymized
+    bundle has this written by ``write_bundle_pair``). For a named
+    bundle, falls back to the sibling ``../anonymized/column_mapping.json``
+    so scoring code can render bilingual column names against either
+    variant. Returns ``None`` when no mapping is available — e.g. a
+    custom bundle without an anonymized twin — and callers fall back to
+    single-name rendering.
+    """
+    bd = Path(bundle_dir)
+    direct = bd / COLUMN_MAPPING_FILENAME
+    if direct.is_file():
+        return json.loads(direct.read_text(encoding="utf-8"))
+    if bd.name == NAMED_SUBDIR:
+        sibling = bd.parent / ANONYMIZED_SUBDIR / COLUMN_MAPPING_FILENAME
+        if sibling.is_file():
+            return json.loads(sibling.read_text(encoding="utf-8"))
+    return None
+
+
+def discover_bundles(root: Path | str) -> list[Path]:
+    """Recursively find dataset bundle directories under ``root``.
+
+    A directory is considered a bundle iff it contains both a top-level
+    ``manifest.json`` and ``public/dataset.parquet``. Results are returned
+    in sorted path order for deterministic CLI output.
+    """
+    root_path = Path(root)
+    bundles: list[Path] = []
+    for manifest_path in root_path.rglob(MANIFEST_FILENAME):
+        bundle_dir = manifest_path.parent
+        if (bundle_dir / PUBLIC_SUBDIR / DATASET_FILENAME).is_file():
+            bundles.append(bundle_dir)
+    return sorted(bundles)
+
+
+def write_bundle_pair(
+    bundle: DatasetBundle,
+    out_dir: Path | str,
+    *,
+    anon_seed: int = 0,
+) -> tuple[Path, Path]:
+    """Write both the named bundle and its anonymized twin under ``out_dir``.
+
+    The named bundle is written to ``out_dir / "named"``; the anonymized twin
+    is written to ``out_dir / "anonymized"`` along with a ``column_mapping.json``
+    file mapping each original column to its anonymized name. Returns
+    ``(named_dir, anonymized_dir)``.
+
+    Both bundles share the same generated values and buried-finding ground truth.
+    Predictor names and text categorical values differ; numeric values are unchanged.
+    DepMap dependency outcome names are also masked. Private value_mapping.json
+    records column-scoped categorical aliases in addition to column_mapping.json.
+    """
+    out_path = Path(out_dir)
+    named_dir = out_path / NAMED_SUBDIR
+    anonymized_dir = out_path / ANONYMIZED_SUBDIR
+
+    write_bundle(bundle, named_dir)
+
+    anon_bundle, mapping = anonymize_bundle(bundle, seed=anon_seed)
+    write_bundle(anon_bundle, anonymized_dir)
+    (anonymized_dir / COLUMN_MAPPING_FILENAME).write_text(
+        json.dumps(mapping, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    (anonymized_dir / "value_mapping.json").write_text(
+        json.dumps(
+            build_value_mapping(
+                bundle.frame, id_columns=tuple(bundle.manifest.id_columns), seed=anon_seed
+            ),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return named_dir, anonymized_dir
